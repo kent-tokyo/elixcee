@@ -4,6 +4,17 @@
 
 ## [Unreleased]
 
+## [1.0.12] - 2026-09-12
+
+- Maintenance: split Playground sheet rendering into visible-window, row,
+  column, cell-style, input-control, app-template, and keyboard-binding helpers
+  without changing the interaction contract.
+- Maintenance: split JavaScript worksheet XML row/cell generation into a
+  dedicated `buildSheetDataXml` helper and remove the unused theme generator.
+- Quality: apply Rust formatting and resolve the four Clippy warnings found in
+  the reader refactor. The library compile check, Clippy, and 166 formula
+  evaluation tests pass; the full all-target workspace test remains dependent
+  on available disk space on the development host.
 - Chart compatibility: emit the OOXML-standard `showCatName` data-label
   attribute for category labels while preserving the Python API name.
 - G2 measurement: reproduce the multi-chart/bar Excel recovery warning with
@@ -13,7 +24,7 @@
   development sections and direct contributors to the roadmap and changelog.
 - Documentation: refresh the current-version markers in the function coverage
   reference and align the private WASM crate's workspace dependency metadata
-  with elixcee 1.0.10. Historical measurement records retain their original
+  with elixcee 1.0.11. Historical measurement records retain their original
   versions and dates.
 
 ## [1.0.11] - 2026-09-11

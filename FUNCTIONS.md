@@ -1,6 +1,6 @@
 # elixcee — Function & VBA Coverage Reference
 
-Coverage reference for **elixcee 1.0.11**. See [CHANGELOG](CHANGELOG.md) for versioned changes.
+Coverage reference for **elixcee 1.0.12**. See [CHANGELOG](CHANGELOG.md) for versioned changes.
 “Done”/“Active” describes the documented subset, not complete Excel equivalence or release status.
 Each worksheet function shows the minimum Excel version in which it was introduced as a built-in.
 

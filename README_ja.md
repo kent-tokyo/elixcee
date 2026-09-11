@@ -1,12 +1,18 @@
 # elixcee
 
 [![CI](https://github.com/kent-tokyo/elixcee/actions/workflows/ci.yml/badge.svg)](https://github.com/kent-tokyo/elixcee/actions/workflows/ci.yml)
-[![Docs](https://docs.rs/elixcee/badge.svg)](https://docs.rs/elixcee/1.0.11/elixcee/)
-[![Version](https://img.shields.io/badge/version-1.0.11-blue.svg)](https://github.com/kent-tokyo/elixcee/releases/tag/v1.0.11)
+[![Docs](https://docs.rs/elixcee/badge.svg)](https://docs.rs/elixcee/1.0.12/elixcee/)
+[![Version](https://img.shields.io/badge/version-1.0.12-blue.svg)](https://github.com/kent-tokyo/elixcee/releases/tag/v1.0.12)
 
 Microsoft Excelなしで、`.xlsx`／`.xlsm`を編集し、対応する数式を再計算し、
 データ処理向けVBAを実行・診断できるRust/Python製のヘッドレスExcelランタイムです。
 CLIと実験的なJavaScript/WASMパッケージも提供します。
+
+現行リリースは`1.0.12`です。ブラウザーplaygroundでは、範囲選択、セル編集、
+書式、フィルター、テーブル、Chartプレビュー、Pivot集計、シート操作、数式再計算を
+試せます。限定されたVBAの実行と診断も確認できます。ブラウザー版のVBAは限定された
+データ処理サブセットであり、任意のVBAや
+ネイティブPivotTableの編集を保証するものではありません。
 
 [English](README.md) | **日本語** | [中文](README_zh.md)
 
@@ -26,6 +32,12 @@ pip install elixcee
 ```
 
 CLIバイナリは[GitHub Releases](https://github.com/kent-tokyo/elixcee/releases)から取得できます。
+
+再利用可能なRust crateは、ネイティブ／Python runtimeの`elixcee`と、
+ブラウザー／Node.js runtime bridgeの`elixcee-wasm`です。playgroundは独立した
+静的Webアプリで、WASM runtime・JavaScript XLSX writer・Excel風UIを組み合わせています。
+[elixcee-wasmのAPI docs](https://docs.rs/elixcee-wasm)も公開しています。
+crateとUIの責務は[crate/API境界](docs/crate-api-boundary.md)に記載しています。
 
 ## Python
 
@@ -64,6 +76,7 @@ elixcee test-workbook fixture.toml [--json]
 
 Excelデスクトップの完全な代替ではありません。UI操作はスキップ、簡易モデル化、または報告されます。
 Chart／Drawing／Pivotと数式互換性は限定対応で、未対応OOXMLは操作により保持・拒否・欠落する場合があります。
+ブラウザーplaygroundでは、完全保持できない外部リンク、PivotTable／PivotCache、埋め込みmedia、threaded comments、slicer、custom XMLを入力時に拒否します。
 
 [v1サポート契約](docs/v1-support-contract.md)、[関数一覧](FUNCTIONS.md)、[制限](docs/limits.md)を確認してください。
 

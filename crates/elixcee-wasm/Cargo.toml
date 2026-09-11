@@ -2,13 +2,22 @@
 name = "elixcee-wasm"
 version = "0.1.0"
 edition = "2024"
+rust-version = "1.85"
 license = "MIT"
-publish = false
-description = "wasm-bindgen bridge exposing elixcee's byte-input XLSX reader (reader::read_workbook_from_bytes) to JS — backs @elixcee/xlsx's XLSX.read(). See docs/xlsx-architecture.md."
+repository = "https://github.com/kent-tokyo/elixcee"
+homepage = "https://github.com/kent-tokyo/elixcee"
+documentation = "https://docs.rs/elixcee-wasm"
+description = "wasm-bindgen bridge for bounded XLSX reading, formula calculation, diagnostics, and stateful workbook editing"
+keywords = ["excel", "xlsx", "spreadsheet", "wasm", "webassembly"]
+categories = ["wasm", "parser-implementations"]
+readme = "README.md"
+
+[package.metadata.docs.rs]
+targets = ["wasm32-unknown-unknown"]
 
 [lib]
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-elixcee = { path = "../..", version = "1.0.11" }
+elixcee = { path = "../..", version = "1.0.12" }
 wasm-bindgen = "0.2"

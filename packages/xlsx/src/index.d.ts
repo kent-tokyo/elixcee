@@ -23,19 +23,75 @@ export interface CellObject {
   [key: string]: unknown;
 }
 
+export interface BasicChartProjection {
+  type?: 'bar' | 'line';
+  title?: string;
+  xAxisTitle?: string;
+  yAxisTitle?: string;
+  ref: string;
+  legend?: boolean;
+  widthCols?: number;
+  heightRows?: number;
+}
+
 export interface DataValidationProjection {
   type: string;
   sqref: string[];
+  operator?: string;
+  formula1?: string;
+  formula2?: string;
+  allowBlank?: boolean;
+  showInputMessage?: boolean;
+  showErrorMessage?: boolean;
+  errorTitle?: string;
+  error?: string;
+}
+export interface ConditionalFormatProjection {
+  type?: 'cellIs' | 'expression';
+  sqref: string[];
+  operator?: 'equal' | 'notEqual' | 'lessThan' | 'lessThanOrEqual' | 'greaterThan' | 'greaterThanOrEqual' | 'between' | 'notBetween';
+  formula: string;
+  formula2?: string;
+  priority?: number;
+  stopIfTrue?: boolean;
+  dxf?: { font?: { bold?: boolean; italic?: boolean; underline?: boolean; color?: { rgb?: string } }; fill?: { fgColor?: { rgb?: string }; fg?: { rgb?: string }; color?: { rgb?: string } } };
+}
+export interface TableProjection {
+  name?: string;
+  displayName?: string;
+  ref: string;
+  autoFilterRef?: string;
+  autoFilterColumns?: Array<{ colId: number; hiddenButton?: boolean; showButton?: boolean; criteria: { kind: 'values'; values: string[] } | { kind: 'blank' } | { kind: 'custom'; op1: string; val1: string; and?: boolean; op2?: string; val2?: string } | { kind: 'top10'; top?: boolean; percent?: boolean; val: number } }>;
+  columns?: Array<{ name: string }>;
+  styleName?: string;
+}
+export interface RowInfo {
+  hidden?: boolean;
+  /** Row height in points (1..409). */
+  hpt?: number;
+}
+export interface ColumnInfo {
+  hidden?: boolean;
+  /** Column width in character units (0.5..255). */
+  wch?: number;
 }
 export type WorkSheet = { [address: string]: CellObject | unknown } & {
   '!ref'?: string;
+  '!rows'?: Array<RowInfo | undefined>;
+  '!cols'?: Array<ColumnInfo | undefined>;
   '!dataValidations'?: DataValidationProjection[];
+  '!conditionalFormats'?: ConditionalFormatProjection[];
+  '!tables'?: TableProjection[];
+  '!charts'?: BasicChartProjection[];
+  '!comments'?: Array<{ ref: string; author?: string; text?: string }>;
 };
 
 export interface WorkBook {
   SheetNames: string[];
   Sheets: { [name: string]: WorkSheet };
-  Workbook?: { Sheets?: Array<{ Hidden?: 0 | 1 | 2 }> };
+  Workbook?: { Sheets?: Array<{ Hidden?: 0 | 1 | 2 }>; Names?: Array<{ Name: string; Ref: string; Sheet?: number; Hidden?: boolean }> };
+  /** Opaque XLSM VBA project bytes. The browser preserves them but never executes them. */
+  '!vbaProject'?: Uint8Array | ArrayBuffer;
 }
 
 // The oracle's own types/index.d.ts declares this field as `SHEET_VERYHIDDEN` (no
@@ -166,7 +222,7 @@ export function readFileSync(
   opts?: { cellStyles?: boolean; cellNF?: boolean; cellDates?: boolean }
 ): WorkBook;
 
-// bookType: 'xlsx' only (see internal/xlsx-writer.cjs and index.cjs's `write` doc comment
+// bookType: 'xlsx' or 'xlsm' with an opaque !vbaProject (see internal/xlsx-writer.cjs and index.cjs's `write` doc comment
 // for exactly what's supported: strings/numbers/booleans/dates/formulas, multiple
 // worksheets, merges, sheet visibility, a basic number-format subset, hidden rows/
 // columns). `type` has no default, matching the oracle (`XLSX.write(wb, {})` throws

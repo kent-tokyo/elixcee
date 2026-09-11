@@ -1,7 +1,7 @@
 # Migration and boundary guide
 
 This guide describes the safe first step when replacing an Excel-dependent
-batch job with elixcee 1.0.11. It is a migration guide, not a claim of full
+batch job with elixcee 1.0.12. It is a migration guide, not a claim of full
 Excel compatibility.
 
 ## Choose the runtime surface

@@ -349,6 +349,86 @@ pub struct AutoFilterDef {
     pub columns: Vec<FilterColumn>,
 }
 
+/// A bounded chart projection for browser integrations. This is deliberately a
+/// source-range/appearance summary, not a lossless chart model: unsupported chart
+/// features remain in the opaque OOXML passthrough path rather than being guessed.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ChartDef {
+    /// 1-based inclusive source range including the header row and category column.
+    pub ref_range: MergeRect,
+    pub chart_type: String,
+    pub title: String,
+    /// Optional category (horizontal) axis title recovered from the chart XML.
+    pub x_axis_title: Option<String>,
+    /// Optional value (vertical) axis title recovered from the chart XML.
+    pub y_axis_title: Option<String>,
+    pub legend: bool,
+    /// Explicit RGB colors recovered from each supported chart series.
+    pub series_colors: Vec<String>,
+    pub width_cols: u32,
+    pub height_rows: u32,
+}
+
+/// A bounded legacy comment/note projection for the WASM/browser reader.
+#[derive(Clone, Debug, PartialEq)]
+pub struct CommentNote {
+    pub cell: (u32, u32),
+    pub author: String,
+    pub text: String,
+}
+
+/// A bounded worksheet freeze-pane projection for browser/editor integrations.
+#[derive(Clone, Debug, PartialEq)]
+pub struct FreezePane {
+    pub rows: u32,
+    pub cols: u32,
+}
+
+/// A bounded worksheet conditional-format rule projection.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ConditionalFormatDef {
+    pub sqref: Vec<MergeRect>,
+    pub rule_type: String,
+    pub operator: Option<String>,
+    pub formula1: String,
+    pub formula2: Option<String>,
+    pub priority: Option<u32>,
+    pub stop_if_true: bool,
+    pub dxf_id: Option<u32>,
+    pub dxf: Option<ConditionalFormatStyle>,
+}
+
+/// The small common subset of a differential format that the JS writer can emit.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ConditionalFormatStyle {
+    pub bold: bool,
+    pub italic: bool,
+    pub underline: bool,
+    pub font_color: Option<String>,
+    pub fill_color: Option<String>,
+}
+
+/// Common cell style properties projected for the browser writer.
+#[derive(Clone, Debug, PartialEq, Default)]
+pub struct CellStyleDef {
+    pub bold: bool,
+    pub italic: bool,
+    pub underline: bool,
+    pub font_color: Option<String>,
+    pub fill_color: Option<String>,
+    pub border_bottom: Option<String>,
+    pub border_bottom_color: Option<String>,
+    pub border_left: Option<String>,
+    pub border_left_color: Option<String>,
+    pub border_right: Option<String>,
+    pub border_right_color: Option<String>,
+    pub border_top: Option<String>,
+    pub border_top_color: Option<String>,
+    pub horizontal: Option<String>,
+    pub vertical: Option<String>,
+    pub wrap_text: Option<bool>,
+}
+
 fn parse_filter_criteria_xml(filter_column_span: &str) -> Option<FilterCriteria> {
     let mut iter = XmlIter::new(filter_column_span);
     let mut values = Vec::new();
@@ -660,6 +740,77 @@ pub(crate) fn xlsx_conditional_format_ranges(sheet_xml: &str) -> Vec<Vec<MergeRe
         .collect()
 }
 
+/// Parses the first supported `cfRule` in each worksheet conditional-format block.
+pub(crate) fn xlsx_conditional_formats(sheet_xml: &str) -> Vec<ConditionalFormatDef> {
+    extract_all_raw_elements(sheet_xml, "conditionalFormatting")
+        .into_iter()
+        .filter_map(|span| {
+            let mut iter = XmlIter::new(&span);
+            let mut sqref = Vec::new();
+            let mut rule_type = None;
+            let mut operator = None;
+            let mut priority = None;
+            let mut stop_if_true = false;
+            let mut dxf_id = None;
+            let mut formulas = Vec::new();
+            let mut in_formula = false;
+            while let Some(ev) = iter.next_ev() {
+                match ev {
+                    Ev::Open(tag, attrs) | Ev::SelfClose(tag, attrs) => {
+                        match tag.split(':').next_back() {
+                            Some("conditionalFormatting") => {
+                                sqref = attr_get(&attrs, "sqref")
+                                    .map(parse_sqref)
+                                    .unwrap_or_default()
+                            }
+                            Some("cfRule") => {
+                                rule_type = attr_get(&attrs, "type").map(str::to_string);
+                                operator = attr_get(&attrs, "operator").map(str::to_string);
+                                priority =
+                                    attr_get(&attrs, "priority").and_then(|v| v.parse().ok());
+                                stop_if_true =
+                                    matches!(attr_get(&attrs, "stopIfTrue"), Some("1" | "true"));
+                                dxf_id = attr_get(&attrs, "dxfId").and_then(|v| v.parse().ok());
+                            }
+                            Some("formula") => {
+                                in_formula = true;
+                                if formulas.len() < 2 {
+                                    formulas.push(String::new());
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                    Ev::Close(tag) => {
+                        if tag.split(':').next_back() == Some("formula") {
+                            in_formula = false;
+                        }
+                    }
+                    Ev::Text(text) => {
+                        if in_formula && let Some(formula) = formulas.last_mut() {
+                            formula.push_str(&text);
+                        }
+                    }
+                }
+            }
+            let rule_type = rule_type?;
+            let formula1 = formulas.first()?.clone();
+            Some(ConditionalFormatDef {
+                sqref,
+                rule_type,
+                operator,
+                formula1,
+                formula2: formulas.get(1).cloned(),
+                priority,
+                stop_if_true,
+                dxf_id,
+                dxf: None,
+            })
+        })
+        .filter(|rule| !rule.sqref.is_empty())
+        .collect()
+}
+
 /// Parses legacy comment/note anchors from an `xl/comments*.xml` part.
 pub(crate) fn xlsx_comment_cells(comments_xml: &str) -> Vec<(u32, u32)> {
     let mut iter = XmlIter::new(comments_xml);
@@ -679,6 +830,66 @@ pub(crate) fn xlsx_comment_cells(comments_xml: &str) -> Vec<(u32, u32)> {
     let mut cells: Vec<_> = cells.into_iter().collect();
     cells.sort_unstable();
     cells
+}
+
+/// Parses legacy comment authors and rich-text runs into a small, plain-text projection.
+/// Threaded comments and formatting runs remain outside this projection.
+pub(crate) fn xlsx_comment_notes(comments_xml: &str) -> Vec<CommentNote> {
+    let mut iter = XmlIter::new(comments_xml);
+    let mut authors = Vec::new();
+    let mut author_text = String::new();
+    let mut in_author = false;
+    let mut current: Option<((u32, u32), usize, String)> = None;
+    let mut in_text = false;
+    let mut notes = Vec::new();
+    while let Some(ev) = iter.next_ev() {
+        match ev {
+            Ev::Open(tag, attrs) | Ev::SelfClose(tag, attrs) => match tag.split(':').next_back() {
+                Some("author") => {
+                    in_author = true;
+                    author_text.clear();
+                }
+                Some("comment") => {
+                    if let Some(cell) = attr_get(&attrs, "ref").and_then(parse_cell_ref) {
+                        let id = attr_get(&attrs, "authorId")
+                            .and_then(|value| value.parse().ok())
+                            .unwrap_or(usize::MAX);
+                        current = Some((cell, id, String::new()));
+                    }
+                }
+                Some("t") if current.is_some() => in_text = true,
+                _ => {}
+            },
+            Ev::Close(tag) => match tag.split(':').next_back() {
+                Some("author") => {
+                    authors.push(std::mem::take(&mut author_text));
+                    in_author = false;
+                }
+                Some("t") => in_text = false,
+                Some("comment") => {
+                    if let Some((cell, id, text)) = current.take() {
+                        notes.push(CommentNote {
+                            cell,
+                            author: authors.get(id).cloned().unwrap_or_default(),
+                            text,
+                        });
+                    }
+                }
+                _ => {}
+            },
+            Ev::Text(text) => {
+                if in_author {
+                    author_text.push_str(&text);
+                }
+                if in_text && let Some((_, _, current_text)) = current.as_mut() {
+                    current_text.push_str(&text);
+                }
+            }
+        }
+    }
+    notes.sort_by_key(|note| note.cell);
+    notes.dedup_by_key(|note| note.cell);
+    notes
 }
 
 /// One `<tableColumn>` entry inside a `<table>`'s `<tableColumns>` (0.16.0-A1).
@@ -1135,6 +1346,14 @@ pub struct BufferSheet {
     /// format-code-to-date-format heuristic into Rust would be a second, unverified
     /// implementation of logic already proven correct.
     pub style_ids: HashMap<(u32, u32), u32>,
+    /// Bounded bar/line chart projections recovered from worksheet drawings.
+    /// Unsupported or malformed chart parts are intentionally omitted.
+    pub charts: Vec<ChartDef>,
+    /// Plain-text legacy comments/notes for browser round-trip projection.
+    pub comment_notes: Vec<CommentNote>,
+    pub conditional_formats: Vec<ConditionalFormatDef>,
+    pub cell_styles: HashMap<(u32, u32), CellStyleDef>,
+    pub freeze_pane: Option<FreezePane>,
 }
 
 // ── Minimal pull XML parser ───────────────────────────────────────────────────
@@ -3495,7 +3714,7 @@ fn read_workbook_from_archive<R: Read + Seek>(
                 let Some(target) = table_rels.get(rid) else {
                     continue;
                 };
-                let resolved = crate::normalize_part_path(&format!("{sheet_rels_base}{target}"));
+                let resolved = resolve_part_target(&sheet_rels_base, target);
                 if let Ok(table_xml) = zip_read_text_with_budget(&mut archive, &resolved, &budget)
                     && let Some(mut t) = parse_table_xml(&table_xml)
                 {
@@ -3517,24 +3736,85 @@ fn read_workbook_from_archive<R: Read + Seek>(
         } else {
             Vec::new()
         };
+        let mut conditional_formats = if sheet_xml.contains("conditionalFormatting") {
+            xlsx_conditional_formats(&sheet_xml)
+        } else {
+            Vec::new()
+        };
+        for rule in &mut conditional_formats {
+            rule.dxf = rule
+                .dxf_id
+                .and_then(|id| styles.dxf_styles.get(id as usize).cloned());
+        }
+        let cell_styles = sheet_data
+            .raw_style_indices
+            .iter()
+            .filter_map(|(position, index)| {
+                styles
+                    .cell_styles
+                    .get(*index as usize)
+                    .cloned()
+                    .map(|style| (*position, style))
+            })
+            .collect();
         let mut comment_cells = HashSet::new();
+        let mut comment_notes = Vec::new();
         if let Some(sheet_rels_xml) = &sheet_rels_xml {
             for target in xlsx_rels(sheet_rels_xml, "/comments").into_values() {
-                let resolved = crate::normalize_part_path(&format!("{sheet_rels_base}{target}"));
+                let resolved = resolve_part_target(&sheet_rels_base, &target);
                 let exists = archive.file_names().any(|name| name == resolved);
                 if exists {
                     let comments_xml = zip_read_text_with_budget(&mut archive, &resolved, &budget)?;
                     comment_cells.extend(xlsx_comment_cells(&comments_xml));
+                    comment_notes.extend(xlsx_comment_notes(&comments_xml));
                 }
             }
         }
         let mut comment_cells: Vec<_> = comment_cells.into_iter().collect();
         comment_cells.sort_unstable();
+        let mut charts = Vec::new();
+        if let Some(sheet_rels_xml) = &sheet_rels_xml {
+            let drawing_rels = xlsx_rels(sheet_rels_xml, "/drawing");
+            for drawing_target in drawing_rels.into_values() {
+                let drawing_path = resolve_part_target(&sheet_rels_base, &drawing_target);
+                let drawing_xml =
+                    match zip_read_text_with_budget(&mut archive, &drawing_path, &budget) {
+                        Ok(xml) => xml,
+                        Err(_) => continue,
+                    };
+                let drawing_rels_path = crate::part_rels_name(&drawing_path);
+                let drawing_rels_xml =
+                    match zip_read_text_with_budget(&mut archive, &drawing_rels_path, &budget) {
+                        Ok(xml) => xml,
+                        Err(_) => continue,
+                    };
+                let chart_targets = xlsx_rels(&drawing_rels_xml, "/chart");
+                let chart_base = crate::rels_target_dir(&drawing_rels_path).to_string();
+                for (rid, width_cols, height_rows) in drawing_chart_anchors(&drawing_xml) {
+                    let Some(target) = chart_targets.get(&rid) else {
+                        continue;
+                    };
+                    let chart_path = resolve_part_target(&chart_base, target);
+                    let Ok(chart_xml) =
+                        zip_read_text_with_budget(&mut archive, &chart_path, &budget)
+                    else {
+                        continue;
+                    };
+                    let Some(mut chart) = parse_chart_xml(&chart_xml) else {
+                        continue;
+                    };
+                    chart.width_cols = width_cols;
+                    chart.height_rows = height_rows;
+                    charts.push(chart);
+                }
+            }
+        }
         let autofilter = if sheet_xml.contains("autoFilter") {
             xlsx_autofilter(&sheet_xml)
         } else {
             None
         };
+        let freeze_pane = xlsx_freeze_pane(&sheet_xml);
         sheets.push(BufferSheet {
             sheet: WorkbookSheet {
                 name,
@@ -3562,6 +3842,11 @@ fn read_workbook_from_archive<R: Read + Seek>(
             formulas: sheet_data.formulas,
             dimension: sheet_data.dimension,
             style_ids: sheet_data.style_ids,
+            charts,
+            comment_notes,
+            conditional_formats,
+            cell_styles,
+            freeze_pane,
         });
     }
     Ok(BufferWorkbook {
@@ -3813,6 +4098,221 @@ fn xlsx_rels(xml: &str, type_suffix: &str) -> HashMap<String, String> {
     map
 }
 
+fn chart_ref_from_formula(formula: &str) -> Option<MergeRect> {
+    let address = formula
+        .rsplit_once('!')
+        .map(|(_, value)| value)
+        .unwrap_or(formula);
+    let mut parts = address.split(':');
+    let start = parts.next()?.trim().replace('$', "");
+    let end = parts.next()?.trim().replace('$', "");
+    if parts.next().is_some() {
+        return None;
+    }
+    Some((parse_cell_ref(&start)?, parse_cell_ref(&end)?))
+}
+
+fn chart_text(xml: &str) -> String {
+    let mut iter = XmlIter::new(xml);
+    let mut in_text = false;
+    let mut out = String::new();
+    while let Some(event) = iter.next_ev() {
+        match event {
+            Ev::Open(tag, _) if tag.split(':').next_back() == Some("t") => in_text = true,
+            Ev::Close(tag) if tag.split(':').next_back() == Some("t") => in_text = false,
+            Ev::Text(text) if in_text => out.push_str(&text),
+            _ => {}
+        }
+    }
+    out
+}
+
+fn axis_title(xml: &str, axis: &str) -> Option<String> {
+    extract_all_raw_elements(xml, axis)
+        .first()
+        .and_then(|element| {
+            extract_all_raw_elements(element, "title")
+                .first()
+                .map(|title| chart_text(title))
+        })
+        .filter(|title| !title.is_empty())
+}
+
+fn chart_series_colors(xml: &str) -> Vec<String> {
+    extract_all_raw_elements(xml, "ser")
+        .into_iter()
+        .filter_map(|series| {
+            extract_all_raw_elements(&series, "srgbClr")
+                .first()
+                .and_then(|color| match XmlIter::new(color).next_ev() {
+                    Some(Ev::Open(_, attrs)) | Some(Ev::SelfClose(_, attrs)) => {
+                        attr_get(&attrs, "val").map(str::to_ascii_uppercase)
+                    }
+                    _ => None,
+                })
+                .filter(|value| value.len() == 6 && value.chars().all(|ch| ch.is_ascii_hexdigit()))
+        })
+        .collect()
+}
+
+fn parse_chart_xml(xml: &str) -> Option<ChartDef> {
+    let mut iter = XmlIter::new(xml);
+    let mut refs = Vec::new();
+    let mut in_formula = false;
+    let mut formula = String::new();
+    while let Some(event) = iter.next_ev() {
+        match event {
+            Ev::Open(tag, _) if tag.split(':').next_back() == Some("f") => {
+                in_formula = true;
+                formula.clear();
+            }
+            Ev::Close(tag) if tag.split(':').next_back() == Some("f") => {
+                if let Some(range) = chart_ref_from_formula(&formula) {
+                    refs.push(range);
+                }
+                in_formula = false;
+            }
+            Ev::Text(text) if in_formula => formula.push_str(&text),
+            _ => {}
+        }
+    }
+    // The first reference is the category range in the chart shapes emitted by
+    // this project and by ordinary Excel bar/line charts. Remaining references
+    // are value ranges; all must be compatible with one bounded rectangular source.
+    let category = *refs.first()?;
+    let mut end = category.1;
+    for range in refs.iter().skip(1) {
+        if range.0.0 != category.0.0 || range.1.0 != category.1.0 {
+            return None;
+        }
+        end.1 = end.1.max(range.1.1);
+    }
+    // `parse_cell_ref` returns 1-based coordinates. Most charts reference data
+    // rows only (for example A2:A3), so include the header row in the projection;
+    // charts that explicitly reference row 1 already include that header.
+    let start_row = category.0.0.saturating_sub(1).max(1);
+    if end.0 < category.1.0 || end.1 < category.0.1 {
+        return None;
+    }
+    Some(ChartDef {
+        ref_range: ((start_row, category.0.1), end),
+        chart_type: if xml.contains("lineChart") {
+            "line"
+        } else if xml.contains("barChart") {
+            "bar"
+        } else {
+            return None;
+        }
+        .to_string(),
+        title: extract_all_raw_elements(xml, "title")
+            .first()
+            .map(|title| chart_text(title))
+            .unwrap_or_else(|| chart_text(xml)),
+        x_axis_title: axis_title(xml, "catAx"),
+        y_axis_title: axis_title(xml, "valAx"),
+        legend: xml.contains("<c:legend") || xml.contains(":legend"),
+        series_colors: chart_series_colors(xml),
+        width_cols: 7,
+        height_rows: 16,
+    })
+}
+
+fn drawing_chart_anchors(xml: &str) -> Vec<(String, u32, u32)> {
+    let mut out = Vec::new();
+    for anchor_kind in ["twoCellAnchor", "oneCellAnchor"] {
+        for anchor in extract_all_raw_elements(xml, anchor_kind) {
+            let mut iter = XmlIter::new(&anchor);
+            let mut section = 0u8;
+            let mut element = String::new();
+            let mut from_col = None;
+            let mut from_row = None;
+            let mut to_col = None;
+            let mut to_row = None;
+            let mut ext_cx = None;
+            let mut ext_cy = None;
+            let mut chart_rid = None;
+            while let Some(event) = iter.next_ev() {
+                match event {
+                    Ev::Open(tag, attrs) => {
+                        let local = tag.split(':').next_back().unwrap_or(tag);
+                        match local {
+                            "from" => section = 1,
+                            "to" => section = 2,
+                            "col" | "row" => element = local.to_string(),
+                            "ext" => {
+                                ext_cx = attr_get(&attrs, "cx")
+                                    .and_then(|value| value.parse::<u32>().ok());
+                                ext_cy = attr_get(&attrs, "cy")
+                                    .and_then(|value| value.parse::<u32>().ok());
+                            }
+                            "chart" => chart_rid = attr_get(&attrs, "id").map(str::to_string),
+                            _ => {}
+                        }
+                    }
+                    Ev::Text(text) => {
+                        let value = text.parse::<u32>().ok();
+                        match (section, element.as_str()) {
+                            (1, "col") => from_col = value,
+                            (1, "row") => from_row = value,
+                            (2, "col") => to_col = value,
+                            (2, "row") => to_row = value,
+                            _ => {}
+                        }
+                        element.clear();
+                    }
+                    Ev::Close(tag) => {
+                        let local = tag.split(':').next_back().unwrap_or(tag);
+                        if local == "from" || local == "to" {
+                            section = 0;
+                        }
+                    }
+                    Ev::SelfClose(tag, attrs) => match tag.split(':').next_back() {
+                        Some("chart") => chart_rid = attr_get(&attrs, "id").map(str::to_string),
+                        Some("ext") => {
+                            ext_cx =
+                                attr_get(&attrs, "cx").and_then(|value| value.parse::<u32>().ok());
+                            ext_cy =
+                                attr_get(&attrs, "cy").and_then(|value| value.parse::<u32>().ok());
+                        }
+                        _ => {}
+                    },
+                }
+            }
+            if let (Some(rid), Some(fc), Some(fr)) = (chart_rid, from_col, from_row) {
+                let (width, height) = match anchor_kind {
+                    "twoCellAnchor" => {
+                        let (Some(tc), Some(tr)) = (to_col, to_row) else {
+                            continue;
+                        };
+                        (tc.saturating_sub(fc).max(1), tr.saturating_sub(fr).max(1))
+                    }
+                    // Excel commonly uses 5,400,000 x 2,700,000 EMU for a
+                    // seven-column by sixteen-row chart. Keep this projection
+                    // approximate; the raw anchor remains available to native APIs.
+                    _ => (
+                        ext_cx
+                            .map(|value| ((value + 385_714) / 771_428).clamp(1, 255))
+                            .unwrap_or(1),
+                        ext_cy
+                            .map(|value| ((value + 84_375) / 168_750).clamp(1, 255))
+                            .unwrap_or(1),
+                    ),
+                };
+                out.push((rid, width, height));
+            }
+        }
+    }
+    out
+}
+
+fn resolve_part_target(base: &str, target: &str) -> String {
+    if target.starts_with('/') {
+        crate::normalize_part_path(target.trim_start_matches('/'))
+    } else {
+        crate::normalize_part_path(&format!("{base}{target}"))
+    }
+}
+
 /// Returns worksheet relationships while rejecting external targets. A worksheet must be
 /// backed by an internal package part; treating a URL as a missing local part would make
 /// malformed input look like an ordinary absent sheet.
@@ -3899,12 +4399,10 @@ fn xlsx_shared_strings(xml: &str) -> Vec<String> {
     strings
 }
 
-/// `xl/styles.xml`, parsed down to exactly the two pieces read()'s `.w`/`.z`/date-typed-cell
-/// support (Milestone read-item 6) needs — see `BufferWorkbook::number_formats` and
-/// `BufferSheet::style_ids`'s doc comments. Deliberately not a general styles.xml parser:
-/// fonts/fills/borders/cellStyles/cellStyleXfs are never read, matching the oracle's own
-/// cell-format resolution (`cf = styles.CellXf[tag.s]; if (cf.numFmtId != null) ...`,
-/// confirmed by reading xlsx.js directly), which never consults them either.
+/// `xl/styles.xml` projection used by the read bridge. Number formats and cellXf indices
+/// feed the oracle-compatible `.w`/`.z` path; the bounded `cell_styles` and `dxf_styles`
+/// projections carry common visual properties to the JS writer. Unsupported theme,
+/// protection, named-style, and advanced border properties remain intentionally omitted.
 #[derive(Default)]
 struct XlsxStyles {
     /// Custom `<numFmt numFmtId="N" formatCode="...">` definitions — see
@@ -3914,12 +4412,153 @@ struct XlsxStyles {
     /// `s="N"` attribute is a 0-based index into this Vec (`None` when an `<xf>` has no
     /// `numFmtId` attribute at all, matching the oracle's own `cf.numFmtId != null` check).
     cell_xfs: Vec<Option<u32>>,
+    /// Common differential formats used by the bounded conditional-format projection.
+    dxf_styles: Vec<ConditionalFormatStyle>,
+    cell_styles: Vec<CellStyleDef>,
+}
+
+fn xlsx_dxf_style(xml: &str) -> ConditionalFormatStyle {
+    let mut style = ConditionalFormatStyle {
+        bold: false,
+        italic: false,
+        underline: false,
+        font_color: None,
+        fill_color: None,
+    };
+    let mut in_font = false;
+    let mut in_pattern_fill = false;
+    let mut iter = XmlIter::new(xml);
+    while let Some(ev) = iter.next_ev() {
+        match ev {
+            Ev::Open(tag, attrs) | Ev::SelfClose(tag, attrs) => match tag.split(':').next_back() {
+                Some("font") => in_font = true,
+                Some("b") => style.bold = true,
+                Some("i") => style.italic = true,
+                Some("u") => style.underline = true,
+                Some("patternFill") => in_pattern_fill = true,
+                Some("color") if style.font_color.is_none() && in_font => {
+                    style.font_color = attr_get(&attrs, "rgb").map(str::to_string);
+                }
+                Some("fgColor") | Some("bgColor")
+                    if in_pattern_fill && style.fill_color.is_none() =>
+                {
+                    style.fill_color = attr_get(&attrs, "rgb").map(str::to_string);
+                }
+                _ => {}
+            },
+            Ev::Close(tag) => match tag.split(':').next_back() {
+                Some("font") => in_font = false,
+                Some("patternFill") => in_pattern_fill = false,
+                _ => {}
+            },
+            _ => {}
+        }
+    }
+    style
+}
+
+fn xlsx_cell_style(
+    xml: &str,
+    fonts: &[String],
+    fills: &[String],
+    borders: &[String],
+) -> CellStyleDef {
+    let mut style = CellStyleDef::default();
+    let mut font_id = None;
+    let mut fill_id = None;
+    let mut border_id = None;
+    let mut iter = XmlIter::new(xml);
+    while let Some(ev) = iter.next_ev() {
+        match ev {
+            Ev::Open(tag, attrs) | Ev::SelfClose(tag, attrs) => match tag.split(':').next_back() {
+                Some("xf") => {
+                    font_id = attr_get(&attrs, "fontId").and_then(|v| v.parse::<usize>().ok());
+                    fill_id = attr_get(&attrs, "fillId").and_then(|v| v.parse::<usize>().ok());
+                    border_id = attr_get(&attrs, "borderId").and_then(|v| v.parse::<usize>().ok());
+                }
+                Some("alignment") => {
+                    style.horizontal = attr_get(&attrs, "horizontal").map(str::to_string);
+                    style.vertical = attr_get(&attrs, "vertical").map(str::to_string);
+                    style.wrap_text = attr_get(&attrs, "wrapText").map(|v| v == "1" || v == "true");
+                }
+                _ => {}
+            },
+            _ => {}
+        }
+    }
+    if let Some(font) = font_id
+        .and_then(|id| fonts.get(id))
+        .map(|xml| xlsx_dxf_style(xml))
+    {
+        style.bold = font.bold;
+        style.italic = font.italic;
+        style.underline = font.underline;
+        style.font_color = font.font_color;
+    }
+    if let Some(fill) = fill_id
+        .and_then(|id| fills.get(id))
+        .map(|xml| xlsx_dxf_style(xml))
+    {
+        style.fill_color = fill.fill_color;
+    }
+    if let Some(border_xml) = border_id.and_then(|id| borders.get(id)) {
+        let mut iter = XmlIter::new(border_xml);
+        let mut active_side: Option<&str> = None;
+        while let Some(ev) = iter.next_ev() {
+            match ev {
+                Ev::Open(tag, attrs) | Ev::SelfClose(tag, attrs) => {
+                    match tag.split(':').next_back() {
+                        Some(side @ ("bottom" | "left" | "right" | "top")) => {
+                            active_side = Some(side);
+                            let value = attr_get(&attrs, "style").map(str::to_string);
+                            match side {
+                                "bottom" => style.border_bottom = value,
+                                "left" => style.border_left = value,
+                                "right" => style.border_right = value,
+                                "top" => style.border_top = value,
+                                _ => {}
+                            }
+                        }
+                        Some("color") if active_side.is_some() => {
+                            let value = attr_get(&attrs, "rgb").map(str::to_string);
+                            match active_side {
+                                Some("bottom") => style.border_bottom_color = value,
+                                Some("left") => style.border_left_color = value,
+                                Some("right") => style.border_right_color = value,
+                                Some("top") => style.border_top_color = value,
+                                _ => {}
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                Ev::Close(tag) => {
+                    if let Some("bottom" | "left" | "right" | "top") = tag.split(':').next_back() {
+                        active_side = None;
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    style
 }
 
 fn xlsx_styles(xml: &str) -> XlsxStyles {
     let mut iter = XmlIter::new(xml);
     let mut number_formats: HashMap<u32, String> = HashMap::new();
     let mut cell_xfs: Vec<Option<u32>> = Vec::new();
+    let dxf_styles = extract_records(xml, "dxfs", "dxf")
+        .iter()
+        .map(|span| xlsx_dxf_style(span))
+        .collect();
+    let fonts = extract_records(xml, "fonts", "font");
+    let fills = extract_records(xml, "fills", "fill");
+    let borders = extract_records(xml, "borders", "border");
+    let cell_styles = extract_records(xml, "cellXfs", "xf")
+        .iter()
+        .map(|span| xlsx_cell_style(span, &fonts, &fills, &borders))
+        .collect();
     let mut in_cell_xfs = false;
 
     while let Some(ev) = iter.next_ev() {
@@ -3959,6 +4598,8 @@ fn xlsx_styles(xml: &str) -> XlsxStyles {
     XlsxStyles {
         number_formats,
         cell_xfs,
+        dxf_styles,
+        cell_styles,
     }
 }
 
@@ -5062,6 +5703,21 @@ fn parse_cell_ref(r: &str) -> Option<(u32, u32)> {
     Some((row, col))
 }
 
+/// Parses a worksheet's first frozen `<pane>` into split counts. Unsupported
+/// non-frozen panes and invalid/oversized splits are intentionally omitted.
+fn xlsx_freeze_pane(sheet_xml: &str) -> Option<FreezePane> {
+    let pane = extract_raw_element(sheet_xml, "pane")?;
+    if span_attr_str(&pane, "state").as_deref() != Some("frozen") {
+        return None;
+    }
+    let rows = span_attr_str(&pane, "ySplit")?.parse::<u32>().ok()?;
+    let cols = span_attr_str(&pane, "xSplit")?.parse::<u32>().ok()?;
+    if rows > 1_048_575 || cols > 16_383 || (rows == 0 && cols == 0) {
+        return None;
+    }
+    Some(FreezePane { rows, cols })
+}
+
 /// Parses an XLSX `<mergeCell ref="A1:C1"/>` address into a 1-based
 /// inclusive `(top-left, bottom-right)` pair (Milestone B6c2). Mirrors
 /// `vm::parse_range_addr`'s logic locally rather than importing it, since
@@ -5742,9 +6398,76 @@ mod data_validation_parsing_tests {
     }
 
     #[test]
+    fn xlsx_conditional_formats_reads_cell_is_rule_conditions() {
+        let xml = r#"<worksheet><conditionalFormatting sqref="A1:A3"><cfRule type="cellIs" priority="1" stopIfTrue="1" operator="greaterThan"><formula>10</formula></cfRule></conditionalFormatting></worksheet>"#;
+        let rules = xlsx_conditional_formats(xml);
+        assert_eq!(rules.len(), 1);
+        assert_eq!(rules[0].rule_type, "cellIs");
+        assert_eq!(rules[0].operator.as_deref(), Some("greaterThan"));
+        assert_eq!(rules[0].formula1, "10");
+        assert_eq!(rules[0].formula2, None);
+        assert_eq!(rules[0].priority, Some(1));
+        assert!(rules[0].stop_if_true);
+        assert_eq!(rules[0].sqref, vec![((1, 1), (3, 1))]);
+    }
+
+    #[test]
+    fn xlsx_freeze_pane_reads_row_column_splits() {
+        let xml = r#"<worksheet><sheetViews><sheetView workbookViewId="0"><pane xSplit="1" ySplit="2" topLeftCell="B3" state="frozen"/></sheetView></sheetViews></worksheet>"#;
+        assert_eq!(xlsx_freeze_pane(xml), Some(FreezePane { rows: 2, cols: 1 }));
+        assert_eq!(
+            xlsx_freeze_pane(r#"<worksheet><pane xSplit="1" state="split"/></worksheet>"#),
+            None
+        );
+    }
+
+    #[test]
+    fn xlsx_conditional_formats_reads_two_formulas_and_skips_unsupported_shape() {
+        let xml = r#"<worksheet><conditionalFormatting sqref="B1:B3"><cfRule type="cellIs" operator="between"><formula>1</formula><formula>10</formula></cfRule></conditionalFormatting><conditionalFormatting sqref="C1"><cfRule type="colorScale"/></conditionalFormatting></worksheet>"#;
+        let rules = xlsx_conditional_formats(xml);
+        assert_eq!(rules.len(), 1);
+        assert_eq!(rules[0].formula1, "1");
+        assert_eq!(rules[0].formula2.as_deref(), Some("10"));
+    }
+
+    #[test]
+    fn xlsx_dxf_style_reads_common_font_and_solid_fill() {
+        let xml = r#"<dxf><font><b/><color rgb="FF9C0006"/></font><fill><patternFill patternType="solid"><fgColor rgb="FFFFF2CC"/></patternFill></fill></dxf>"#;
+        assert_eq!(
+            xlsx_dxf_style(xml),
+            ConditionalFormatStyle {
+                bold: true,
+                italic: false,
+                underline: false,
+                font_color: Some("FF9C0006".to_string()),
+                fill_color: Some("FFFFF2CC".to_string()),
+            }
+        );
+    }
+
+    #[test]
+    fn xlsx_dxf_style_accepts_excel_background_fill_color() {
+        let xml = r#"<dxf><fill><patternFill><bgColor rgb="FFFFC7CE"/></patternFill></fill></dxf>"#;
+        assert_eq!(xlsx_dxf_style(xml).fill_color.as_deref(), Some("FFFFC7CE"));
+    }
+
+    #[test]
     fn xlsx_comment_cells_reads_and_deduplicates_legacy_comment_anchors() {
         let xml = r#"<comments><authors><author>A</author></authors><commentList><comment ref="C3" authorId="0"><text><t>note</t></text></comment><comment ref="A1" authorId="0"/><comment ref="C3" authorId="0"/></commentList></comments>"#;
         assert_eq!(xlsx_comment_cells(xml), vec![(1, 1), (3, 3)]);
+    }
+
+    #[test]
+    fn xlsx_comment_notes_reads_author_and_rich_text_runs() {
+        let xml = r#"<comments><authors><author>Alice</author><author>Bob</author></authors><commentList><comment ref="C3" authorId="1"><text><r><t>hello </t></r><r><t>world</t></r></text></comment></commentList></comments>"#;
+        assert_eq!(
+            xlsx_comment_notes(xml),
+            vec![CommentNote {
+                cell: (3, 3),
+                author: "Bob".to_string(),
+                text: "hello world".to_string()
+            }]
+        );
     }
 
     #[test]
@@ -6847,6 +7570,38 @@ mod merge_tests {
     }
 
     #[test]
+    fn xlsx_styles_projects_cell_xf_visual_properties() {
+        let xml = r#"<styleSheet>
+<fonts count="2"><font><sz val="11"/><name val="Calibri"/></font><font><b/><color rgb="FF112233"/></font></fonts>
+<fills count="2"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="solid"><fgColor rgb="FFFFEEAA"/></patternFill></fill></fills>
+<borders count="2"><border/><border><left style="thin"><color rgb="FF010203"/></left><right style="medium"/><top style="dashed"/><bottom style="thick"/></border></borders>
+<cellXfs count="2"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/><xf numFmtId="0" fontId="1" fillId="1" borderId="1"><alignment horizontal="center" vertical="center" wrapText="1"/></xf></cellXfs>
+</styleSheet>"#;
+        let styles = xlsx_styles(xml);
+        assert_eq!(
+            styles.cell_styles[1],
+            CellStyleDef {
+                bold: true,
+                italic: false,
+                underline: false,
+                font_color: Some("FF112233".to_string()),
+                fill_color: Some("FFFFEEAA".to_string()),
+                border_bottom: Some("thick".to_string()),
+                border_bottom_color: None,
+                border_left: Some("thin".to_string()),
+                border_left_color: Some("FF010203".to_string()),
+                border_right: Some("medium".to_string()),
+                border_right_color: None,
+                border_top: Some("dashed".to_string()),
+                border_top_color: None,
+                horizontal: Some("center".to_string()),
+                vertical: Some("center".to_string()),
+                wrap_text: Some(true),
+            }
+        );
+    }
+
+    #[test]
     fn xlsx_styles_an_xf_with_no_numfmtid_attribute_resolves_to_none() {
         let xml = r#"<styleSheet><cellXfs count="1"><xf fontId="0"/></cellXfs></styleSheet>"#;
         let styles = xlsx_styles(xml);
@@ -6871,6 +7626,16 @@ mod merge_tests {
         let xml = r#"<styleSheet><cellXfs count="0"/></styleSheet>"#;
         let styles = xlsx_styles(xml);
         assert!(styles.cell_xfs.is_empty());
+    }
+
+    #[test]
+    fn xlsx_styles_reads_differential_formats() {
+        let xml = r#"<styleSheet><dxfs count="1"><dxf><font><b/><color rgb="FF9C0006"/></font><fill><patternFill patternType="solid"><fgColor rgb="FFFFF2CC"/></patternFill></fill></dxf></dxfs><cellXfs/></styleSheet>"#;
+        let styles = xlsx_styles(xml);
+        assert_eq!(styles.dxf_styles.len(), 1);
+        assert_eq!(styles.dxf_styles[0].bold, true);
+        assert_eq!(styles.dxf_styles[0].font_color.as_deref(), Some("FF9C0006"));
+        assert_eq!(styles.dxf_styles[0].fill_color.as_deref(), Some("FFFFF2CC"));
     }
 
     // ── GitHub #4: resolve_number_format ────────────────────────────────────
@@ -7578,5 +8343,36 @@ mod from_bytes_tests {
         let invalid = r#"<worksheet><sheetData><row r="1"><c r="A1" t="s"><v>1</v></c></row></sheetData></worksheet>"#;
         let error = validate_shared_string_refs(invalid, &["ok".to_string()]).unwrap_err();
         assert!(error.contains("invalid index"));
+    }
+
+    #[test]
+    fn chart_projection_reads_basic_line_chart_source_and_title() {
+        let xml = r#"<c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart"><c:chart><c:title><c:tx><c:rich><a:t>Revenue</a:t></c:rich></c:tx></c:title><c:plotArea><c:lineChart><c:ser><c:cat><c:strRef><c:f>'Sheet 1'!$A$2:$A$3</c:f></c:strRef></c:cat><c:val><c:numRef><c:f>'Sheet 1'!$B$2:$B$3</c:f></c:numRef></c:val><c:spPr><a:solidFill><a:srgbClr val="12abEF"/></a:solidFill></c:spPr></c:ser></c:lineChart><c:catAx><c:title><c:tx><c:rich><a:t>Month</a:t></c:rich></c:tx></c:title></c:catAx><c:valAx><c:title><c:tx><c:rich><a:t>Amount</a:t></c:rich></c:tx></c:title></c:valAx></c:plotArea><c:legend/></c:chart></c:chartSpace>"#;
+        let chart = parse_chart_xml(xml).expect("basic chart should be projected");
+        assert_eq!(chart.ref_range, ((1, 1), (3, 2)));
+        assert_eq!(chart.chart_type, "line");
+        assert_eq!(chart.title, "Revenue");
+        assert_eq!(chart.x_axis_title.as_deref(), Some("Month"));
+        assert_eq!(chart.y_axis_title.as_deref(), Some("Amount"));
+        assert_eq!(chart.series_colors, vec!["12ABEF"]);
+        assert!(chart.legend);
+    }
+
+    #[test]
+    fn drawing_projection_reads_chart_relationship_and_anchor_size() {
+        let xml = r#"<xdr:wsDr><xdr:twoCellAnchor><xdr:from><xdr:col>3</xdr:col><xdr:row>1</xdr:row></xdr:from><xdr:to><xdr:col>10</xdr:col><xdr:row>17</xdr:row></xdr:to><xdr:graphicFrame><xdr:graphic><a:graphicData><c:chart r:id="rId2"/></a:graphicData></xdr:graphic></xdr:graphicFrame></xdr:twoCellAnchor></xdr:wsDr>"#;
+        assert_eq!(
+            drawing_chart_anchors(xml),
+            vec![("rId2".to_string(), 7, 16)]
+        );
+    }
+
+    #[test]
+    fn drawing_projection_reads_excel_style_one_cell_chart_anchor() {
+        let xml = r#"<xdr:wsDr><xdr:oneCellAnchor><xdr:from><xdr:col>3</xdr:col><xdr:row>1</xdr:row></xdr:from><xdr:ext cx="5400000" cy="2700000"/><xdr:graphicFrame><xdr:graphic><a:graphicData><c:chart r:id="rId3"/></a:graphicData></xdr:graphic></xdr:graphicFrame></xdr:oneCellAnchor></xdr:wsDr>"#;
+        assert_eq!(
+            drawing_chart_anchors(xml),
+            vec![("rId3".to_string(), 7, 16)]
+        );
     }
 }

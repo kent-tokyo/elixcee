@@ -1,0 +1,37 @@
+{
+  "schemaVersion": 1,
+  "artifacts": [
+    {
+      "name": "elixcee",
+      "kind": "rust-crate",
+      "runtime": ["native", "python-binding"],
+      "provides": ["xlsx-read", "formula-calculate", "workbook-edit", "vba-run", "diagnostics", "streaming-io"],
+      "doesNotProvide": ["browser-ui", "arbitrary-vba-compatibility", "lossless-ooxml-editing"],
+      "coordinates": "1-based"
+    },
+    {
+      "name": "elixcee-wasm",
+      "kind": "wasm-bindgen-crate",
+      "runtime": ["wasm32-unknown-unknown", "browser", "node"],
+      "provides": ["bounded-xlsx-read", "formula-calculate", "diagnostics", "typed-workbook-editor", "undo-redo"],
+      "doesNotProvide": ["spreadsheet-ui", "xlsx-writer", "arbitrary-vba-execution", "filesystem", "network"],
+      "coordinates": "1-based"
+    },
+    {
+      "name": "@elixcee/xlsx",
+      "kind": "javascript-package",
+      "runtime": ["browser", "node"],
+      "provides": ["xlsx-read", "xlsx-write", "formula-runtime-bridge", "bounded-zip-guards"],
+      "doesNotProvide": ["full-excel-ooxml-fidelity", "arbitrary-vba-execution"],
+      "coordinates": "0-based utility API; 1-based editor API"
+    },
+    {
+      "name": "playground",
+      "kind": "static-web-app",
+      "runtime": ["browser"],
+      "provides": ["excel-like-grid", "range-selection", "editing", "charts-preview", "xlsx-download", "bounded-vba-demo"],
+      "doesNotProvide": ["a-rust-crate", "microsoft-excel", "arbitrary-vba-execution", "collaboration"],
+      "coordinates": "1-based display"
+    }
+  ]
+}

@@ -140,14 +140,17 @@ function bytesToBase64(bytes) {
 export function write(wb, opts) {
   const o = opts || {};
   const bookType = o.bookType || 'xlsx';
-  if (bookType !== 'xlsx') {
+  const hasVba = wb && (wb['!vbaProject'] instanceof Uint8Array || wb['!vbaProject'] instanceof ArrayBuffer);
+  if (bookType !== 'xlsx' && bookType !== 'xlsm') {
     const err = new Error(
-      `write(): bookType '${bookType}' is not supported — only 'xlsx' is implemented ` +
+      `write(): bookType '${bookType}' is not supported — only 'xlsx' and 'xlsm' (with !vbaProject) are implemented ` +
         '(no ODS/CSV/TXT/legacy .xls output yet).'
     );
     err.code = ELIXCEE_UNSUPPORTED_BOOK_TYPE;
     throw err;
   }
+  if (bookType === 'xlsm' && !hasVba) { const err = new Error("write(): bookType 'xlsm' requires workbook['!vbaProject'] bytes"); err.code = ELIXCEE_UNSUPPORTED_BOOK_TYPE; throw err; }
+  if (bookType === 'xlsx' && hasVba) { const err = new Error("write(): workbook carries !vbaProject; use bookType 'xlsm'"); err.code = ELIXCEE_UNSUPPORTED_BOOK_TYPE; throw err; }
   const buf = makeZip(buildXlsxZipEntries(wb));
   switch (o.type) {
     case 'buffer':

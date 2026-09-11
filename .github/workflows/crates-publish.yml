@@ -1,16 +1,15 @@
 name: Publish to crates.io
 
-# Deliberately workflow_dispatch only, not triggered by v* tags — unlike PyPI,
-# crates.io publishing is a separate judgment call each release (elixcee-types
-# is a real public dependency once published; a bad publish can only be
-# yanked, never deleted), not something to fire automatically on every tag.
+# Deliberately workflow_dispatch only, not triggered by v* tags. Published
+# crates can be yanked but never deleted, and the WASM bridge must follow the
+# matching native `elixcee` release in the crates.io index.
 on:
   workflow_dispatch:
     inputs:
       ref:
-        description: "Tag or ref to publish from (e.g. v1.0.11)"
+        description: "Tag or ref to publish from (e.g. v1.0.12)"
         required: true
-        default: "v1.0.11"
+        default: "v1.0.12"
 
 permissions:
   contents: read
@@ -69,3 +68,23 @@ jobs:
 
       - name: cargo publish -p elixcee
         run: cargo publish -p elixcee
+
+      - name: wait for elixcee to appear in the index
+        run: |
+          VERSION=$(grep -m1 '^version' Cargo.toml | sed -E 's/version = "(.*)"/\1/')
+          for i in $(seq 1 30); do
+            if curl -sf -H "User-Agent: elixcee-ci (https://github.com/kent-tokyo/elixcee)" \
+                 "https://crates.io/api/v1/crates/elixcee/$VERSION" -o /dev/null; then
+              echo "elixcee $VERSION is live on crates.io"
+              exit 0
+            fi
+            echo "not yet indexed, waiting (attempt $i/30)..."
+            sleep 10
+          done
+          echo "::error::elixcee $VERSION never appeared in the crates.io index after 5 minutes"
+          exit 1
+
+      # This ordering is required: the crate calls APIs from the matching
+      # public elixcee release and cannot be verified against an older index.
+      - name: cargo publish -p elixcee-wasm
+        run: cargo publish -p elixcee-wasm

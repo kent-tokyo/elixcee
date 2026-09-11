@@ -34,7 +34,7 @@ sheets deliberately have no synthetic identity.
 The writer regenerates the parts it models and passes through many unknown ZIP
 parts. It currently models cell values, formulas, styles, merges, hidden
 rows/columns, workbook metadata, and selected worksheet objects such as tables,
-filters, and validations. A passthrough part is not enough by itself: its
+filters, validations, comments, and a bounded multi-series chart projection. A passthrough part is not enough by itself: its
 relationship must also remain connected to the regenerated owner part.
 For worksheet drawing and legacy-drawing owners, save now checks the owner
 relationship id, the worksheet rels declaration, its normalized internal target,
@@ -91,6 +91,9 @@ as `calculateWorkbook(bytes)` from the shared WASM bridge for Node/browser
 consumers. `diagnoseWorkbook(bytes)` provides a deterministic preflight JSON
 summary (sheet/formula counts, qualified formulas, and parse errors). Incremental
 JS calculation and worker/async loading contracts remain future work.
+The bridge also exposes simple workbook defined names through `Workbook.Names`
+and passes global plus worksheet-local names into the shared evaluator; dynamic
+and complex defined-name expressions remain outside the browser bridge scope.
 The optional `@elixcee/xlsx/runtime` subpath exposes the same shared calculation
 functions plus stateful `WorkbookEditor` in Node and browser package conditions.
 `WorkbookEditor` exposes bounded typed cell writes (`setNumber`, `setString`, and
@@ -107,8 +110,10 @@ budget separation, failure cleanup, and independently measured memory scaling.
 
 `packages/xlsx` provides synchronous `read`/`readFile`/`readFileSync` and
 `write`/`writeFile`/`writeFileSync` APIs for XLSX. The browser entry point uses
-embedded WASM and is intended for bundled applications. The package is kept
-private and is not published yet.
+embedded WASM and is intended for bundled applications. The package remains
+private and is not published yet. The reusable Rust runtime is distributed
+separately through `elixcee`, while the WASM bridge is being prepared as
+`elixcee-wasm`; neither crate is itself a browser UI or a complete XLSX writer.
 
 The native Rust and Python readers expose the same cooperative read controls:
 the default total work budget is 2 GiB-equivalent units, Python additionally
@@ -142,4 +147,6 @@ workbook may rename a sheet, update selected existing chart-series category/valu
 `worksheetSource@sheet` or A1 `ref`. Row or column structural edits, chart
 creation, general object editing, cache regeneration/recalculation, and
 unparseable object XML remain fail-closed. Existing Drawing text runs are a
-bounded exception and may be updated by zero-based run index.
+bounded exception and may be updated by zero-based run index. The browser
+Playground additionally creates a limited bar/line chart projection with
+optional category/value axis titles; this is not a general Chart XML editor.

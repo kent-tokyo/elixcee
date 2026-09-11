@@ -236,7 +236,7 @@ function readFileSyncImpl(filename, opts) {
 // reader.rs) so "own write -> own read" is a meaningful round trip, not two independently
 // -guessed formats — see internal/xlsx-writer.cjs's own top doc comment.
 //
-// bookType: 'xlsx' only (defaults to 'xlsx' when omitted, matching the oracle's own
+// bookType: 'xlsx' or 'xlsm' when a workbook carries an opaque !vbaProject payload
 // default) — any other value (the oracle also accepts 'ods'/'csv'/'txt'/legacy .xls
 // variants/etc.) throws ELIXCEE_UNSUPPORTED_BOOK_TYPE rather than silently producing
 // something else. type: 'buffer' | 'array' | 'base64' only — the oracle's other `type`
@@ -252,14 +252,17 @@ const ELIXCEE_UNSUPPORTED_WRITE_TYPE = 'ELIXCEE_UNSUPPORTED_WRITE_TYPE';
 function writeBuffer(wb, opts) {
   const o = opts || {};
   const bookType = o.bookType || 'xlsx';
-  if (bookType !== 'xlsx') {
+  const hasVba = wb && (wb['!vbaProject'] instanceof Uint8Array || wb['!vbaProject'] instanceof ArrayBuffer);
+  if (bookType !== 'xlsx' && bookType !== 'xlsm') {
     const err = new Error(
-      `write(): bookType '${bookType}' is not supported — only 'xlsx' is implemented ` +
+      `write(): bookType '${bookType}' is not supported — only 'xlsx' and 'xlsm' (with !vbaProject) are implemented ` +
         '(no ODS/CSV/TXT/legacy .xls output yet).'
     );
     err.code = ELIXCEE_UNSUPPORTED_BOOK_TYPE;
     throw err;
   }
+  if (bookType === 'xlsm' && !hasVba) { const err = new Error("write(): bookType 'xlsm' requires workbook['!vbaProject'] bytes"); err.code = ELIXCEE_UNSUPPORTED_BOOK_TYPE; throw err; }
+  if (bookType === 'xlsx' && hasVba) { const err = new Error("write(): workbook carries !vbaProject; use bookType 'xlsm'"); err.code = ELIXCEE_UNSUPPORTED_BOOK_TYPE; throw err; }
   // Lazy require of deflate-node.cjs (not zlib directly) — see that file's own top doc
   // comment for why the zlib access must live in its own file (so package.json's
   // `browser` field can stub it out of a bundled browser build) rather than inline here.

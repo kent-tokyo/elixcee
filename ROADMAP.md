@@ -1,6 +1,6 @@
 # elixcee Roadmap
 
-更新日: 2026-09-11。対象versionは **1.0.11** です。
+更新日: 2026-09-12。対象versionは **1.0.12** です。
 完了項目は記載した実装・測定の範囲に限ります。公開先の状態はリリースごとに別途確認します。
 版ごとの変更は [CHANGELOG](CHANGELOG.md)、実装範囲は
 [FUNCTIONS](FUNCTIONS.md)、保証範囲は [v1契約](docs/v1-support-contract.md) を参照してください。
@@ -27,6 +27,8 @@ JavaScript互換APIは別トラックで、`packages/xlsx` はprivate・未公�
 6. **LogiSheets対抗 L0–L6**: workbook数式・共有runtime・操作履歴を、既存の安全性と互換性ゲートを維持したまま段階導入する。
 7. **品質保証トラック L7–L10**: Rubberduck後のCI診断、公開可能なworkbook pair benchmark、snapshot／依存関係、動的配列oracleを分離して進める。
 8. **Browser Spreadsheetトラック B0–B5**: playgroundを実演用グリッドから、XLSXを読み込んで編集・再計算・ダウンロードできる安全なブラウザーUIへ段階拡張する。UIとVBA実行は別ゲートで扱う。
+9. **Web Excel parityトラック B6–B12**: Excel for the webの主要な編集・計算・可視化ワークフローを、ローカルブラウザーで再現できる段階的な互換プロファイルとして実装する。Microsoft 365の認証、共同編集、OneDrive／SharePointサービス自体は対象外とし、ファイル互換性・操作性・計算結果を優先する。
+10. **Crate／WASM配布トラック C0–C5**: PlaygroundのRust／WASM workbook runtimeを再利用可能なcrateとして公開し、UIは別の静的フロントエンドとして配布する。crateが提供しないJS Writer機能やMicrosoft 365サービスを、crateの機能として誤って宣伝しない。
 
 ## Browser Spreadsheetトラック（B0–B5）
 
@@ -46,9 +48,69 @@ Excel風UI／XLSX入出力は競合が存在する一方、主要なブラウザ
 
 - [x] **B1 部分 BUILD**: playgroundに`.xlsx` file inputを追加し、ブラウザー版WASM `read()`でWorkbookを読み込んで`SheetNames`をシートタブへ投影する経路を実装した。読み込み失敗は現在のWorkbookを保持して状態表示へ戻す。実Chrome E2Eで2シートのXLSXアップロードと`Summary`／`Notes`タブ表示を確認した。XLSMのVBA実行、未対応OOXMLの完全保持は未検証。
 - [x] **B2 部分 BUILD**: 1-based A1表示、シートタブ、セル選択、数式バー、セル／数式編集、矩形範囲選択、TSV形式の範囲コピー／貼り付け、内部clipboard fallbackを実装した。実ブラウザーで6セルの範囲ハイライトとセル編集後のRust/WASM再計算（990→1000）を確認した。キーボード操作、Paste Special、完全なUndo／Redoは未完。
-- [x] **B3 部分 BUILD**: 選択セルを基準にした行／列の追加・削除ボタンと、行番号／列見出しの右クリックメニューを追加した。数式を含むsheetは参照更新なしの構造変更を拒否し、データのみのsheetに限定して安全に行列を移動する。数式参照の構造更新、シート追加／名前変更は未完。
+- [x] **B3 部分 BUILD**: 選択セルを基準にした行／列の追加・削除ボタンと、行番号／列見出しの右クリックメニューを追加した。シートタブの右クリックによる追加・削除・名前変更、先頭行固定、見出し列の昇順／降順ソート、表示のみの値フィルター、選択範囲の結合／結合解除も実装した。結合は左上セルを保持し、数式を含む範囲・既存結合と重なる範囲を拒否する。シート削除は数式参照と最後の1枚を拒否し、名前変更はqualified formula referenceを更新する。行／列操作は内部の1-based表示に対応する`r`／`c`軸を正しく移動し、表内数式を含む範囲のソートは参照破壊防止のため拒否する。完全な構造参照更新は未完。
 - [x] **B5 部分 BUILD**: Web Worker内で`Sub`、`Dim`、スカラー代入、`Cells(row,col).Value`、四則演算だけを実行する小型サブセットを追加した。禁止API・制御構文・未対応文は拒否して診断を表示する。Rust/WASMの数式再計算経路とは分離し、Workerから任意ファイル・ネットワーク・COMへ到達できない構成にした。既存VMとのparity、範囲値・条件分岐・bounded loop、キャンセルは未完。
 - [x] **B4 部分 BUILD**: 編集済みバイト列をブラウザー側で再読込してシート数を検証してからダウンロードする経路を追加した。Rust/WASMの再計算結果と診断を出力へ反映する。実Chrome E2Eでアップロード→編集→再計算（35）→ダウンロード→2シート再読込検証を確認した。複雑なOOXML partの保持、実Excel再openは未完。
+- [x] **B6 部分 BUILD**: セル／数式バー編集を編集単位のXLSXスナップショットとして最大50件までUndo／Redoできるようにし、Ctrl/Cmd+Z、Ctrl/Cmd+Y、Escape取消し、名前ボックス、矢印／Tab／Enter／Home／End移動、Shift+Arrowの範囲拡張、英語／日本語／中国語ボタンを追加した。アプリ内コピーでは`すべて／値／数式／書式`のPaste Specialを選べ、貼り付け単位をUndoできる。書式・数式・シート構造を同時に復元するが、全操作の履歴統合、複数範囲、フィルハンドルは未完。
+- [x] **B7 部分 BUILD**: 選択範囲へGeneral／整数／小数／桁区切り／パーセント／日付の数値形式を適用し、既存Writerの`styles.xml`／`cell.z`経路でXLSX往復できるようにした。フォント、文字色、塗りつぶし、罫線、配置、折返し、限定リスト型データ検証（画面上のドロップダウンと`dataValidations`出力）も接続した。既存ファイルのstyle／validation読込、条件付き書式、テーブルは未完。
+- [x] **B8 部分 BUILD**: Workbook内の値・数式文字列を対象に検索、次を置換、すべて置換を追加した。すべて置換は1回のUndo単位として記録し、対象シート・セルへ移動する。シート名前変更ではqualified formula referenceを安全に更新する。既存／新規の単純definedNameを`Workbook.Names`として読込・出力し、名前ボックスから範囲へ移動できるようにした。global／local definedNameはWASM再計算にも接続し、local scopeの同名解決を検証した。テーブル参照、検索オプション、数式依存関係の安全な書換え、dynamic／複雑なdefinedNameの完全対応は未完。
+- [x] **B7 部分 BUILD**: Writerのstyle tableを拡張し、セルの太字・文字色・塗りつぶし・下罫線・左右中央配置・折返しを`cell.s`から`styles.xml`へ出力できるようにした。playgroundにも選択範囲向け操作を接続し、セル編集で書式を保持する。既存ファイルのフォント／fill／border読込、条件付き書式、データ検証、テーブルは未完。
+- [x] **C0 部分 BUILD**: `elixcee`（純Rust／Python binding）と`elixcee-wasm`（wasm-bindgenのread／計算／診断／stateful editor bridge）の公開境界を棚卸しした。`elixcee-wasm`を公開候補metadataへ更新し、XLSX Writer・Playground UIはJS側にあるためcrate単体でExcel風UIや完全なXLSX編集を提供しないことを文書化した。
+
+## Crate／WASM配布トラック（C0–C5）
+
+- [ ] **C0 API boundary**: Rust本体、共有型、WASM bridge、JS Writer、Playground UIの責務とsemver契約を固定する。crateから利用できるread／formula／diagnostics／editor APIと、利用できないUI／任意VBA／完全lossless保存を機械可読matrixに記録する。Playgroundの再利用可能なread／計算／診断／bounded typed-edit部分を`elixcee-wasm` crateとして配布し、grid／SVG ribbon／JavaScript Writerは別artifactとする境界をREADMEと最小JS例へ反映した。
+- [ ] **C1 public Rust crate**: `elixcee`の純Rust APIをPython bindingから分離して文書化し、feature flags、MSRV、wasm32／native、XLSX／XLSM境界、安全上限を公開する。`cargo package --list`、`cargo publish --dry-run`、docs.rs相当のdoc buildをリリースゲートにする。現行公開版1.0.11との差分を含む次版の公開が未完。
+- [ ] **C2 public WASM crate（publish-ready partial）**: `elixcee-wasm`へ公開metadata、README、license、repository、docs.rs targetを追加し、`cargo package`、実コンパイルを含む`cargo publish --dry-run`、wasm32 compileを確認した。現時点のdry-runは、ローカルの新APIを参照するため、公開済み`elixcee` 1.0.11では解決できず失敗する。先に対応する`elixcee`次版を公開し、そのindex反映後に`elixcee-wasm`を公開する順序をworkflowへ固定した。read、formula calculation、diagnostics、bounded `WorkbookEditor`のJS API安定化、サイズ・security gate、実公開は未完。WASM crate単体でXLSX Writerを提供しない境界はREADMEへ明記した。
+- [ ] **C3 browser package integration**: 公開crateから生成したwasm-bindgen artifactをnpm／CDN向けブラウザーpackageへ再現可能に接続し、Node／browser、ESM／CJS、CSP、WASMサイズ、source map、license noticeを検証する。Playgroundはその実例として別配布する。
+- [ ] **C4 release gate**: native／wasm32／Node／browserの値・数式・エラー・undo／redo parity、XLSX fixture往復、cargo audit／deny、公開metadata、再現可能buildを確認する。crate公開、npm公開、GitHub Pages公開を同一リリースとみなさず、成果物ごとにversionと対応範囲を示す。
+- [ ] **C5 Playground integration contract**: Playgroundを`elixcee-wasm`とJavaScript writerの統合例として分離し、crate API／UI／writerの責務を機械可読matrixと最小コード例で公開する。crate利用者がExcel風UIまで依存せず導入でき、UI利用者がcrate単体の機能を過大評価しない状態をrelease gateにする。crate README／境界文書／最小JS例でこの分離を明示したが、version整合、clean publish、完全parity、実公開は未完。
+
+進捗: C5 distribution-shape BUILDとして、Playgroundの再利用対象を`elixcee-wasm` crate（reader／計算／診断／bounded editor）に限定し、Excel風UIは静的Webアプリ、XLSX出力はJavaScript writerとして別配布する境界をREADME／crate API文書へ明記した。crate公開は対応するnative crateのindex反映後に行い、Playgroundは統合例として後段にデプロイする。`cargo package --list`は11ファイルで通過したが、2026-09-12の`cargo publish --dry-run -p elixcee-wasm`は公開済み`elixcee` 1.0.11に新しいformula context／style／chart／comment／conditional projection APIがないため検証コンパイルで失敗した。crate publish、npm publish、GitHub Pages deployの実行と最終parity gateは未完。
+進捗: C2 metadata BUILDとして、`elixcee-wasm`へMSRV 1.85とdocs.rs URLを追加し、offlineの`wasm32-unknown-unknown` compileと`cargo package --list`（LICENSE／README／build scriptsを含む）を再確認した。公開済みnative crateとのAPI差分が残るため、実publish／dry-run成功とは扱わない。
+進捗: C2/C5 crate documentation BUILDとして、crate READMEをcrates.io/docs.rsから解決できる絶対リンクとRust/WASM導入例へ整理し、`cargo test -p elixcee-wasm --lib --offline`（27件）を通過した。`cargo publish --dry-run`は2026-09-12現在、実行環境のcrates.io DNS解決失敗で未完了。WASM vendored artifactの再生成とnative crateのversion整合が完了するまで公開済みとは扱わない。
+進捗: B9/G2d Chart round-trip BUILDとして、drawing XMLの`graphicFrame`閉じタグ欠落とA1系Chart sourceの1-based範囲処理を修正し、drawing anchorをExcel/openpyxlに近い`oneCellAnchor + ext`へ整理した。`chart:smoke`、style smoke、WASM全smoke（Node/browser、CJS/ESM、サイズgateを含む）、formula spill smokeが成功した。LibreOffice正規化後のファイルはMicrosoft Excelで警告なく開ける一方、elixcee生成直後のファイルでは修復警告が残るため、Excel完全互換とは扱わない。
+進捗: B9のdrawing namespace BUILDとして、writerの`graphic`要素をDrawingMLの`a:graphic`へ修正し、生成Chartの内部round-tripを維持した。修正後の新規XLSXでもMicrosoft Excel for Macの修復警告が再現したため、Chart XMLの別schema差分を引き続き切り分ける。
+進捗: B10/B9のstyle metadata BUILDとして、writerの`styles.xml`へExcel標準の`Normal` cellStyleとtable／pivot style既定値を追加した。openpyxlのdefault-style警告は解消し、Chart／style smokeは成功したが、Microsoft ExcelのChart修復警告は継続しており、完全Excel再open成功とは扱わない。
+進捗: B9のChart schema probeとして、`oneCellAnchor + ext`に加えてChartSpaceの`lang`／`roundedCorners`／`style`、タイトルoverlay、棒グラフの`gapWidth`／`invertIfNegative`を追加した。Chart round-trip smokeは維持したが、Microsoft Excel for Macの修復警告は継続したため、これらの任意要素だけを原因解消とは扱わない。次はExcel修復後の差分取得または最小Chart fixtureとのバイナリ比較を優先する。
+進捗: B9のpackage-theme probeとして標準`xl/theme/theme1.xml`を一時追加したが、Chartなしの通常writer WorkbookにもExcel警告が出たため、出力entry／relationshipは撤回した。theme欠落は主原因とは断定せず、現行writerの実Excel再open警告はChart有無を分けて再調査する。
+進捗: B10のstyle Excel-reopen BUILDとして、空の`dxfs`要素とcellXfの不要な`applyNumberFormat`／`applyFont`／`applyFill`／`applyBorder`属性を省略するwriter修正を追加した。通常WorkbookはMicrosoft Excel for Macで警告なく開けることを実確認し、style／conditional／XLSM smokeも通過した。Chart付きWorkbookはなお修復警告が残るため、Chart partの再openは未完。
+進捗: B9のChart/XML分離検証として、style修正済みwriter packageに対しChart／drawingをopenpyxlの受理済み部品へ置換すると警告が消え、Chart XMLだけwriter版へ戻すと警告が再現した。Chart XMLが主因であることを確定したが、title／系列名／任意metadata／系列書式を個別に除いても解消しなかったため、最小Chart生成とOOXML順序の再構成を次の実装単位とする。
+進捗: B9のChart最小構造probeでは、生成Chart XMLはXMLとして整形式であることを確認した。`c:tx`形式、title、任意metadata、`spPr`を個別に削っても実Excel警告は残ったため、次は受理済みChart XMLを基準に`plotArea`／axis／seriesの完全な構造差分を実装へ反映する。
+進捗: B9のChart cache compatibility BUILDとして、writerがChartへ埋め込んでいた`strCache`／`numCache`を省略し、セル範囲のformula referenceを正とする出力へ変更した。キャッシュを除いた生成ChartはMicrosoft Excel for Macで警告なく開き、Chart／style／conditional smokeも通過した。再open後のExcelキャッシュ再生成、複雑なChart type、Pivot／Drawing完全互換は未完。
+進捗: B9のChart cache regression BUILDとして、`chart-roundtrip`へ生成partの直接検査を追加し、`strRef`／`numRef`と1-basedセル範囲formulaの存在、`strCache`／`numCache`不在を固定した。reader round-trip smokeも継続成功している。
+進捗: B9のLine Chart reopen BUILDとして、line系列の不正な`graphicalProperties`をDrawingMLの`c:spPr/a:ln`へ変更した。キャッシュなしのbar／line ChartをMicrosoft Excel for Macで警告なく開けることを実確認し、Chart smokeも成功した。
+進捗: B9のmulti-chart reopen BUILDとして、同一worksheetへbar／lineの2 Chartを配置し、複数anchor／relationshipを含むキャッシュなしXLSXをMicrosoft Excel for Macで警告なく開いた。Chart round-trip smokeも成功している。
+進捗: B9のPivot summary export BUILDとして、Playgroundの限定Pivot summaryを通常worksheetとしてXLSXへ出力し、再読込した集計値を固定する`pivot:smoke`を追加した。生成物に`pivotCache`／`pivotTable` partを含めないことも検証し、ネイティブPivotTableと誤認しない境界を明文化した。既存PivotTableの読込・編集・Excel実機再openは未完。
+進捗: B8/B9のPivot source tracking BUILDとして、元シートの行列挿入・削除時に限定Pivot summaryの`sourceRef`をChart／Tableと同じ境界規則で追従させ、ヘッダー削除など不正になる操作を拒否するようにした。元シートの名前変更では`sourceSheet`も更新し、参照元シート削除は拒否する。既存ネイティブPivotTable、複雑なfilter／group、Excel実機再openは未完。
+進捗: B9のPivot refresh UX BUILDとして、元データの再計算時の自動更新に加え、Playgroundへ明示的な`Refresh pivot`操作を追加した。更新は1回のUndo／Redo履歴境界として記録し、通常worksheet型の限定Pivot summaryであることは維持する。ネイティブPivotTableのrefresh、group／複合filter、Excel実機再openは未完。
+進捗: B6/B9のribbon icon BUILDとして、Pivot summaryの作成／更新ボタンへ専用SVGアイコンを割り当て、未登録ボタンが計算アイコンへフォールバックしないようにした。UIはリボン風の限定操作群であり、Excelの全リボン機能・テーマ切替は未完。
+進捗: B9のPivot documentation BUILDとして、英語・日本語・簡体中文のPlayground READMEに、Pivot summaryが通常worksheet型の限定集計であり、元データ変更時に更新されること、ネイティブPivotTable／PivotCacheとは異なることを明記した。
+進捗: B6/B12のribbon regression BUILDとして、`playground:interaction`でPivot作成／更新ボタンの`ribbon-button`装飾と専用SVGアイコンを実DOMから検証するようにした。範囲選択・キーボード・仮想スクロール境界の既存検証も維持する。
+進捗: B6のkeyboard smoke拡張BUILDとして、実Chromeの操作driverでTab／Enter／Home／Endの移動先（B1／B2／A2／C2）を名前ボックスから検証するようにした。既存の矢印・Shift範囲・PageDown・touch範囲検証も維持する。
+進捗: B6のkeyboard boundary BUILDとして、実ChromeでCtrl／Cmd相当のHome／Endジャンプ（A1／C5）とShift＋Tab／Enterの逆方向範囲（A1:B1／B1:B2）を検証するようにした。
+進捗: B6のclipboard smoke拡張BUILDとして、実Chromeの操作driverで内部clipboardのA1→C1貼り付け（値`Item`）を検証するようにした。外部OS clipboard権限に依存しない内部経路の回帰であり、外部アプリとの完全な形式互換は未完。
+進捗: B8のformula regression BUILDとして、隔離Cargo targetで`cargo test --lib formula::eval --offline`を実行し、Rust数式評価器の166テスト（動的配列、XLOOKUP、GROUPBY／PIVOTBY、文字列・日付・統計系を含む）が全件成功した。Excel oracleによる全関数・型・丸めの一致、依存グラフの完全一致は未完。
+進捗: B8のformula contract BUILDとして、`scripts/check-formula-dispatch.py --check-contracts --check-docs`を実行し、90件の機械可読formula contractと534件のdispatch名の文書接続が成功した。これは関数名の接続監査であり、Excelとの意味・型・丸め一致を証明するものではない。
+進捗: B11のdocumentation parity BUILDとして、Playground日本語・簡体中文READMEのVBA説明を実装済みの限定`If`／`For`／`Do`／`Select Case`へ修正し、制御構文全般を拒否すると誤記していた記述を解消した。未対応構文、ファイル／ネットワーク／COM／Shell／UI効果は引き続き拒否する。
+
+進捗: B7のformat-copy BUILDとして、選択範囲の左上セルの`cell.s`／数値形式を範囲全体へコピーする操作を追加し、既存のPaste Special（書式）とは別の直接操作としてUndo／XLSX出力へ接続した。テーマ依存書式、複雑なstyle inheritance、Excel実機再openは未完。
+
+進捗: B7のblank-cell-format BUILDとして、値を持たない選択セルにも数値形式・フォント・塗りつぶし・罫線・配置・折返しを適用してXLSXへ保存できるようにした。未使用セルの完全なExcel style最適化、テーマ継承、実Excel再openは未完。
+
+進捗: B6のfreeze-column BUILDとして、Playgroundに先頭列の固定／解除を追加し、既存の先頭行固定と組み合わせたsticky表示を実装した。Writerにも`!freezePane`からOOXMLの`sheetViews/pane/selection`を出力する経路を追加し、行のみ／列のみ／行列同時のXML回帰を固定した。仮想表示で先頭列が画面外になる場合の完全なペイン分割、worksheetごとのfreeze state、操作履歴は未完。
+
+進捗: B6のfreeze-read BUILDとして、reader／WASM JSONが既存worksheetのfrozen pane splitを`!freezePane`へ投影し、PlaygroundのXLSX upload／sheet切替／resetで固定状態を復元するようにした。Writerの出力とreaderのrow／column split解釈を回帰検証した。さらに固定／解除をUndo／Redo履歴へ統合した。仮想表示で先頭列が画面外になる場合の完全なペイン分割、複数pane／selectionの完全保持は未完。
+
+進捗: B6のrow-column-select BUILDとして、行番号／列番号のクリックで使用範囲内の行全体／列全体を選択できるようにし、既存の書式・コピー・結合・構造操作へ接続した。巨大Workbookで全行列をDOM化しない上限は維持する。Ctrl／Cmdによる行列の複数選択、仮想表示外の完全選択UIは未完。
+
+進捗: B6のrow-column-multi-select BUILDとして、Ctrl／Cmdクリックによる行番号／列番号の複数選択を追加し、既存の複数範囲clipboard・書式・構造操作が同じselectionRangesを利用するようにした。仮想表示外の完全選択UI、Shiftによる連続行列選択は未完。
+
+進捗: B6のrow-column-range-select BUILDとして、Shiftクリックによる連続した行／列範囲の選択を追加した。Ctrl／Cmdの離れた複数範囲と組み合わせても、既存のselectionRanges・clipboard・書式操作を共有する。仮想表示外の完全選択UIは未完。
+
+進捗: B6のclipboard-shortcut BUILDとして、Ctrl／Cmd+C、Vを既存のアプリ内clipboard／Paste Special経路へ接続した。OS clipboardが利用できない場合の内部fallbackと、XLSXセルの値・数式・書式モードは既存契約を維持する。複数アプリ間の完全なHTML／リッチクリップボード互換は未完。
+
+進捗: B6のrich-clipboard BUILDとして、Clipboard APIが利用できる場合はTSVとHTML tableを同時に書き出し、HTML tableを値行列として優先読込するようにした。数式・書式を外部アプリ間で完全に保持する互換ではなく、値の表貼り付け相互運用に限定する。
 
 ### Browserトラックのゲート
 
@@ -56,6 +118,138 @@ Excel風UI／XLSX入出力は競合が存在する一方、主要なブラウザ
 - B5は、Node／Pythonの既存VMと同じ入力に対する値・エラー・拒否理由のparityを確認する。Excel VBA完全互換の件数や任意マクロ実行を達成条件にしない。
 - `.xlsm`のVBA project保持、Chart／Pivot／Drawingの完全編集、外部リンク更新、Excel再openは、Bトラックの完了条件と分離してG2／G6の外部ゲートで判定する。
 - B1–B5の完了までは、playgroundを「サンプルを編集できるWASMデモ」と表記し、「Excelをブラウザーで完全再現」「VBAを任意実行」と表記しない。
+
+## Web Excel parityトラック（B6–B12）
+
+B0–B5の基盤の上に、Web版Excelで頻繁に使われる機能を優先して積み上げる。各phaseは「実装したUI」だけで完了にせず、同一fixtureのXLSX往復、数式結果、操作履歴、実Excel再open可能性を機能単位で記録する。未対応機能は壊さずに警告または拒否する。
+
+- [ ] **B6 Grid interaction parity**: Excel風のキーボード操作（矢印、Tab、Enter、Escape、Home／End、Shift範囲、Ctrl／Cmd範囲）、数式バー、名前ボックス、コピー／カット／ペースト、Paste Special、Undo／Redoを実装する。マウス範囲選択、フィルハンドル、複数範囲、結合セル、行列の挿入／削除／サイズ変更、非表示、Freeze Panesを操作履歴とともに扱う。
+- [ ] **B7 Cell formatting and data tools**: フォント、文字色、塗りつぶし、罫線、配置、折返し、数値形式、書式コピー、セル結合、条件付き書式、データ検証、ドロップダウン、テーブル化を追加する。書式は値・数式と分離してdirty partを追跡し、未対応styleは保持または警告する。
+- [ ] **B8 Workbook and formula parity**: シート追加／削除／名前変更、名前定義、テーブル参照、行列参照、動的配列、依存関係付き再計算、循環参照、エラー表示、検索／置換、ソート／フィルターを拡張する。関数はカテゴリ別にExcel oracleで校正し、対応数の宣伝ではなく結果・型・エラー・spill shapeの一致を合格条件にする。
+- [ ] **B9 Charts, Pivot and visual objects**: Chartの作成・編集（系列、タイトル、軸、凡例、種類、サイズ）、Pivotのsource／filter／集計、画像・Drawing・コメントの限定編集を追加する。Chart／Pivot cache／Drawing relationship／anchorを一組で検証し、Excel再open修復警告が出る機能は公開前に拒否または限定表示する。
+- [ ] **B10 Import/export fidelity**: XLSX／XLSMのアップロード、複雑なOOXML part、外部リンク、テーマ、名前定義、印刷設定、保護、コメント、既存VBA projectの保持を機能別に実装・検証する。VBA projectはブラウザーで任意実行せず、保持と限定Worker実行を分離する。losslessを検証できないpartは明示する。
+- [ ] **B11 Browser automation boundary**: ブラウザー内で実行できるVBAサブセット、Workbook API、操作ログ、構造化診断、キャンセル、CPU／メモリ／入力budgetを整備する。Shell、COM、ネットワーク、任意ファイルアクセス、MsgBox／UserFormは遮断し、完全VBAはネイティブruntimeへ誘導する。
+- [ ] **B12 Web-grade quality gate**: 大規模疎密Workbookの仮想スクロール、Worker分離、WASM／JS境界の性能測定、アクセシビリティ、モバイル幅、キーボード操作、CSP、XLSX zip bomb対策、再現可能なブラウザーmatrix（Chrome／Firefox／Safari／Edge）を整備する。主要B6–B11 fixtureの実Excel再openと値／数式／style／part差分をリリース判定に使う。
+
+進捗: B12の仮想ビューポート／アクセシビリティBUILDとして、Playgroundは選択セルを中心に最大20行×12列だけをDOM化し、大規模疎密シートの全件レンダリングを避ける。`grid`／row／gridcell semanticsとsheet-tabの選択状態も付与した。Worker分離、長時間性能測定、複数ブラウザー、CSP、実Excel再openは未完。
+進捗: B12のlarge-sparse smoke BUILDとして、`?profile=large-sparse`で論理200,000行×24列の疎密Worksheetを生成し、実Chromeで論理行数を保持したままDOMセル数を最大20×12へ制限する検証と初期描画時間のdata属性記録を追加した。複数ブラウザー、長時間scroll性能、実Excel再openは未完。
+進捗: B12のvirtual-scroll soak BUILDとして、`?profile=scroll-soak`で大規模疎密Worksheetの行位置を100回移動して再描画し、各回の仮想セル上限と総時間（15秒未満）を実Chromeで検証する`playground:scroll-soak`を追加した。現行Chromeでは100回8027msだった。これはviewport層の回帰ゲートであり、実機の連続ホイール／タッチスクロール、複数ブラウザー、実Excel再openは未完。
+進捗: B12のwheel-boundary BUILDとして、仮想表示の上下端・左右端への実スクロールを次の論理範囲へ送る境界処理を追加した。上下は10行、左右は2列ずつ選択中心レンダリングへ移り、DOM上限は維持する。連続ホイール／タッチの実機、複数ブラウザー、実Excel再openは未完。
+
+進捗: B12のレスポンシブBUILDとして、狭い画面ではカードを単列化し、リボン操作をスクロール可能にし、検索欄・ファイル情報・シート表示を折り返すレイアウトを追加した。モバイル幅での実機操作、長時間性能測定、複数ブラウザー、CSP、実Excel再openは未完。
+進捗: B12のmobile smoke BUILDとして、実Chromeを再現可能な500×844 narrow viewportで起動する`playground:mobile`を追加し、実viewport幅、ARIA/CSP、仮想表示セル数を同じDOM smokeで検証するようにした。Chrome headlessの最小CSS幅に合わせた測定であり、タッチ実機操作、Firefox／Safari／Edge、長時間性能、実Excel再openは未完。
+進捗: B6/B12のtouch-range BUILDとして、タッチPointer Eventsによるセル範囲ドラッグを追加し、マウスと同じ`selectionRanges`／仮想viewport／選択表示へ接続した。タッチ入力ではセルの既定編集を抑止して範囲選択を優先する。iOS／Android実機、複数ブラウザー、スクリーンリーダー、実Excel再openは未完。
+進捗: B6のinteraction-smoke BUILDとして、実Chromeへ操作driverを注入するスモークを追加し、マウス範囲ドラッグ（9セル）、Shift+Arrow範囲拡張（2セル）、タッチPointer Events範囲ドラッグ（9セル）をDOMの選択状態で検証した。検証で判明したドラッグ中の`selectionEnd`と`selectionRanges`の不一致を修正し、モバイル／アクセシビリティスモークと合わせて再通過した。実マウス座標・iOS／Android実機、複数ブラウザー、スクリーンリーダーは未検証。
+
+進捗: B10/B12のZIP安全境界BUILDとして、Playgroundのアップロード前にZIP中央ディレクトリを検査し、ZIP64、壊れた中央ディレクトリ、5,000件超のentry、展開後256 MiB超、圧縮率200倍超を拒否するようにした。入力20 MiB制限と、失敗時に現在のWorkbookを保持する挙動は維持する。XLSMのVBA project保持はopaque partの抽出まで実装済み、ストリーミング展開、実Excel再openは未完。
+
+進捗: B10のマクロ境界BUILDとして、ブラウザーでは任意VBAを実行せず、`.xlsm`から`xl/vbaProject.bin`を安全上限内で抽出して不透明な`!vbaProject`として保持する。JS writerはmacro-enabled Content Type、relationship、VBA partを再出力し、合成fixtureのNode smokeと実在`fixture2_vba_macro.xlsm`のLibreOfficeヘッドレス再openを確認した。Microsoft Excel実機確認、他の未対応OOXML partのlossless保持、ストリーミング展開は未完。
+進捗: B10のexternal-link safety BUILDとして、ブラウザーZIP preflightが`xl/externalLinks/` partを検出し、JS Writerで完全保持できないWorkbookのアップロードを明示的に拒否するようにした。失敗時は現在のWorkbookを保持し、外部URLの取得・実行は行わない。ブラウザーでの外部リンク保持／編集対応、実Excel再openは未完。
+進捗: B10のexternal-link regression BUILDとして、最小ZIP fixtureで通常partの通過と`xl/externalLinks/` partの検出を固定する`zip:smoke`を追加した。検出はentry名だけを見て外部URLへアクセスしない。
+
+進捗: B10/B12のunsupported-part boundary BUILDとして、ブラウザーWriterが完全保持できないPivotTable／PivotCache、media、threaded comments、slicer、custom XMLをZIP preflightで分類し、アップロードを拒否する経路を追加した。入力Workbookを黙って欠落変換しない一方、Chart等の既存限定対応partは従来どおり受け入れる。各partのlossless編集と実Excel再openは未完。
+
+進捗: B12のCSP BUILDとして、Playground HTMLに`self`限定のscript／style／worker／connectポリシー、`object-src 'none'`、`base-uri 'none'`、`frame-ancestors 'none'`を追加した。BlobダウンロードとデータURI表示だけを必要最小限許可する。GitHub Pagesの実レスポンスヘッダー確認、CSP違反レポート収集、複数ブラウザーは未完。
+
+進捗: B10/B12の出力安全BUILDとして、ダウンロード前にも生成XLSXのZIP中央ディレクトリと展開予算を検査し、検証に失敗したバイト列をBlob化しないようにした。入力・出力双方で同じ安全境界を通す。ストリーミング展開、実Excel再open、複数ブラウザーは未完。
+
+進捗: B9のPivot summary refresh BUILDとして、Playgroundで生成した限定Pivot summaryへ元シート・範囲・集計方法・カテゴリーフィルターのメタデータを保持し、元データの再計算時に集計シートを再生成する経路を追加した。これはOOXML PivotTable／PivotCacheではなく、ブラウザー内の再現可能な集計表示であり、既存PivotTableの読込・編集・Excel実機再openは未完。
+
+進捗: B4/B8のcalculated-export BUILDとして、ブラウザー再計算後に画面内Workbookへ投影した値・スピル・エラーを再度XLSX化し、直後のDownloadが再計算前の`latestBytes`を返さないようにした。計算値の再open・数式キャッシュのExcel完全一致は未完。
+
+進捗: B7の条件付き書式BUILDとして、選択範囲へ`cellIs`のgreaterThan／lessThan／equalルールを追加し、単純な数値セルへ固定の差分書式をPlayground表示へ反映する経路を実装した。Writerは`conditionalFormatting`、`cfRule`、`dxfs`を限定出力し、複雑な数式・優先順位体系・既存ルール読込・Excel実機再openは未完。
+進捗: B7の既存条件付き書式read BUILDとして、既存worksheetの`cellIs`／`expression`ルールについて`type`、`operator`、最大2式、`priority`、複数`sqref`と、共通`dxf`（太字・斜体・下線・RGB文字色・単色塗りつぶし）をWASMの`!conditionalFormats`へ投影し、再保存できる経路を追加した。theme／gradient、colorScale／dataBar等の高度ルール、Excel実機再openは未完。
+進捗: B7の条件付き書式UX BUILDとして、Playgroundの新規ルール入力と表示評価を`between`／`notBetween`へ拡張し、2つのしきい値と既存dxfを画面へ反映する経路を追加した。expressionの完全評価、優先順位の合成、colorScale／dataBar等の高度ルールは未完。
+進捗: B7のexpression条件BUILDとして、Playground表示時に単純なセル参照と数値・文字列・真偽リテラルの比較（`=`, `<>`, `<`, `<=`, `>`, `>=`）を安全な限定評価し、範囲先頭からの相対／絶対参照移動と既存dxfを反映するようにした。関数・論理式、複数ルールの優先順位合成は未完。
+進捗: B7のexpression論理BUILDとして、`AND`／`OR`／`NOT`のネストした比較式を限定評価し、条件成立時のdxf表示へ接続した。文字列・括弧の区切りを考慮し、壊れた式は不成立として扱う。Excel関数全域、複数ルールの優先順位合成は未完。
+進捗: B7のconditional-priority BUILDとして、同一セルに該当するルールをOOXMLの`priority`順に評価し、成立したdxfを合成表示する経路を追加した。`stopIfTrue`、dxfの完全な合成規則、Excel実機の優先順位校正は未完。
+進捗: B7のconditional-stop BUILDとして、`stopIfTrue`をreader／WASM JSON／JS Writer／Playgroundへ接続し、優先順位順の表示評価を成立ルールで停止できるようにした。Excelの全優先順位規則とdxf完全合成は未完。
+進捗: B7のconditional round-trip BUILDとして、複数`cellIs`ルールのpriority／`stopIfTrue`／dxfをWriter→WASM reader→JS shapeで往復するpackage smokeを追加した。Excel実機での優先順位・表示一致は未完。
+進捗: B7の既存セル書式read BUILDとして、`styles.xml`のcellXfから共通フォント（太字・斜体・下線・RGB色）、塗り、四辺罫線、配置、折返しをセルの`s`へ投影し、既存JS Writerで再保存できる経路を追加した。theme色、斜め罫線、保護・named style、未対応OOXML styleの完全保持、Excel実機再openは未完。
+
+進捗: B6のclipboard BUILDとして、矩形選択範囲のCutボタンとCtrl/Cmd+Xを追加した。内部clipboardへ値・数式・書式を保存してから対象セルを削除し、削除全体を1回のUndoで復元できる。複数範囲・Excelの外部clipboard完全互換・構造参照更新は未完。
+
+進捗: B6のkeyboard parity BUILDとして、Shift+矢印で選択範囲を拡張し、Home／EndとCtrl/Cmd+Home／Endで行端・シート端へ移動できるようにした。既存の編集commit、Undo／Redo、Tab／Enter移動と同じセル選択状態を共有する。複数範囲・Excelの外部clipboard完全互換は未完。
+
+進捗: B6のkeyboard parity追加BUILDとして、Shift+Tab／Shift+Enterでも逆方向へ選択範囲を拡張するようにした。通常のTab／Enter移動とは捕捉フェーズで分離し、編集commitと同じ履歴境界を維持する。
+進捗: B6のkeyboard event-boundary BUILDとして、矢印／Home／Endのcapture listenerが同じイベントを二重処理しないよう`stopImmediatePropagation`で単一経路化した。Shift付き範囲拡張、Ctrl／Cmdジャンプ、Tab／Enter移動の既存1-based境界を維持する。
+進捗: B6/B12のlarge-sheet keyboard BUILDとして、PageUp／PageDownを仮想表示高（20行）単位の移動へ接続し、20万行相当のシートでも選択中心レンダリングのまま高速に前後移動できるようにした。実機の連続ホイール／タッチスクロールと複数ブラウザーの検証は未完。
+
+進捗: B6のhistory coverage BUILDとして、セル結合／結合解除／昇順・降順ソートも各操作を1つのUndo／Redo単位として記録するようにした。既存のセル編集、書式、構造編集、freeze、clipboardと同じ履歴経路を共有する。
+
+進捗: B7のtable BUILDとして、選択範囲をヘッダー行付きの限定Excelテーブルへ変換し、固有名、AutoFilter、TableStyle、table relationship、table part、Content Typesを一組でXLSX出力できるようにした。Playgroundの作成ボタンとTypeScript型定義も追加した。既存table読込、列操作・structured reference追従、複数table、TableStyle編集、Excel実機再openは未完。
+
+進捗: B7のtable read BUILDとして、WASM read bridgeが既存tableのname／displayName／refを`!tables`へ投影し、読み込んだ基本tableをブラウザー側で再保存できる経路を追加した。列定義・filter条件・style名の完全保持、複数table編集、structured reference追従、Excel実機再openは未完。
+進捗: B7のtable fidelity追加BUILDとして、既存tableの列名と`tableStyleInfo/@name`も`!tables`へ投影し、Writerが安全な列名・style名を再出力する経路を追加した。filter条件の完全保持、複数table編集、structured reference追従、Excel実機再openは未完。
+進捗: B7/B8のtable metadata BUILDとして、既存tableの内部`autoFilter/@ref`を`autoFilterRef`として投影し、再保存時に妥当な範囲を保持する経路を追加した。filterColumn条件の完全保持、複数table編集、structured reference追従、Excel実機再openは未完。
+進捗: B7/B8のmulti-table BUILDとして、同一worksheetの複数`!tables`を個別のtable part／relationship／`tableParts`へ出力し、既存の単一table filename互換を維持した。table間の重複範囲検証、filterColumn条件、structured reference追従、複数tableのPlayground編集、Excel実機再openは未完。
+進捗: B8のtable filter fidelity BUILDとして、既存tableの値／空白／custom／top10 filterColumnを`autoFilterColumns`へ投影し、Writerが妥当な条件だけを再出力する経路を追加した。date group・未知の条件、UIでのtable filter編集、structured reference追従、Excel実機再openは未完。
+進捗: B8のdynamic-array projection BUILDとして、WASMのflat配列結果から`SEQUENCE`／`RANDARRAY`／`WRAPROWS`／`WRAPCOLS`の矩形形状を復元し、縦・2Dスピル、末尾の空きセル、セル衝突を安全にXLSXへ投影できるようにした。さらに`TRANSPOSE`の配列入力を行列転置へ接続し、Node／WASM回帰を追加した。完全なshape metadata、全array関数の伝播、Excel実機oracleは未完。
+進捗: B8のPlayground table-filter BUILDとして、既存／新規tableの値フィルターを既存の列フィルターUIへ接続し、選択値をUndo可能な`autoFilterColumns`へ保存、再描画時にも復元するようにした。複合条件のUI、date group、構造参照追従、Excel実機再openは未完。
+進捗: B6/B7のtable structure BUILDとして、数式のないシートで行／列を挿入・削除する際、重なるtableの`ref`・内部`autoFilterRef`・列filter offsetを同時に更新し、ヘッダー削除など安全に表現できない操作は拒否するようにした。数式参照更新、structured reference全域、複合テーブル操作、Excel実機再openは未完。
+進捗: B8のstructured reference BUILDとして、WASM再計算前にhost sheetごとの`Table[Column]`、`[#Headers]`、`[#Data]`、`[#All]`をA1参照へ変換し、データ行の`[@Column]`も行位置から解決する経路を追加した。置換は文字列リテラル内や長い識別子の一部を対象外とし、実XLSXでSUM／COUNTAを検証した。outside-table this-row、複雑なstructured syntax、列追加時の完全な式書換え、Excel oracle校正は未完。
+
+進捗: B12のaccessibility BUILDとして、gridへ`aria-multiselectable`を付与し、各gridcellへ`aria-selected`／セル参照label、列見出しへ明示的なlabelを追加した。スクリーンリーダー実機検証、完全な行／列ヘッダー関連付け、キーボードフォーカスリングの全matrix検証は未完。
+
+進捗: B12のaccessibility追加BUILDとして、仮想表示中の行・列位置を`aria-rowindex`／`aria-colindex`で1-basedに明示し、行見出しにもlabelを付与した。全体の`aria-rowcount`／`aria-colcount`と合わせ、表示領域が一部だけでも論理座標を伝えられるようにした。
+進捗: B12のkeyboard-focus BUILDとして、仮想グリッド内の選択セルだけをroving `tabindex=0`にし、他セルを`-1`へ統一した。四辺罫線・フォント斜体／下線もセルCSSへ反映し、読込書式と表示の差を縮小した。完全な矢印キー・スクリーンリーダー実機matrixは未完。
+進捗: B12のvisual-style BUILDとして、Playgroundのcell rendererも上／下／左／右罫線とフォント斜体／下線を`s`から描画し、WASM read projectionの四辺書式を画面上で可視化した。罫線の種類・幅の完全再現とスクリーンリーダー実機matrixは未完。
+進捗: B12のheader-association BUILDとして、仮想表示する各セルへ対応する行・列見出しIDを`headers`で付与し、行／列見出しへ安定したIDを設定した。フィルターや非表示でDOM上の行列が疎になっても、論理座標と見出し関連を維持する。スクリーンリーダー実機matrixと完全なARIA grid header modelは未完。
+進捗: B12のCSP/WASM BUILDとして、実ブラウザーのアクセシビリティスモークで検出したWASM同期コンパイル拒否を修正し、Playgroundの`script-src`へ必要最小限の`wasm-unsafe-eval`を追加した。`object-src`、外部接続、任意ファイル／ネットワーク経路の制限は維持する。GitHub Pages実レスポンスヘッダーとCSP violation reportは未検証。
+進捗: B12のaccessibility smoke BUILDとして、ビルド済みPlaygroundを実Chromeで配信し、`grid`、row／column headerの`headers`参照解決、選択セルのroving `tabindex`、row／column countを実DOMで検証する`playground:a11y`スクリプトを追加した。CSPの`wasm-unsafe-eval`必須条件と`unsafe-inline`不使用も同じ実行で確認する。Firefox／Safari／Edgeとスクリーンリーダー実機は未検証。
+
+進捗: C2 packaging BUILDとして、WASM bridgeの変更後にNode／browser vendored artifactを再生成し、`wasm32-unknown-unknown` compileと`cargo package`を再確認した。rootと`elixcee-wasm` crate自身へMIT LICENSEを同梱した。XLSM opaque VBA保持はJS package側に実装し、WASM crateの任意VBA実行境界は変更していない。native crateとの公開バージョン整合、`cargo publish`実行、サイズ／security gateは未完。
+
+進捗: C5 contract BUILDとして、native crate、WASM crate、JavaScript package、Playgroundの提供範囲と非提供範囲を`docs/crate-api-matrix.json`へ固定し、利用者向け境界文書と最小WASM editor例を追加した。これは公開準備の文書／契約スライスであり、crateのversion整合、clean package、docs.rs、wasm32／Node／browser parity、実公開は未完。
+
+進捗: B12 WASMサイズ測定BUILDとして、B6–B12の数式・table・stateful editor・Chart read bridgeを反映した再生成payload 2,524,108 bytesを新baselineへ記録した。これは意図的な機能拡張の測定基準であり、サイズ改善の完了を意味しない。C4で機能別分割または不要コード削減を測定する。
+
+進捗: B9のコメントBUILDとして、Playgroundで選択セルへlegacy note（コメント）を追加し、セル上の視覚マーカーとXLSXのcomments/VML partsへ出力できるようにした。WASM readerも既存legacy commentsのauthor／plain textを限定`cell.c` projectionへ戻し、実在`fixture4_hyperlink_comment_name.xlsm`のC4本文を読み書き往復できることをsmokeで確認した。threaded commentsの完全編集、Chart／Pivot／画像の編集は未完。
+
+進捗: B9のbasic Chart BUILDとして、選択範囲の1列目をカテゴリ、2列目以降を最大65系列としてbar／line Chartへ投影し、SVGプレビューとXLSXのchart、drawing、chart relationship、anchor、series cacheを一組で出力する経路を追加した。Playgroundからタイトル変更、種類変更、サイズ変更、削除もUndo可能な操作として接続し、複数系列には凡例を出力する。既存Chart読込、系列ごとの色・軸編集、Pivot／Pivot cache、画像・Drawingの編集、Excel実機再openは未完。
+
+進捗: B9のmulti-chart BUILDとして、同一worksheetの複数`!charts`を個別のchart part、drawing relationship、anchorへ出力し、既存の単一`chart1.xml`命名互換を維持した。系列抽出は既存の限定形式に限り、既存Chart読込、系列ごとの色・軸編集、Pivot cache、画像Drawing、Excel実機再openは未完。
+
+進捗: B9のbasic Chart read BUILDとして、WASM readerがworksheet drawingのchart relationshipと単純bar／line chartのsource range、title、legend、anchor寸法を`!charts`へ投影するようにした。PlaygroundのXLSX upload→chart preview→multi-chart writer経路で往復を確認した。複雑なchart type／既存系列の完全編集、Pivot cache、画像Drawing、Excel実機再openは未完。
+進捗: B9のChart source-edit BUILDとして、Playgroundの既存Chart編集でタイトルに加えて有効な2列以上・2行以上のsource rangeを変更できるようにし、SVG previewとXLSX再出力へ接続した。系列ごとのformula／cache／軸編集、複雑なChart type、Excel実機再openは未完。
+
+進捗: B9のChart type-edit BUILDとして、既存Chart編集でタイトル・source rangeに加えてbar／line種類を変更できるようにし、SVG preview、操作履歴、XLSX出力へ接続した。さらに凡例の表示／非表示を編集できるようにし、SVG previewとXLSX出力へ反映した。系列ごとのformula／cache／軸編集、複雑なChart type、Excel実機再openは未完。
+進捗: B9のChart axis-title BUILDとして、限定bar／line Chartへカテゴリ軸／値軸タイトルを作成・編集できるようにし、SVG preview、WASM reader projection、XLSX chart XML round-tripへ接続した。系列ごとのformula／色、複雑な軸設定、Pivot cache、Excel実機再openは未完。
+進捗: B9のChart series-color BUILDとして、Chart作成／編集時の最大65系列の16進カラー指定をSVG previewの棒・線・凡例とXLSX chart XMLへ接続し、不正色は既定パレットへフォールバックするようにした。既存Chartの色読込、複雑なChart type／軸設定、Excel実機再openは未完。
+進捗: B9のChart series-color read BUILDとして、reader／WASM JSONが限定Chartの各`<c:ser>`内`srgbClr`を`colors`へ投影し、JS packageのChart round-tripで2系列の色を往復検証した。theme／scheme色、複雑なChart type、Excel実機再openは未完。
+進捗: B9のChart anchor read BUILDとして、Excel／openpyxlが出力する`oneCellAnchor`と絶対relationship target（`/xl/...`）をreader／WASMで解決し、Chart source・title・サイズをNode packageへ投影できることを実Chartで検証した。writerの実Excel再open警告、複雑なanchor編集は未完。
+進捗: B9の実Excel再open検証で、軸IDを正数化し、系列／軸要素のOOXML順序と描画領域寸法を修正したが、Microsoft Excel for Macはなお修復警告を表示した。basic ChartはExcel再open成功とは扱わず、原因切り分けと警告時の拒否／限定表示を継続する。
+
+進捗: B9のPivot summary BUILDとして、選択範囲の先頭列をカテゴリ、2列目以降の数値列を集計フィールドとしてカテゴリ別Sum／Count／Averageを新しいworksheetへ生成し、シート追加・履歴・XLSX出力まで接続した。カテゴリ完全一致フィルター（空欄は全件）も追加し、集計対象の絞り込みを同じ操作経路へ接続した。これはネイティブPivotTable／Pivot cacheではなく、限定された通常worksheet集計である。複数の行／列フィールド、複合filter、group、Pivot cache、ExcelのPivot UI再現は未完。
+
+進捗: B9のPivot multi-filter BUILDとして、カテゴリフィルターをカンマ区切りの複数値へ拡張し、大文字小文字と前後空白を正規化して複数カテゴリを同時集計できるようにした。複合条件UI、group、native Pivot cache、ExcelのPivot UI再現は未完。
+
+進捗: B11のWorker control-flow BUILDとして、ブラウザーVBA Workerに`If／Else／End If`、上限1000回の`For／Next`、`Do While／Do Until／Loop`（後置条件も対応）、値一致に限定した`Select Case／Case Else`、ネスト深度8、総実行文数2000のbudgetを追加した。ループ内の`Cells(i, n)`座標も解決し、実行中Workerを終了するキャンセル操作も追加した。Shell／COM／ファイル／ネットワーク系の拒否は維持し、完全VBA互換とは扱わない。
+進捗: B11のWorker boundary BUILDとして、ブラウザーVBA Workerが有効な`Sub ... End Sub`を厳密に1つだけ受理し、`End Sub`欠落・重複・終了後コードを拒否するようにした。Worker単体テストで正常実行、構文境界、100文上限を固定した。完全VBA互換と、Workerへの大規模Workbook入力のストリーミングは未完。
+進捗: B11のWorker input-budget BUILDとして、Worker受信時にセル数（10,000）、セル文字列（1,000,000文字）、合計入力文字数（4,000,000文字）とA1形式キーを検証し、超過・不正入力を拒否する単体テストを追加した。メインスレッドからの送信前サイズ計測、ストリーミング入力、完全VBA互換は未完。
+
+進捗: B11のoperation-log BUILDとして、Workbook変更を最大100件の時系列ログ（sheet／selection）としてPlaygroundに表示し、Undo／Redoとは別の監査用表示として接続した。これは操作種別・利用者・時刻・Excelイベントを含む完全な監査ログではない。
+進捗: B11のoperation-kind BUILDとして、履歴記録へ安定した操作種別を追加し、貼り付け／切り取り、シート追加／削除／名前変更、Pivot作成、defined name、validation、conditional format、number format／style／format copy、replace、Chart作成／編集／削除／サイズ変更、セル結合／解除、ソート、行列構造編集・非表示・サイズ変更・fillを監査表示へ明示した。既存の上限100件とUndo／Redo分離は維持し、利用者・Excelイベントを含む完全な監査ログではない。
+進捗: B6/B11のhistory-boundary BUILDとして、VBA Workerによるセル変更を`vba-run` 1件のUndo／操作ログへまとめ、「非表示をすべて解除」も行列を1操作として復元できるようにした。状態が変わらない非表示／サイズ変更では履歴を追加しない。Workerのキャンセル・失敗はWorkbookを変更せず、完全な永続監査ログではない。
+進捗: B11のoperation-log timestamp BUILDとして、各ログへUTC ISO 8601時刻を追加し、表示上も操作種別・時刻・sheet・selectionを確認できるようにした。時刻は監査表示専用で、WorkbookのUndoスナップショットとXLSX出力バイト列には含めない。利用者識別、Excelイベント、永続監査ストレージは未完。
+
+進捗: B6の行列表示BUILDとして、行番号／列見出しの右クリックから対象行列を非表示にし、`!rows`／`!cols`を使ってXLSXへ保存できるようにした。操作は履歴へ記録し、Playgroundでは非表示範囲をDOMから除外し、「非表示をすべて解除」で復元できる。同じメニューから行高／列幅を設定し、OOXMLの`ht`／`wch`へ保存できる。選択範囲右下のフィルハンドルから値・書式の反復展開を追加し、A1数式の相対参照と絶対参照の固定も適用する。アウトライン、複数範囲、複雑な数式参照の完全な書換えは未完。
+進捗: B8の構造参照更新BUILDとして、Playgroundの行／列挿入・削除で、host sheetの単純A1数式と対象シートを指す`Sheet!A1`／`'Sheet 1'!A1`参照を相対／絶対指定付きで同時に移動し、削除対象の参照は`#REF!`へ変換する経路を追加した。文字列リテラルと他シート向け参照は変更しない。名前定義・Chart／Pivot／複雑なstructured referenceの完全更新は未完。
+進捗: B8の数式シフト保守BUILDとして、参照更新を`playground/src/formula-shift.mjs`へ抽出し、文字列リテラル（Excelの`""`エスケープを含む）、相対／絶対指定、対象／非対象worksheetをNode単体テストで固定した。構造編集の数式更新はこの共通モジュールを利用する。範囲端点以外の参照型、名前定義・Chart／Pivotの完全更新は未完。
+進捗: B8のdefined-name追従BUILDとして、active worksheetを明示した単純A1範囲の名前定義を行／列挿入・削除へ接続した。安全に範囲を維持できない単一セル削除や複雑／非対象sheetの定義は変更せず、構造編集を拒否または対象外として扱う。名前定義の複数領域・数式定義・Excel oracle校正は未完。
+進捗: B8/B9の構造追従BUILDとして、行／列の挿入・削除時に、対象worksheetの`!charts[].ref`もセル・テーブル範囲と同じルールで更新するようにした。範囲を安全に維持できないChartは操作全体を拒否し、部分更新を残さない。Chart XMLの既存読込・anchor／系列・Pivot cacheの完全更新は未完。
+進捗: B6のmulti-range BUILDとして、Ctrl/Cmdクリックで非連続セル範囲を複数保持し、DOMの選択表示・`aria-selected`・名前ボックスへカンマ区切りで反映する経路を追加した。編集・書式・貼り付けは主範囲を対象にし、複数範囲への一括操作・外部clipboard互換・範囲単位の完全履歴は未完。
+進捗: B6のmulti-range clipboard BUILDとして、複数範囲のコピー／カットを内部clipboardへ保持し、外部clipboardには範囲間の空行を含むTSVとして出力するようにした。カットの削除は重複セルを一度だけ処理し、全範囲を1回のUndo単位にまとめる。複数範囲のPaste Special・外部clipboardからの復元・一括書式操作は未完。
+進捗: B6のmulti-range paste BUILDとして、内部clipboardに保持した複数の矩形範囲を、選択中の複数範囲へ順番に貼り付ける経路を追加した。`すべて／値／数式／書式`の各モードと全範囲1回のUndo境界を維持し、外部clipboardの複数範囲復元と一括書式操作は未完。
+進捗: B6のmulti-range format BUILDとして、複数選択範囲へ数値形式、太字、文字色、塗りつぶし、罫線、配置、折返しを一括適用し、重複セルを一度だけ処理する共通列挙経路を追加した。各操作は1回のUndo単位にまとめ、条件付き書式・検証・テーブルの複数範囲対応は未完。
+進捗: B7のmulti-range data-tools BUILDとして、複数選択範囲へリスト型データ検証と`cellIs`条件付き書式を1つの`sqref`配列として適用し、既存の同一範囲ルールを置換する経路を追加した。Writerのspace-separated `sqref`出力を利用し、複雑なルールの一括編集とテーブルの複数範囲対応は未完。
+
+### Web Excel parityの達成段階
+
+- **P0 Spreadsheet editing**: B6の基本操作、B7の基本書式、B8の基本数式、B4の安全なXLSX入出力を満たす。
+- **P1 Workbook authoring**: B7のデータツール、B8の名前／テーブル／検索、B9の基本Chart、B10の主要part保持を満たす。
+- **P2 Excel workflow**: B8の高度な再計算、B9のPivot／Drawing、B10のXLSM／外部リンク境界、B11の自動化・診断を満たす。
+- **P3 Web-grade parity**: B12の性能・アクセシビリティ・セキュリティ・複数ブラウザー・実Excel再openゲートを満たす。P3でもMicrosoft 365のアカウント、共有、同時編集、クラウド保存は実装範囲外とする。
 
 ## 競合ウォッチ反映（2026-09-11）
 
@@ -87,7 +281,7 @@ Excel oracleを確認したうえで、合成または再配布可能な小規�
 
 ## 互換性・数式・省メモリ強化（G0–G6）
 
-1.0.11公開後の開発計画です。次の変更はUnreleasedに記録します。
+1.0.12公開後の開発計画です。次の変更はUnreleasedに記録します。
 各PhaseはBUILDを小さく実装し、MEASUREが未完なら未検証として残します。
 EPPlus／Aspose.Cellsとの一般的な同等性や、関数名の個数だけでの優劣は達成条件にしません。
 
@@ -367,6 +561,7 @@ EPPlus／Aspose.Cellsとの一般的な同等性や、関数名の個数だけ�
 - [x] G4 MATCH wildcard補完: `~*` / `~?` / `~~`をリテラルwildcardとして扱うbounded DP経路を追加した。criteria系を含む全wildcard仕様のExcel oracle校正は未完。
 - [x] 部分 BUILD: 動的配列のspill衝突・shape・所有権・stale解放・依存更新を主要2D配列関数へ接続し、FILTER等の既存経路も拡張した。LET／LAMBDAを含む全配列関数のshape伝播とExcel oracle校正は未完。
 - [x] G4 local BUILD: spill矩形の衝突検出、anchor所有権、stale解放、undo/redo復元、主要2D配列関数のshape接続とatomic rollbackを実装・回帰検証した。全配列関数のshape伝播とExcel oracleは未完。
+- [x] G4 browser spill projection BUILD: WASMのbounded 1×N `Variant::Array` を空きセルへ水平展開し、既存セルを上書きせず、`calculateWorkbook` の全セルJSON投影と再計算後の`!ref`更新まで接続した。衝突時は部分展開せずアンカーを明示的な`#SPILL!`表示にし、Node公開APIの成功／衝突回帰を追加した。2D shape metadata、Excelのエラー型／全配列関数のブラウザー再openは未完。
 - [x] 部分 MEASURE: 現行環境のLibreOffice oracleを算術8ケースで再実行したが、8件すべてrunner timeout、比較可能な出力は0件だった。これはExcel oracleや数式一致率の証拠には数えず、Range/Cellsを含む既知のoracle実行境界として記録した。[local oracle記録](docs/measurements/formula-oracle-local-2026-09-10.md)
 - [x] 部分 MEASURE: Basic object modelを使わず数式入りXLSXを直接LibreOfficeで再計算する独立経路を追加し、基本集計・エラー値／回復・文字列・検索・criteria集計、数値、文字列正規化と混在型範囲、1904 workbook epochの日付を含む42ケースを比較した。比較可能39ケースは39/39一致し、同一fixtureをelixcee wheelでも再計算して日付serial／Error表示をfixture-level正規化後39/39一致した。LibreOfficeが処理できないIFNA／XMATCH／TEXTJOIN probe 3件はskippedとして記録した。LibreOfficeはExcel oracleではなく、1904シリアル変換・日付／型変換・動的配列全体の互換性は未完。[formula-only oracle記録](docs/measurements/formula-independent-oracle-2026-09-10.md)
 - [x] 部分 BUILD/MEASURE: oracle runnerへ型変換・配列境界・数学関数の9ケースと日時・営業日関数の6ケースを追加した。`ROWS`／`COLUMNS`の実装漏れを修正し、LibreOffice build固有の`ISOWEEKNUM`未評価をskipへ分類したうえで、現行ソースからビルドした1.0.5 wheelでLibreOffice 79/79・elixcee 79/79を確認してJSONを更新した。Excel oracle／再openの証拠ではない。[follow-up probe](docs/measurements/formula-independent-oracle-probe-2026-09-10.md)

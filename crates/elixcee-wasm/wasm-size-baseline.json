@@ -1,4 +1,4 @@
 {
-  "_comment": "Observed WASM payload size (bytes), decoded from the vendored loaders' inlined base64. Update deliberately (not automatically) when a size change is intentional -- see packages/xlsx/scripts/wasm-smoke.mjs step 5.",
-  "wasmBytes": 876484
+  "_comment": "Observed WASM payload size (bytes), decoded from the vendored loaders' inlined base64. This baseline is intentionally reset after the accumulated B6-B12 formula, table, stateful-editor, and chart-read bridge was regenerated; it is not evidence that the increase is acceptable. C4 must profile and reduce this payload before a public parity release. See packages/xlsx/scripts/wasm-smoke.mjs step 5.",
+  "wasmBytes": 2524108
 }

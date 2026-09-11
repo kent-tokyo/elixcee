@@ -125,6 +125,8 @@ const CELL_REF_RE = /^[A-Z]+[0-9]+$/;
 
 function shapeSheet(ws, opts, numFmts, date1904) {
   if (ws == null) return ws;
+  const comments = ws['!comments'];
+  delete ws['!comments'];
   const hiddenRows = ws['!hiddenRows'];
   const hiddenCols = ws['!hiddenCols'];
   delete ws['!hiddenRows'];
@@ -135,6 +137,11 @@ function shapeSheet(ws, opts, numFmts, date1904) {
   }
   for (const key of Object.keys(ws)) {
     if (CELL_REF_RE.test(key)) shapeCell(ws[key], opts, numFmts, date1904);
+  }
+  if (Array.isArray(comments)) for (const comment of comments) {
+    if (!comment || typeof comment.ref !== 'string' || !CELL_REF_RE.test(comment.ref)) continue;
+    const cell = ws[comment.ref] || (ws[comment.ref] = { t: 's', v: '' });
+    cell.c = [{ a: String(comment.author || ''), t: String(comment.text || '') }];
   }
   return ws;
 }

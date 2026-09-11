@@ -44,11 +44,55 @@ pub fn calculate_workbook(
     >,
     named_ranges: &std::collections::HashMap<String, String>,
 ) -> Result<bool, String> {
+    calculate_workbook_with_scoped_names(sheets, named_ranges, &std::collections::HashMap::new())
+}
+
+/// Recalculate a workbook with both global and worksheet-local defined names.
+///
+/// The local map is keyed by the lower-cased host worksheet name, then by the
+/// lower-cased defined name. Keeping this as a separate public entry point
+/// lets buffer/WASM callers preserve Excel's scope rule without changing the
+/// long-standing two-argument API.
+pub fn calculate_workbook_with_scoped_names(
+    sheets: &mut std::collections::HashMap<
+        String,
+        std::collections::HashMap<(u32, u32), crate::types::CellContent>,
+    >,
+    named_ranges: &std::collections::HashMap<String, String>,
+    scoped_named_ranges: &std::collections::HashMap<
+        String,
+        std::collections::HashMap<String, String>,
+    >,
+) -> Result<bool, String> {
+    calculate_workbook_with_context(
+        sheets,
+        named_ranges,
+        scoped_named_ranges,
+        &std::collections::HashMap::new(),
+    )
+}
+
+/// Recalculate a workbook with defined names and bounded table structured references.
+/// `structured_ranges` maps normalized table syntax (for example `Sales[Amount]`) to
+/// ordinary A1 references. The map is intentionally supplied by the host reader so the
+/// formula module remains independent of any OOXML representation.
+pub fn calculate_workbook_with_context(
+    sheets: &mut std::collections::HashMap<
+        String,
+        std::collections::HashMap<(u32, u32), crate::types::CellContent>,
+    >,
+    named_ranges: &std::collections::HashMap<String, String>,
+    scoped_named_ranges: &std::collections::HashMap<
+        String,
+        std::collections::HashMap<String, String>,
+    >,
+    structured_ranges: &std::collections::HashMap<String, String>,
+) -> Result<bool, String> {
     if workbook::recalculate(
         sheets,
         named_ranges,
-        &std::collections::HashMap::new(),
-        &std::collections::HashMap::new(),
+        scoped_named_ranges,
+        structured_ranges,
         None,
         true,
     )? {

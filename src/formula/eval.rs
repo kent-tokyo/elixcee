@@ -14262,7 +14262,22 @@ fn func_transpose(
             }
             Ok(wrap_array(result))
         }
-        _ => evaluate(&args[0], cells),
+        _ => match evaluate(&args[0], cells)? {
+            Variant::Array(values) => {
+                let (rows, cols) = array_shape_for_expr(&args[0], cells, values.len());
+                if rows == 0 || cols == 0 || rows.checked_mul(cols) != Some(values.len()) {
+                    return Ok(Variant::Error(ExcelError::Value));
+                }
+                let mut result = vec![Variant::Empty; values.len()];
+                for row in 0..rows {
+                    for col in 0..cols {
+                        result[col * rows + row] = values[row * cols + col].clone();
+                    }
+                }
+                Ok(wrap_array(result))
+            }
+            value => Ok(value),
+        },
     }
 }
 
@@ -21179,6 +21194,17 @@ mod tests {
                 Variant::Integer(1),
                 Variant::Integer(2),
                 Variant::Integer(3)
+            ])
+        );
+        assert_eq!(
+            calc("=TRANSPOSE(SEQUENCE(2,3))", &c),
+            Variant::Array(vec![
+                Variant::Integer(1),
+                Variant::Integer(4),
+                Variant::Integer(2),
+                Variant::Integer(5),
+                Variant::Integer(3),
+                Variant::Integer(6),
             ])
         );
     }

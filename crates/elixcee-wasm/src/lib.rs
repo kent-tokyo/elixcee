@@ -13,9 +13,9 @@
 //! in this crate's Rust code — both entry points call the exact same export below.
 
 use elixcee::diagnostics::json_string;
-use elixcee::reader::{BufferSheet, BufferWorkbook, SheetCell};
-use elixcee::types::{CellContent, Variant};
-use std::collections::HashMap;
+use elixcee::reader::{BufferSheet, BufferWorkbook, FilterCriteria, SheetCell};
+use elixcee::types::{ArrayShape, CellContent, ExcelError, Variant};
+use std::collections::{HashMap, HashSet};
 use wasm_bindgen::prelude::*;
 
 const MAX_EDITOR_HISTORY: usize = 128;
@@ -246,7 +246,7 @@ impl WorkbookEditor {
 /// Read an in-memory XLSX/XLSM buffer, returning a JSON string shaped like xlsx@0.18.5's
 /// `WorkBook` (`{SheetNames, Sheets}`; each `WorkSheet` a sparse `{"A1": {t,v,f,fmtId}, ...,
 /// "!ref": "A1:C3", "!merges": [...], "!hiddenRows": [...], "!hiddenCols": [...] }` object,
-/// plus workbook-level `"!numFmts"`/`"!date1904"` — see
+/// plus workbook-level `"!numFmts"`/`"!date1904"` and, when present, `Workbook.Names` — see
 /// `packages/xlsx/src/index.d.ts`'s `WorkBook`/`WorkSheet` types). The JS side
 /// (`packages/xlsx/src/index.cjs`'s `read()`) does `JSON.parse` on the result — no
 /// `serde`/`serde_json` dependency needed for a shape this small; reuses
@@ -304,21 +304,409 @@ pub fn calculate_workbook(bytes: &[u8]) -> Result<String, JsValue> {
         }
         sheets.insert(bs.sheet.name.to_ascii_lowercase(), cells);
     }
-    elixcee::formula::calculate_workbook(&mut sheets, &HashMap::new())
-        .map_err(|e| JsValue::from_str(&e))?;
+    // Feed defined names into the shared workbook evaluator, preserving local
+    // worksheet scope instead of silently treating local names as global.
+    let named_ranges = wb
+        .defined_names
+        .iter()
+        .filter(|defined_name| defined_name.local_sheet_id.is_none())
+        .map(|defined_name| {
+            (
+                defined_name.name.to_ascii_lowercase(),
+                normalize_defined_name_ref(&defined_name.raw_text),
+            )
+        })
+        .collect::<HashMap<_, _>>();
+    let mut scoped_named_ranges = HashMap::<String, HashMap<String, String>>::new();
+    for defined_name in wb.defined_names.iter().filter_map(|defined_name| {
+        defined_name
+            .local_sheet_id
+            .map(|index| (index, defined_name))
+    }) {
+        let Some(sheet) = wb
+            .sheets
+            .get(defined_name.0)
+            .map(|buffer| buffer.sheet.name.clone())
+        else {
+            continue;
+        };
+        scoped_named_ranges
+            .entry(sheet.to_ascii_lowercase())
+            .or_default()
+            .insert(
+                defined_name.1.name.to_ascii_lowercase(),
+                normalize_defined_name_ref(&defined_name.1.raw_text),
+            );
+    }
+    // The workbook evaluator's structured-reference map is global, while a table
+    // reference is resolved relative to the formula's host sheet. Rewrite the bounded
+    // `Table[Column]` form to an A1 range per host before entering the shared evaluator;
+    // this also keeps same-sheet references on the fast, unqualified path.
+    rewrite_table_structured_formulas(&mut sheets, &wb);
+    elixcee::formula::calculate_workbook_with_context(
+        &mut sheets,
+        &named_ranges,
+        &scoped_named_ranges,
+        &HashMap::new(),
+    )
+    .map_err(|e| JsValue::from_str(&e))?;
+    materialize_formula_array_spills(&mut sheets).map_err(|e| JsValue::from_str(&e))?;
     for bs in &mut wb.sheets {
         let Some(cells) = sheets.get(&bs.sheet.name.to_ascii_lowercase()) else {
             continue;
         };
-        for &position in bs.formulas.keys() {
-            if let Some(cell) = cells.get(&position) {
-                bs.sheet
-                    .cells
-                    .insert(position, variant_to_sheet_cell(&cell.value));
-            }
+        // Project every calculated cell, not only the original formula cells.
+        // Dynamic-array evaluation can materialize new spill cells after the
+        // OOXML reader has built its initial sparse sheet model.
+        for (&position, cell) in cells {
+            bs.sheet
+                .cells
+                .insert(position, variant_to_sheet_cell(&cell.value));
         }
     }
     Ok(workbook_json(&wb))
+}
+
+/// Materialize the shared evaluator's flat formula arrays as bounded worksheet spills.
+/// Shape-aware functions recover a rectangular footprint from literal arguments; unknown
+/// flat arrays retain the legacy one-row fallback. Never overwrite an occupied cell.
+fn materialize_formula_array_spills(
+    sheets: &mut HashMap<String, HashMap<(u32, u32), CellContent>>,
+) -> Result<(), String> {
+    let mut pending = Vec::new();
+    let mut spill_errors = Vec::new();
+    let mut planned = HashSet::new();
+    for (sheet, cells) in sheets.iter() {
+        for (&(row, col), cell) in cells {
+            let Variant::Array(values) = &cell.value else {
+                continue;
+            };
+            let shape = formula_array_shape(cell.formula.as_deref(), values.len());
+            if shape.is_empty() {
+                continue;
+            }
+            let mut collision = false;
+            let mut targets = Vec::new();
+            for offset in 1..shape.cell_count() {
+                let value = values
+                    .get(offset)
+                    .cloned()
+                    .unwrap_or(Variant::Error(ExcelError::NA));
+                let row_offset = offset / shape.cols;
+                let col_offset = offset % shape.cols;
+                let target_row = row.checked_add(row_offset as u32).ok_or_else(|| {
+                    format!("dynamic array spill exceeds worksheet bounds on {sheet}")
+                })?;
+                let target_col = col.checked_add(col_offset as u32).ok_or_else(|| {
+                    format!("dynamic array spill exceeds worksheet bounds on {sheet}")
+                })?;
+                let key = (sheet.clone(), (target_row, target_col));
+                if cells.contains_key(&(target_row, target_col)) || planned.contains(&key) {
+                    collision = true;
+                    break;
+                }
+                targets.push(((target_row, target_col), value));
+            }
+            if collision {
+                spill_errors.push((sheet.clone(), (row, col)));
+            } else {
+                planned.extend(
+                    targets
+                        .iter()
+                        .map(|(position, _)| (sheet.clone(), *position)),
+                );
+                pending.extend(
+                    targets
+                        .into_iter()
+                        .map(|(position, value)| (sheet.clone(), position, value)),
+                );
+            }
+        }
+    }
+    for (sheet, position, value) in pending {
+        sheets.entry(sheet).or_default().insert(
+            position,
+            CellContent {
+                formula: None,
+                value,
+            },
+        );
+    }
+    for (sheet, position) in spill_errors {
+        if let Some(cell) = sheets
+            .get_mut(&sheet)
+            .and_then(|cells| cells.get_mut(&position))
+        {
+            cell.value = Variant::Str("#SPILL!".to_string());
+        }
+    }
+    Ok(())
+}
+
+fn formula_array_shape(formula: Option<&str>, len: usize) -> ArrayShape {
+    let Some(formula) = formula else {
+        return ArrayShape::new(1, len);
+    };
+    let expression = formula
+        .trim()
+        .trim_start_matches('=')
+        .trim()
+        .to_ascii_uppercase();
+    let Some(open) = expression.find('(') else {
+        return ArrayShape::new(1, len);
+    };
+    if !expression.ends_with(')') {
+        return ArrayShape::new(1, len);
+    }
+    let name = &expression[..open];
+    let arguments = &expression[open + 1..expression.len() - 1];
+    let values = arguments.split(',').map(str::trim).collect::<Vec<_>>();
+    let literal = |index: usize, fallback: usize| {
+        values
+            .get(index)
+            .and_then(|value| value.parse::<usize>().ok())
+            .unwrap_or(fallback)
+    };
+    let shape = match name {
+        "SEQUENCE" | "RANDARRAY" => ArrayShape::new(literal(0, 0), literal(1, 1)),
+        "WRAPROWS" => {
+            let cols = literal(1, 0);
+            ArrayShape::new(
+                if cols == 0 { 0 } else { len.div_ceil(cols) },
+                cols.min(len),
+            )
+        }
+        "WRAPCOLS" => {
+            let rows = literal(1, 0);
+            ArrayShape::new(
+                rows.min(len),
+                if rows == 0 { 0 } else { len.div_ceil(rows) },
+            )
+        }
+        _ => ArrayShape::new(1, len),
+    };
+    if shape.cell_count() >= len && !shape.is_empty() {
+        shape
+    } else {
+        ArrayShape::new(1, len)
+    }
+}
+
+fn normalize_defined_name_ref(raw: &str) -> String {
+    let Some(bang) = raw.rfind('!') else {
+        // The workbook formula parser accepts absolute markers on qualified
+        // references, while the local-range expansion path consumes the
+        // compact A1 address directly. Normalize only this unqualified form.
+        return raw.replace('$', "");
+    };
+    let qualifier = &raw[..bang];
+    if qualifier.starts_with('\'') && qualifier.ends_with('\'') && qualifier.len() >= 2 {
+        return format!(
+            "{}!{}",
+            qualifier[1..qualifier.len() - 1].replace("''", "'"),
+            &raw[bang + 1..]
+        );
+    }
+    raw.to_string()
+}
+
+fn wasm_column_label(mut column: u32) -> String {
+    let mut label = String::new();
+    loop {
+        label.insert(0, (b'A' + (column % 26) as u8) as char);
+        if column < 26 {
+            break;
+        }
+        column = column / 26 - 1;
+    }
+    label
+}
+
+fn replace_table_ref_case_insensitive(source: &str, needle: &str, replacement: &str) -> String {
+    let source_lower = source.to_ascii_lowercase();
+    let needle_lower = needle.to_ascii_lowercase();
+    let mut out = String::with_capacity(source.len());
+    let mut cursor = 0usize;
+    while let Some(relative) = source_lower[cursor..].find(&needle_lower) {
+        let start = cursor + relative;
+        let end = start + needle.len();
+        let inside_string = {
+            let mut in_string = false;
+            let mut chars = source[..start].chars().peekable();
+            while let Some(ch) = chars.next() {
+                if ch != '"' {
+                    continue;
+                }
+                if chars.peek() == Some(&'"') {
+                    chars.next();
+                } else {
+                    in_string = !in_string;
+                }
+            }
+            in_string
+        };
+        let preceded_by_identifier = source[..start]
+            .chars()
+            .next_back()
+            .is_some_and(|ch| ch.is_ascii_alphanumeric() || ch == '_');
+        let followed_by_identifier = source[end..]
+            .chars()
+            .next()
+            .is_some_and(|ch| ch.is_ascii_alphanumeric() || ch == '_');
+        out.push_str(&source[cursor..start]);
+        if inside_string || preceded_by_identifier || followed_by_identifier {
+            out.push_str(&source[start..end]);
+        } else {
+            out.push_str(replacement);
+        }
+        cursor = end;
+    }
+    out.push_str(&source[cursor..]);
+    out
+}
+
+fn rewrite_table_structured_formulas(
+    sheets: &mut HashMap<String, HashMap<(u32, u32), CellContent>>,
+    wb: &BufferWorkbook,
+) {
+    let mut patterns = Vec::<(String, String, String, bool)>::new();
+    for buffer in &wb.sheets {
+        let table_sheet = &buffer.sheet.name;
+        for table in &buffer.sheet.tables {
+            let (table_start, table_left) = table.ref_range.0;
+            let (table_end, table_right) = table.ref_range.1;
+            let data_start = table.ref_range.0.0 + table.header_row_count;
+            let data_end = table.ref_range.1.0.saturating_sub(table.totals_row_count);
+            let headers_end = table_start + table.header_row_count - 1;
+            let table_address = |start: u32, end: u32, left: u32, right: u32| {
+                format!(
+                    "{}!{}{}:{}{}",
+                    table_sheet,
+                    wasm_column_label(left.saturating_sub(1)),
+                    start,
+                    wasm_column_label(right.saturating_sub(1)),
+                    end
+                )
+            };
+            for table_name in [&table.name, &table.display_name] {
+                patterns.push((
+                    format!("{}[#Headers]", table_name),
+                    table_sheet.clone(),
+                    table_address(table_start, headers_end, table_left, table_right),
+                    false,
+                ));
+                patterns.push((
+                    format!("{}[#All]", table_name),
+                    table_sheet.clone(),
+                    table_address(table_start, table_end, table_left, table_right),
+                    false,
+                ));
+                if data_start <= data_end {
+                    patterns.push((
+                        format!("{}[#Data]", table_name),
+                        table_sheet.clone(),
+                        table_address(data_start, data_end, table_left, table_right),
+                        false,
+                    ));
+                }
+            }
+            if data_start > data_end {
+                continue;
+            }
+            for (index, column) in table.columns.iter().enumerate() {
+                let col = table.ref_range.0.1 + index as u32;
+                let qualified = format!(
+                    "{}!{}{}:{}{}",
+                    table_sheet,
+                    wasm_column_label(col.saturating_sub(1)),
+                    data_start,
+                    wasm_column_label(col.saturating_sub(1)),
+                    data_end
+                );
+                for table_name in [&table.name, &table.display_name] {
+                    let column_pattern = format!("{}[{}]", table_name, column.name);
+                    patterns.push((
+                        column_pattern.clone(),
+                        table_sheet.clone(),
+                        qualified.clone(),
+                        false,
+                    ));
+                    patterns.push((
+                        format!("{}[[#Data],[{}]]", table_name, column.name),
+                        table_sheet.clone(),
+                        qualified.clone(),
+                        false,
+                    ));
+                    patterns.push((
+                        format!("{}[[#Headers],[{}]]", table_name, column.name),
+                        table_sheet.clone(),
+                        table_address(table_start, headers_end, col, col),
+                        false,
+                    ));
+                    patterns.push((
+                        format!("{}[[#All],[{}]]", table_name, column.name),
+                        table_sheet.clone(),
+                        table_address(table_start, table_end, col, col),
+                        false,
+                    ));
+                    patterns.push((
+                        format!("{}[@{}]", table_name, column.name),
+                        table_sheet.clone(),
+                        qualified.clone(),
+                        true,
+                    ));
+                    patterns.push((
+                        format!("{}[[#This Row],[{}]]", table_name, column.name),
+                        table_sheet.clone(),
+                        qualified.clone(),
+                        true,
+                    ));
+                }
+            }
+        }
+    }
+    patterns.sort_by_key(|(pattern, _, _, _)| std::cmp::Reverse(pattern.len()));
+    for (host, cells) in sheets.iter_mut() {
+        for (&(row, _), cell) in cells.iter_mut() {
+            let Some(formula) = cell.formula.as_mut() else {
+                continue;
+            };
+            for (pattern, table_sheet, qualified, this_row) in &patterns {
+                if *this_row && !host.eq_ignore_ascii_case(table_sheet) {
+                    continue;
+                }
+                let replacement = if *this_row {
+                    let Some((_, data_range)) = qualified.split_once('!') else {
+                        continue;
+                    };
+                    let Some((start, end)) = data_range.split_once(':') else {
+                        continue;
+                    };
+                    let col = start.trim_end_matches(|ch: char| ch.is_ascii_digit());
+                    let start_row = start
+                        .trim_start_matches(|ch: char| ch.is_ascii_alphabetic())
+                        .parse::<u32>()
+                        .ok();
+                    let end_col = end.trim_end_matches(|ch: char| ch.is_ascii_digit());
+                    if start_row.is_none() || end_col != col {
+                        continue;
+                    }
+                    format!("{}{}", col, row)
+                } else if host.eq_ignore_ascii_case(table_sheet) {
+                    qualified
+                        .split_once('!')
+                        .map_or(qualified.as_str(), |(_, address)| address)
+                        .to_string()
+                } else {
+                    qualified.clone()
+                };
+                let rewritten = replace_table_ref_case_insensitive(formula, pattern, &replacement);
+                if rewritten != *formula {
+                    *formula = rewritten;
+                }
+            }
+        }
+    }
 }
 
 /// Return a small, deterministic diagnostic summary without materializing a
@@ -452,9 +840,11 @@ fn variant_to_sheet_cell(value: &Variant) -> SheetCell {
         Variant::Date(value) => SheetCell::Integer(*value),
         Variant::Error(value) => SheetCell::Error(value.clone()),
         Variant::Empty | Variant::Null => SheetCell::Str(String::new()),
-        Variant::Array(_) | Variant::VbaArray(_) | Variant::Record(_) => {
-            SheetCell::Str(value.to_string())
-        }
+        Variant::Array(values) => values
+            .first()
+            .map(variant_to_sheet_cell)
+            .unwrap_or_else(|| SheetCell::Str(String::new())),
+        Variant::VbaArray(_) | Variant::Record(_) => SheetCell::Str(value.to_string()),
     }
 }
 
@@ -491,6 +881,75 @@ fn workbook_json(wb: &BufferWorkbook) -> String {
         out.push('}');
     }
     out.push_str(&format!(",\"!date1904\":{}", wb.date1904));
+    if !wb.defined_names.is_empty() {
+        out.push_str(",\"Workbook\":{\"Names\":[");
+        for (i, defined_name) in wb.defined_names.iter().enumerate() {
+            if i > 0 {
+                out.push(',');
+            }
+            out.push_str("{\"Name\":");
+            out.push_str(&json_string(&defined_name.name));
+            out.push_str(",\"Ref\":");
+            out.push_str(&json_string(&defined_name.raw_text));
+            if let Some(sheet) = defined_name.local_sheet_id {
+                out.push_str(",\"Sheet\":");
+                out.push_str(&sheet.to_string());
+            }
+            out.push('}');
+        }
+        out.push_str("]}");
+    }
+    out.push('}');
+    out
+}
+
+fn table_filter_column_json(column: &elixcee::reader::FilterColumn) -> String {
+    let mut out = format!(
+        "{{\"colId\":{},\"hiddenButton\":{},\"showButton\":{},\"criteria\":",
+        column.col_offset, column.hidden_button, column.show_button
+    );
+    match &column.criteria {
+        FilterCriteria::Values(values) => {
+            out.push_str("{\"kind\":\"values\",\"values\":[");
+            for (index, value) in values.iter().enumerate() {
+                if index > 0 {
+                    out.push(',');
+                }
+                out.push_str(&json_string(value));
+            }
+            out.push_str("]}");
+        }
+        FilterCriteria::Blank => out.push_str("{\"kind\":\"blank\"}"),
+        FilterCriteria::Custom {
+            op1,
+            val1,
+            and,
+            op2,
+            val2,
+        } => {
+            out.push_str(&format!(
+                "{{\"kind\":\"custom\",\"op1\":{},\"val1\":{},\"and\":{}",
+                json_string(op1),
+                json_string(val1),
+                and
+            ));
+            if let (Some(op2), Some(val2)) = (op2, val2) {
+                out.push_str(&format!(
+                    ",\"op2\":{},\"val2\":{}",
+                    json_string(op2),
+                    json_string(val2)
+                ));
+            }
+            out.push('}');
+        }
+        FilterCriteria::Top10 { top, percent, val } => {
+            out.push_str(&format!(
+                "{{\"kind\":\"top10\",\"top\":{},\"percent\":{},\"val\":{}}}",
+                top, percent, val
+            ));
+        }
+        FilterCriteria::DateGroup(_) => out.push_str("{\"kind\":\"dateGroup\"}"),
+    }
     out.push('}');
     out
 }
@@ -522,6 +981,7 @@ fn worksheet_json(bs: &BufferSheet) -> String {
             cell,
             bs.formulas.get(&(row, col)),
             bs.style_ids.get(&(row, col)),
+            bs.cell_styles.get(&(row, col)),
         ));
     }
 
@@ -597,6 +1057,200 @@ fn worksheet_json(bs: &BufferSheet) -> String {
         out.push(']');
     }
 
+    if !sheet.tables.is_empty() {
+        out.push_str(",\"!tables\":[");
+        for (index, table) in sheet.tables.iter().enumerate() {
+            if index > 0 {
+                out.push(',');
+            }
+            out.push_str("{\"name\":");
+            out.push_str(&json_string(&table.name));
+            out.push_str(",\"displayName\":");
+            out.push_str(&json_string(&table.display_name));
+            out.push_str(",\"ref\":");
+            out.push_str(&json_string(&format_rect(&table.ref_range)));
+            if let Some(auto_filter_ref) = &table.auto_filter_ref {
+                out.push_str(",\"autoFilterRef\":");
+                out.push_str(&json_string(&format_rect(auto_filter_ref)));
+                if !table.autofilter_columns.is_empty() {
+                    out.push_str(",\"autoFilterColumns\":[");
+                    for (column_index, column) in table.autofilter_columns.iter().enumerate() {
+                        if column_index > 0 {
+                            out.push(',');
+                        }
+                        out.push_str(&table_filter_column_json(column));
+                    }
+                    out.push(']');
+                }
+            }
+            if !table.columns.is_empty() {
+                out.push_str(",\"columns\":[");
+                for (column_index, column) in table.columns.iter().enumerate() {
+                    if column_index > 0 {
+                        out.push(',');
+                    }
+                    out.push_str("{\"name\":");
+                    out.push_str(&json_string(&column.name));
+                    out.push('}');
+                }
+                out.push(']');
+            }
+            if let Some(style_name) = &table.style_name {
+                out.push_str(",\"styleName\":");
+                out.push_str(&json_string(style_name));
+            }
+            out.push('}');
+        }
+        out.push(']');
+    }
+
+    if !bs.charts.is_empty() {
+        out.push_str(",\"!charts\":[");
+        for (index, chart) in bs.charts.iter().enumerate() {
+            if index > 0 {
+                out.push(',');
+            }
+            out.push_str("{\"ref\":");
+            out.push_str(&json_string(&format_rect(&chart.ref_range)));
+            out.push_str(",\"type\":");
+            out.push_str(&json_string(&chart.chart_type));
+            out.push_str(",\"title\":");
+            out.push_str(&json_string(&chart.title));
+            if let Some(title) = &chart.x_axis_title {
+                out.push_str(",\"xAxisTitle\":");
+                out.push_str(&json_string(title));
+            }
+            if let Some(title) = &chart.y_axis_title {
+                out.push_str(",\"yAxisTitle\":");
+                out.push_str(&json_string(title));
+            }
+            out.push_str(",\"legend\":");
+            out.push_str(if chart.legend { "true" } else { "false" });
+            if !chart.series_colors.is_empty() {
+                out.push_str(",\"colors\":[");
+                for (color_index, color) in chart.series_colors.iter().enumerate() {
+                    if color_index > 0 {
+                        out.push(',');
+                    }
+                    out.push_str(&json_string(color));
+                }
+                out.push(']');
+            }
+            out.push_str(&format!(
+                ",\"widthCols\":{},\"heightRows\":{}",
+                chart.width_cols, chart.height_rows
+            ));
+            out.push('}');
+        }
+        out.push(']');
+    }
+
+    if !bs.comment_notes.is_empty() {
+        out.push_str(",\"!comments\":[");
+        for (index, comment) in bs.comment_notes.iter().enumerate() {
+            if index > 0 {
+                out.push(',');
+            }
+            out.push_str("{\"ref\":");
+            out.push_str(&json_string(&cell_ref(comment.cell.0, comment.cell.1)));
+            out.push_str(",\"author\":");
+            out.push_str(&json_string(&comment.author));
+            out.push_str(",\"text\":");
+            out.push_str(&json_string(&comment.text));
+            out.push('}');
+        }
+        out.push(']');
+    }
+
+    if !bs.conditional_formats.is_empty() {
+        out.push_str(",\"!conditionalFormats\":[");
+        for (index, rule) in bs.conditional_formats.iter().enumerate() {
+            if index > 0 {
+                out.push(',');
+            }
+            out.push_str("{\"type\":");
+            out.push_str(&json_string(&rule.rule_type));
+            if let Some(operator) = &rule.operator {
+                out.push_str(",\"operator\":");
+                out.push_str(&json_string(operator));
+            }
+            out.push_str(",\"sqref\":[");
+            for (range_index, range) in rule.sqref.iter().enumerate() {
+                if range_index > 0 {
+                    out.push(',');
+                }
+                out.push_str(&json_string(&format_rect(range)));
+            }
+            out.push_str("],\"formula\":");
+            out.push_str(&json_string(&rule.formula1));
+            if let Some(formula2) = &rule.formula2 {
+                out.push_str(",\"formula2\":");
+                out.push_str(&json_string(formula2));
+            }
+            if let Some(priority) = rule.priority {
+                out.push_str(&format!(",\"priority\":{}", priority));
+            }
+            if rule.stop_if_true {
+                out.push_str(",\"stopIfTrue\":true");
+            }
+            if let Some(dxf) = &rule.dxf {
+                out.push_str(",\"dxf\":{");
+                let mut first = true;
+                if dxf.bold || dxf.italic || dxf.underline || dxf.font_color.is_some() {
+                    out.push_str("\"font\":{");
+                    let mut font_first = true;
+                    if dxf.bold {
+                        out.push_str("\"bold\":true");
+                        font_first = false;
+                    }
+                    if dxf.italic {
+                        if !font_first {
+                            out.push(',');
+                        }
+                        out.push_str("\"italic\":true");
+                        font_first = false;
+                    }
+                    if dxf.underline {
+                        if !font_first {
+                            out.push(',');
+                        }
+                        out.push_str("\"underline\":true");
+                        font_first = false;
+                    }
+                    if let Some(color) = &dxf.font_color {
+                        if !font_first {
+                            out.push(',');
+                        }
+                        out.push_str("\"color\":{\"rgb\":");
+                        out.push_str(&json_string(color));
+                        out.push('}');
+                    }
+                    out.push('}');
+                    first = false;
+                }
+                if let Some(color) = &dxf.fill_color {
+                    if !first {
+                        out.push(',');
+                    }
+                    out.push_str("\"fill\":{\"fgColor\":{\"rgb\":");
+                    out.push_str(&json_string(color));
+                    out.push_str("}}");
+                }
+                out.push('}');
+            }
+            out.push('}');
+        }
+        out.push(']');
+    }
+
+    if let Some(pane) = &bs.freeze_pane {
+        out.push_str(",\"!freezePane\":{\"rows\":");
+        out.push_str(&pane.rows.to_string());
+        out.push_str(",\"cols\":");
+        out.push_str(&pane.cols.to_string());
+        out.push('}');
+    }
+
     out.push('}');
     out
 }
@@ -620,7 +1274,12 @@ fn write_hidden_intervals(out: &mut String, key: &str, intervals: &[(u32, u32)])
     out.push(']');
 }
 
-fn cell_json(cell: &SheetCell, formula: Option<&String>, fmt_id: Option<&u32>) -> String {
+fn cell_json(
+    cell: &SheetCell,
+    formula: Option<&String>,
+    fmt_id: Option<&u32>,
+    style: Option<&elixcee::reader::CellStyleDef>,
+) -> String {
     let mut out = match cell {
         SheetCell::Integer(v) => format!("{{\"t\":\"n\",\"v\":{}", v),
         SheetCell::Float(v) => format!("{{\"t\":\"n\",\"v\":{}", json_number(*v)),
@@ -644,6 +1303,110 @@ fn cell_json(cell: &SheetCell, formula: Option<&String>, fmt_id: Option<&u32>) -
         // one key name. See read-shape.cjs, which resolves this into the real `.z`/`.w`.
         out.push_str(",\"fmtId\":");
         out.push_str(&id.to_string());
+    }
+    if let Some(style) = style {
+        let mut parts = Vec::new();
+        if style.bold || style.italic || style.underline || style.font_color.is_some() {
+            let mut font = String::new();
+            if style.bold {
+                font.push_str("\"bold\":true");
+            }
+            if style.italic {
+                if !font.is_empty() {
+                    font.push(',');
+                }
+                font.push_str("\"italic\":true");
+            }
+            if style.underline {
+                if !font.is_empty() {
+                    font.push(',');
+                }
+                font.push_str("\"underline\":true");
+            }
+            if let Some(color) = &style.font_color {
+                if !font.is_empty() {
+                    font.push(',');
+                }
+                font.push_str("\"color\":{\"rgb\":");
+                font.push_str(&json_string(color));
+                font.push('}');
+            }
+            parts.push(format!("\"font\":{{{}}}", font));
+        }
+        if let Some(color) = &style.fill_color {
+            parts.push(format!(
+                "\"fill\":{{\"fgColor\":{{\"rgb\":{}}}}}",
+                json_string(color)
+            ));
+        }
+        let border_specs = [
+            (
+                "bottom",
+                style.border_bottom.as_ref(),
+                style.border_bottom_color.as_ref(),
+            ),
+            (
+                "left",
+                style.border_left.as_ref(),
+                style.border_left_color.as_ref(),
+            ),
+            (
+                "right",
+                style.border_right.as_ref(),
+                style.border_right_color.as_ref(),
+            ),
+            (
+                "top",
+                style.border_top.as_ref(),
+                style.border_top_color.as_ref(),
+            ),
+        ];
+        let border_parts: Vec<_> = border_specs
+            .into_iter()
+            .filter_map(|(name, border, color)| {
+                border.map(|value| {
+                    let color = color
+                        .map(|v| format!(",\"color\":{{\"rgb\":{}}}", json_string(v)))
+                        .unwrap_or_default();
+                    format!(
+                        "\"{}\":{{\"style\":{}{}{}}}",
+                        name,
+                        json_string(value),
+                        color,
+                        ""
+                    )
+                })
+            })
+            .collect();
+        if !border_parts.is_empty() {
+            parts.push(format!("\"border\":{{{}}}", border_parts.join(",")));
+        }
+        if style.horizontal.is_some() || style.vertical.is_some() || style.wrap_text.is_some() {
+            let mut alignment = String::new();
+            if let Some(value) = &style.horizontal {
+                alignment.push_str("\"horizontal\":");
+                alignment.push_str(&json_string(value));
+            }
+            if let Some(value) = &style.vertical {
+                if !alignment.is_empty() {
+                    alignment.push(',');
+                }
+                alignment.push_str("\"vertical\":");
+                alignment.push_str(&json_string(value));
+            }
+            if let Some(value) = style.wrap_text {
+                if !alignment.is_empty() {
+                    alignment.push(',');
+                }
+                alignment.push_str(&format!("\"wrapText\":{}", value));
+            }
+            parts.push(format!("\"alignment\":{{{}}}", alignment));
+        }
+        if !parts.is_empty() {
+            out.push_str(",\"s\":{");
+            out.push_str(&parts.join(","));
+            out.push('}');
+        }
     }
     out.push('}');
     out
@@ -722,6 +1485,11 @@ mod tests {
             formulas: HashMap::new(),
             dimension: None,
             style_ids: HashMap::new(),
+            charts: Vec::new(),
+            comment_notes: Vec::new(),
+            conditional_formats: Vec::new(),
+            cell_styles: HashMap::new(),
+            freeze_pane: None,
         }
     }
 
@@ -743,6 +1511,30 @@ mod tests {
         assert_eq!(col_letters(26), "Z");
         assert_eq!(col_letters(27), "AA");
         assert_eq!(col_letters(702), "ZZ");
+    }
+
+    #[test]
+    fn structured_reference_rewrite_respects_formula_token_boundaries() {
+        assert_eq!(
+            replace_table_ref_case_insensitive("=SUM(Sales[Amount])", "Sales[Amount]", "B2:B3"),
+            "=SUM(B2:B3)"
+        );
+        assert_eq!(
+            replace_table_ref_case_insensitive("=\"Sales[Amount]\"", "Sales[Amount]", "B2:B3"),
+            "=\"Sales[Amount]\""
+        );
+        assert_eq!(
+            replace_table_ref_case_insensitive("=MySales[Amount]", "Sales[Amount]", "B2:B3"),
+            "=MySales[Amount]"
+        );
+        assert_eq!(
+            replace_table_ref_case_insensitive(
+                "=\"Sales[\"\"Amount\"\"]\"",
+                "Sales[Amount]",
+                "B2:B3"
+            ),
+            "=\"Sales[\"\"Amount\"\"]\""
+        );
     }
 
     #[test]
@@ -933,6 +1725,29 @@ mod tests {
     }
 
     #[test]
+    fn workbook_json_exposes_defined_names_with_scope() {
+        let mut wb = wb1(sheet("Sheet1", vec![]));
+        wb.defined_names.push(elixcee::reader::XlsxDefinedName {
+            name: "SalesRange".to_string(),
+            local_sheet_id: Some(0),
+            raw_text: "Sheet1!$A$1:$A$2".to_string(),
+        });
+        let json = workbook_json(&wb);
+        assert!(json.contains(
+            r#""Workbook":{"Names":[{"Name":"SalesRange","Ref":"Sheet1!$A$1:$A$2","Sheet":0}]}"#
+        ));
+    }
+
+    #[test]
+    fn normalize_defined_name_ref_supports_quoted_and_local_absolute_refs() {
+        assert_eq!(
+            normalize_defined_name_ref("'Sheet 1'!$A$1:$B$2"),
+            "Sheet 1!$A$1:$B$2"
+        );
+        assert_eq!(normalize_defined_name_ref("$A$1"), "A1");
+    }
+
+    #[test]
     fn workbook_json_always_includes_date1904() {
         let mut wb = wb1(sheet("Sheet1", vec![]));
         wb.date1904 = true;
@@ -967,5 +1782,85 @@ mod tests {
         let snapshot = editor.snapshot();
         assert!(snapshot.contains("planned"));
         assert!(snapshot.contains("\"B1\""));
+    }
+
+    #[test]
+    fn formula_array_spill_materializes_empty_horizontal_targets_without_overwrite() {
+        let mut sheets = HashMap::from([(
+            "sheet1".to_string(),
+            HashMap::from([
+                (
+                    (0, 0),
+                    CellContent {
+                        formula: Some("=SEQUENCE(1,3)".to_string()),
+                        value: Variant::Array(vec![
+                            Variant::Integer(1),
+                            Variant::Integer(2),
+                            Variant::Integer(3),
+                        ]),
+                    },
+                ),
+                (
+                    (0, 2),
+                    CellContent {
+                        formula: None,
+                        value: Variant::Str("kept".to_string()),
+                    },
+                ),
+            ]),
+        )]);
+        materialize_formula_array_spills(&mut sheets).unwrap();
+        assert!(!sheets["sheet1"].contains_key(&(0, 1)));
+        assert_eq!(
+            sheets["sheet1"][&(0, 0)].value,
+            Variant::Str("#SPILL!".to_string())
+        );
+        assert_eq!(
+            sheets["sheet1"][&(0, 2)].value,
+            Variant::Str("kept".to_string())
+        );
+    }
+
+    #[test]
+    fn sequence_spill_materializes_vertical_and_rectangular_shapes() {
+        let mut sheets = HashMap::from([(
+            "sheet1".to_string(),
+            HashMap::from([(
+                (0, 0),
+                CellContent {
+                    formula: Some("=SEQUENCE(2,2)".to_string()),
+                    value: Variant::Array(vec![
+                        Variant::Integer(1),
+                        Variant::Integer(2),
+                        Variant::Integer(3),
+                        Variant::Integer(4),
+                    ]),
+                },
+            )]),
+        )]);
+        materialize_formula_array_spills(&mut sheets).unwrap();
+        assert_eq!(sheets["sheet1"][&(0, 1)].value, Variant::Integer(2));
+        assert_eq!(sheets["sheet1"][&(1, 0)].value, Variant::Integer(3));
+        assert_eq!(sheets["sheet1"][&(1, 1)].value, Variant::Integer(4));
+    }
+
+    #[test]
+    fn formula_array_shape_recovers_wrapped_vector_layouts() {
+        assert_eq!(
+            formula_array_shape(Some("=RANDARRAY(3,2)"), 6),
+            ArrayShape::new(3, 2)
+        );
+        assert_eq!(
+            formula_array_shape(Some("=WRAPROWS(SEQUENCE(5),2)"), 5),
+            ArrayShape::new(3, 2)
+        );
+        assert_eq!(
+            formula_array_shape(Some("=WRAPCOLS(SEQUENCE(5),2)"), 5),
+            ArrayShape::new(2, 3)
+        );
+        assert_eq!(
+            formula_array_shape(Some("=UNIQUE(A1:A5)"), 5),
+            ArrayShape::new(1, 5)
+        );
     }
 }

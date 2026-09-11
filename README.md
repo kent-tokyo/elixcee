@@ -1,13 +1,18 @@
 # elixcee
 
 [![CI](https://github.com/kent-tokyo/elixcee/actions/workflows/ci.yml/badge.svg)](https://github.com/kent-tokyo/elixcee/actions/workflows/ci.yml)
-[![Docs](https://docs.rs/elixcee/badge.svg)](https://docs.rs/elixcee/1.0.11/elixcee/)
-[![Version](https://img.shields.io/badge/version-1.0.11-blue.svg)](https://github.com/kent-tokyo/elixcee/releases/tag/v1.0.11)
+[![Docs](https://docs.rs/elixcee/badge.svg)](https://docs.rs/elixcee/1.0.12/elixcee/)
+[![Version](https://img.shields.io/badge/version-1.0.12-blue.svg)](https://github.com/kent-tokyo/elixcee/releases/tag/v1.0.12)
 
 Headless Excel workbook automation in Rust and Python. Edit `.xlsx`/`.xlsm`
 files, recalculate supported formulas, and run or diagnose data-processing VBA
-without Microsoft Excel. A CLI and an experimental JavaScript/WASM package are
-also included.
+without Microsoft Excel. A CLI, reusable Rust/WASM runtime crates, and an
+experimental JavaScript/WASM package are also included.
+
+The current release is `1.0.12`. The browser playground demonstrates range
+selection, cell editing, formatting, filters, tables, chart previews,
+worksheet-backed Pivot summaries, sheet operations, formula recalculation, and
+bounded VBA execution.
 
 [English](README.md) | [日本語](README_ja.md) | [中文](README_zh.md)
 
@@ -27,6 +32,15 @@ pip install elixcee
 ```
 
 CLI binaries are available from [GitHub Releases](https://github.com/kent-tokyo/elixcee/releases).
+
+The reusable Rust crates are `elixcee` (native/Python runtime) and
+`elixcee-wasm` (browser/Node bridge). They provide headless reading, supported
+formula calculation, diagnostics, and bounded workbook editing. The
+[elixcee-wasm API docs](https://docs.rs/elixcee-wasm) are available separately.
+[Playground](https://kent-tokyo.github.io/elixcee/playground/) is a separate
+static web app: it combines the WASM runtime with the package's JavaScript
+XLSX writer and Excel-like UI. See the [crate/API boundary](docs/crate-api-boundary.md)
+for the exact contract.
 
 ## Python
 
@@ -70,7 +84,9 @@ reference, and dynamic-array formulas.
 It is not a full Excel desktop replacement. UI operations are skipped,
 modeled, or reported. Chart/Drawing/Pivot editing and formula compatibility
 remain bounded features; unsupported OOXML parts may be preserved, lost, or
-rejected depending on the operation.
+rejected depending on the operation. The browser playground rejects external
+links, PivotTables/PivotCaches, embedded media, threaded comments, slicers,
+and custom XML when lossless preservation is not available.
 
 See the [v1 support contract](docs/v1-support-contract.md),
 [formula list](FUNCTIONS.md), and [limits](docs/limits.md) before adoption.

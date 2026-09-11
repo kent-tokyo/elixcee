@@ -7,6 +7,11 @@ Targets the documented subset of `xlsx@0.18.5` behavior, not a complete drop-in 
 Reads use the Rust/WASM bridge; writes use a separate JavaScript OOXML/ZIP writer.
 The parent Rust/Python version does not describe this package's publication status.
 
+The browser Playground is a separate client-only application built on this
+surface. It adds the Excel-like UI (range selection, sheet tabs, formatting,
+filters, tables, chart preview, worksheet-backed Pivot summaries, and downloads);
+those UI features are not additional exports from this package.
+
 ## Supported surface
 
 | API | Scope |
@@ -15,7 +20,7 @@ The parent Rust/Python version does not describe this package's publication stat
 | `SSF` | Number formatting through `ssf@0.11.2` |
 | `read(data, opts)` | Synchronous WASM-backed input, with no asynchronous initialization step |
 | `readFile` / `readFileSync` | The same Node-only function; normal filesystem errors propagate |
-| `write` | `bookType:"xlsx"` only; output `type:"buffer" / "array" / "base64"` |
+| `write` | `bookType:"xlsx"`, or `"xlsm"` with opaque `!vbaProject` bytes; output `type:"buffer" / "array" / "base64"` |
 | `writeFile` / `writeFileSync` | The same Node-only synchronous function |
 | TypeScript | Declarations tested with and without DOM libraries; [classification](../../docs/typescript-compatibility.md) |
 
@@ -23,10 +28,16 @@ Read coverage includes SheetNames, !ref, merges, hidden rows/columns, and cell
 `t/v/f/w/z`, including the documented cellDates/cellStyles paths.
 The Rust/WASM read bridge also exposes a read-only `!dataValidations` projection
 with validation `type` and 1-based `sqref` ranges. It is structural metadata;
-it does not evaluate formulas or validate cell values.
+it does not evaluate formulas or validate cell values. Basic bar/line charts are
+projected to `!charts` with source range, title, legend, and anchor dimensions;
+unsupported chart features remain outside this projection.
 Write coverage includes scalar values, dates, formulas, multiple sheets, merges,
-visibility, hidden rows/columns, and basic number formats.
-It is not the native writer's arbitrary-part/VBA preservation path.
+visibility, hidden rows/columns, basic number formats, and limited bar/line chart
+parts including multiple charts per worksheet.
+When `!vbaProject` is present, XLSM output preserves `xl/vbaProject.bin` and the
+macro-enabled package relationships. The browser treats those bytes as opaque:
+it does not parse or execute VBA. This remains a bounded preservation path, not
+lossless preservation of every OOXML part.
 
 Browser file APIs are present but throw `ELIXCEE_UNSUPPORTED_IN_BROWSER`.
 Use FileReader/fetch to supply bytes, and download the result of `write` yourself.
@@ -56,6 +67,8 @@ I/O.
 - No `writeFileAsync` or streaming API. Rust/Python streaming does not imply JS streaming.
 - No ODS output or other `write` book types; utility text exporters are separate.
 - No complete Excel/VBA emulation through this JavaScript surface.
+- Chart read/write is limited to the documented bar/line projection; it is not
+  a lossless chart or Pivot cache editor.
 - `sheet_to_html` escapes `cell.h` by default. Use `rawHtml:true` only for
   independently trusted markup; it is an intentional security extension.
 - Whole-buffer synchronous reads apply default reader limits. Use a worker when
@@ -77,7 +90,11 @@ step is needed. Browser consumption assumes a bundler, not a bare script import.
 ## Verification
 
 From this package directory, run `npm run typecheck`, `npm run typecheck:no-dom`,
-`npm run wasm:smoke`, `npm run audit:pack`, and `npm run pack:consumer`.
+`npm run wasm:smoke`, `npm run xlsm:smoke`, `npm run xlsm:reopen:smoke`,
+`npm run comment:smoke`, `npm run pivot:smoke`, and
+`npm run audit:pack`, and `npm run pack:consumer`. The XLSM reopen check uses
+the repository's real VBA fixture and LibreOffice when installed; it is not an
+Excel-oracle result.
 `npm run browser:smoke` requires the browser environment used by its script.
 These commands require installed development dependencies and generated WASM artifacts.
 
