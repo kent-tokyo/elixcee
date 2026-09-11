@@ -12,7 +12,7 @@
       "recalculate": "warned",
       "excel_reopen": "unverified",
       "fixture": "compat/oracle-excel-com/fixtures/pristine/fixture5_chart_image_freeze_print.xlsm",
-      "notes": "Drawing/chart parts and relationships are retained when connectivity checks pass. A loaded workbook may rename a sheet and update qualified chart <c:f> references; bounded edits cover selected series formulas, caches, marker attributes, solid RGB line/fill colors, smooth, negative-value display, and visibility flags, title, legend, axes, style, and data labels. BUILD-stage creation covers line/bar/area/pie charts and additional series in an existing Drawing. The single line-chart reopen smoke test passed on macOS Excel; the complete multi-chart/bar case still triggers Excel recovery, so excel_reopen remains unverified."
+      "notes": "Drawing/chart parts and relationships are retained when connectivity checks pass. A loaded workbook may rename a sheet and update qualified chart <c:f> references; bounded edits cover selected series formulas, caches, marker attributes, solid RGB line/fill colors, smooth, negative-value display, and visibility flags, title, legend, axes, style, and data labels. BUILD-stage creation covers line/bar/area/pie charts and additional series in an existing Drawing. The single line-chart reopen smoke test passed on macOS Excel; both bar-only and multi-chart/bar creation outputs trigger Excel recovery and lose the new chart, so excel_reopen remains unverified."
     },
     {
       "id": "pivot_tables",
