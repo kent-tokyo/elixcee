@@ -6,6 +6,8 @@
 
 - Chart compatibility: emit the OOXML-standard `showCatName` data-label
   attribute for category labels while preserving the Python API name.
+- G2 measurement: reproduce the multi-chart/bar Excel recovery warning with
+  the current generator output; Excel compatibility remains unverified.
 
 - Documentation: shorten the English, Japanese, and Simplified Chinese README
   development sections and direct contributors to the roadmap and changelog.

@@ -18,6 +18,12 @@ but the Chart result is not accepted as a valid Excel artifact. This is a
 negative compatibility result, not a release claim; `compat/ooxml-feature-matrix.json`
 therefore keeps `excel_reopen` as `unverified`.
 
+The same result was reproduced on 2026-09-11 with the current v1.0.10
+generator output (`target/tmp/g2d-chart-bar-smoke.xlsm`) from
+`create_chart_connects_new_part_to_existing_drawing`. Excel displayed its
+recovery dialog before opening the workbook. The warning was dismissed without
+accepting recovery, so no repaired workbook was used as evidence.
+
 ## Scope
 
 - `Vm.set_chart_series_formulas(chart_part, series_index, categories, values)`
