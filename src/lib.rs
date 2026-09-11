@@ -4740,25 +4740,29 @@ fn chart_cache_value(value: &Variant) -> String {
     }
 }
 
+fn chart_numeric_cache_value(value: &Variant) -> String {
+    match value {
+        Variant::Integer(value) => value.to_string(),
+        Variant::Float(value) => value.to_string(),
+        Variant::Boolean(value) => if *value { "1" } else { "0" }.to_string(),
+        Variant::Date(value) => value.to_string(),
+        Variant::Str(_)
+        | Variant::Error(_)
+        | Variant::Empty
+        | Variant::Null
+        | Variant::Array(_)
+        | Variant::VbaArray(_)
+        | Variant::Record(_) => String::new(),
+    }
+}
+
 fn render_chart_cache(values: &[Variant], numeric: bool) -> String {
     let points = values
         .iter()
         .enumerate()
         .map(|(index, value)| {
             let rendered = if numeric {
-                match value {
-                    Variant::Integer(_)
-                    | Variant::Float(_)
-                    | Variant::Boolean(_)
-                    | Variant::Date(_) => chart_cache_value(value),
-                    Variant::Str(_)
-                    | Variant::Error(_)
-                    | Variant::Empty
-                    | Variant::Null
-                    | Variant::Array(_)
-                    | Variant::VbaArray(_)
-                    | Variant::Record(_) => String::new(),
-                }
+                chart_numeric_cache_value(value)
             } else {
                 chart_cache_value(value)
             };
@@ -11276,6 +11280,14 @@ mod tests {
             actual,
             "<c:title><c:tx><c:rich><a:bodyPr/><a:p><a:pPr><a:defRPr/></a:pPr><a:r><a:t>A &lt; B &amp; C &gt; D</a:t></a:r></a:p></c:rich></c:tx></c:title>"
         );
+    }
+
+    #[test]
+    fn chart_numeric_cache_coerces_boolean_and_date_without_text() {
+        assert_eq!(chart_numeric_cache_value(&Variant::Boolean(true)), "1");
+        assert_eq!(chart_numeric_cache_value(&Variant::Boolean(false)), "0");
+        assert_eq!(chart_numeric_cache_value(&Variant::Date(45351)), "45351");
+        assert_eq!(chart_numeric_cache_value(&Variant::Str("text".into())), "");
     }
 
     #[test]
