@@ -18873,6 +18873,18 @@ mod tests {
             Variant::Error(ExcelError::DivZero)
         );
         assert_eq!(calc("=SUM(1/0,2)", &c), Variant::Error(ExcelError::DivZero));
+        assert_eq!(
+            calc("=SUM(CHOOSE(SEQUENCE(2),1,1/0))", &c),
+            Variant::Error(ExcelError::DivZero)
+        );
+        assert_eq!(
+            calc("=SUM(SEQUENCE(2,3)+1/0)", &c),
+            Variant::Error(ExcelError::DivZero)
+        );
+        assert_eq!(
+            calc("=SUM(IF(SEQUENCE(2),1,1/0))", &c),
+            Variant::Integer(2)
+        );
     }
 
     #[test]
@@ -18883,6 +18895,10 @@ mod tests {
             ((3, 1), Variant::Integer(30)),
         ]);
         assert_eq!(calc("=AVERAGE(A1:A3)", &c), Variant::Float(20.0));
+        assert_eq!(
+            calc("=AVERAGE(CHOOSE(SEQUENCE(2),1,1/0))", &c),
+            Variant::Error(ExcelError::DivZero)
+        );
         assert_eq!(calc("=MIN(\"1\",TRUE)", &c), Variant::Integer(1));
         assert_eq!(calc("=MAX(\"1\",TRUE)", &c), Variant::Integer(1));
         assert_eq!(calc("=COUNT(\"1\")", &c), Variant::Integer(1));
