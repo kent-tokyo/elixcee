@@ -11,6 +11,9 @@ select, input { border: 1px solid #cad2e2; border-radius: 8px; background: white
 .toolbar { display: flex; align-items: end; justify-content: space-between; gap: 16px; margin-bottom: 18px; }
 .toolbar label { display: grid; gap: 6px; color: #58657d; font-size: .9rem; }
 .toolbar select { min-width: 190px; }
+.upload { display: grid; gap: 4px; color: #58657d; font-size: .9rem; }
+.upload input { max-width: 230px; padding: 6px; font-size: .8rem; }
+.upload small { color: #7c879a; font-size: .75rem; }
 .badge { color: #58657d; font-size: .85rem; }
 .tabs { display: flex; gap: 4px; border-bottom: 1px solid #dce3ef; margin-bottom: 18px; }
 .tab { border-radius: 9px 9px 0 0; color: #58657d; background: transparent; }
@@ -27,18 +30,38 @@ th { color: #58657d; font-weight: 650; background: #f3f6fb; }
 .sheet-title { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .sheet-title h2 { margin-bottom: 14px; }
 .sheet-title span { color: #7c879a; font-size: .8rem; }
+.sheet-tabs { display: flex; gap: 4px; overflow-x: auto; margin: 0 0 12px; border-bottom: 1px solid #dce3ef; }
+.sheet-tab { flex: 0 0 auto; padding: 7px 11px; border-radius: 7px 7px 0 0; color: #58657d; background: transparent; font-size: .82rem; }
+.sheet-tab:hover, .sheet-tab.active { color: #3856d9; background: #eef1ff; }
+.formula-bar { display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto; align-items: center; gap: 7px; margin-bottom: 12px; }
+.formula-bar label { color: #58657d; font-size: .78rem; white-space: nowrap; }
+.formula-bar input { min-width: 0; padding: 7px 9px; font-family: ui-monospace, SFMono-Regular, monospace; }
+.formula-bar button { padding: 7px 9px; font-size: .78rem; }
 .sheet-wrap { overflow-x: auto; }
 .sheet { min-width: 430px; table-layout: fixed; }
 .sheet .corner, .sheet .row-label { width: 34px; text-align: center; }
 .sheet .column-label, .sheet .row-label { text-align: center; }
 .sheet td { padding: 2px; background: white; }
+.sheet td.selected { outline: 2px solid #3856d9; outline-offset: -2px; }
+.context-menu { position: fixed; z-index: 10; display: grid; gap: 3px; min-width: 155px; padding: 6px; border: 1px solid #cad2e2; border-radius: 9px; background: white; box-shadow: 0 10px 24px #17203330; }
+.context-menu[hidden] { display: none; }
+.context-menu button { padding: 7px 9px; color: #172033; background: white; text-align: left; font-size: .82rem; }
+.context-menu button:hover { color: #3856d9; background: #eef1ff; }
+.vba-box { margin-top: 20px; padding-top: 18px; border-top: 1px solid #dce3ef; }
+.vba-box label { display: grid; gap: 5px; margin: 9px 0; color: #58657d; font-size: .82rem; }
+.vba-box input, .vba-box textarea { width: 100%; font: .82rem/1.45 ui-monospace, SFMono-Regular, monospace; }
+.vba-box textarea { min-height: 105px; resize: vertical; }
+.hint { color: #7c879a; font-size: .78rem; line-height: 1.45; }
+.vba-result { min-height: 1.4em; margin: 10px 0 0; color: #1b7b55; white-space: pre-wrap; font: .78rem/1.4 ui-monospace, SFMono-Regular, monospace; }
 .formula-row td, .formula-row th { background: #f8faff; }
 .formula-cell { color: #3856d9; font-weight: 750; }
-.cell-input { width: 100%; min-width: 70px; padding: 7px 8px; }
+.cell-input { width: 100%; min-width: 70px; padding: 7px 8px; border-radius: 0; border-color: transparent; }
+.cell-input:focus { border-color: #3856d9; outline: 1px solid #3856d9; }
 .actions { display: flex; gap: 10px; margin-top: 20px; }
 button { border: 0; border-radius: 9px; padding: 10px 15px; font: inherit; font-weight: 650; color: white; background: #3856d9; cursor: pointer; }
 button:hover { background: #2e46b8; } button.secondary { color: #3856d9; background: #eef1ff; }
 .formula { display: flex; justify-content: space-between; gap: 12px; color: #58657d; font-size: .9rem; }
+.diagnostics { margin: 14px 0 0; padding: 10px 12px; border-radius: 7px; color: #58657d; background: #f3f6fb; font: .76rem/1.45 ui-monospace, SFMono-Regular, monospace; }
 code { color: #172033; } .answer { margin: 26px 0 20px; font-size: 3rem; font-weight: 750; color: #3856d9; }
 .status { color: #1b7b55; font-size: .9rem; }
 .status.warning { color: #a36500; }
@@ -48,8 +71,9 @@ code { color: #172033; } .answer { margin: 26px 0 20px; font-size: 3rem; font-we
 .download-icon { display: inline-grid; place-items: center; width: 58px; height: 58px; margin-bottom: 14px; border-radius: 16px; color: white; background: #1c8b52; font-size: .75rem; font-weight: 800; }
 .download-card p { color: #58657d; line-height: 1.6; }
 .file-meta { display: flex; justify-content: space-between; gap: 12px; margin: 22px 0; padding: 12px 14px; border-radius: 9px; color: #58657d; background: #f3f6fb; font-size: .85rem; }
+.export-status { min-height: 1.3em; color: #1b7b55; font: .78rem/1.4 ui-monospace, SFMono-Regular, monospace; }
 .guide { margin-top: 18px; line-height: 1.6; color: #58657d; }
 .guide h2 { color: #172033; }
 .guide p { margin: 0 0 12px; }
 footer { margin-top: 28px; text-align: center; color: #7c879a; font-size: .85rem; } a { color: #3856d9; }
-@media (max-width: 680px) { .page { padding: 28px 16px; } .header, .toolbar { align-items: flex-start; flex-direction: column; } .grid { grid-template-columns: 1fr; } }
+@media (max-width: 680px) { .page { padding: 28px 16px; } .header, .toolbar { align-items: flex-start; flex-direction: column; } .grid { grid-template-columns: 1fr; } .formula-bar { grid-template-columns: 1fr 1fr; } .formula-bar label { grid-column: 1 / -1; } .formula-bar input { grid-column: 1 / -1; } }

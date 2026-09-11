@@ -12,3 +12,8 @@ await build({
   bundle: true, format: 'esm', platform: 'browser', target: ['es2020'],
   outfile: path.join(out, 'assets', 'app.js'), sourcemap: true, logLevel: 'info',
 });
+await build({
+  entryPoints: [path.join(root, 'playground', 'src', 'vba-worker.js')],
+  bundle: true, format: 'esm', platform: 'browser', target: ['es2020'],
+  outfile: path.join(out, 'assets', 'vba-worker.js'), sourcemap: true, logLevel: 'info',
+});

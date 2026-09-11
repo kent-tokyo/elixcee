@@ -1,9 +1,9 @@
 # elixcee Playground
 
-Try elixcee in the browser: switch between sales, budget, and grade samples;
-edit a small table; recalculate `SUM` or `AVERAGE` with the Rust/WASM engine;
-and download the resulting `.xlsx` file. The page is client-only; workbook
-bytes are not uploaded.
+Try elixcee in the browser: open an `.xlsx` file, switch between sheets, edit
+cells and ranges, run a bounded VBA subset in a Web Worker, recalculate with
+Rust/WASM, inspect diagnostics, and download a verified `.xlsx` file. The page
+is client-only; workbook bytes are not uploaded.
 
 Open the live [GitHub Pages playground](https://kent-tokyo.github.io/elixcee/playground/)
 or read the [English quick start](../docs/quickstart.md) first.
@@ -12,9 +12,12 @@ between English, Japanese, and Simplified Chinese; translations are not shown
 side by side.
 
 The browser page covers the private `@elixcee/xlsx` browser package: in-memory
-XLSX read/write and typed workbook edits. It does not run Python or VBA in a
-browser. For headless VBA data processing, use the native/Python runtime shown
-in the [beginner tutorial](../docs/tutorial-beginners.md).
+XLSX read/write, multiple sheet tabs, typed workbook edits, formula
+recalculation, and structured preflight diagnostics. Its VBA sandbox is
+intentionally small: `Sub`, `Dim`, scalar assignment, `Cells(row,col).Value`,
+and arithmetic only. File, network, COM, Shell, UI, and control-flow effects
+are rejected. For full headless VBA data processing, use the native/Python
+runtime shown in the [beginner tutorial](../docs/tutorial-beginners.md).
 
 ## Run the Python sample locally
 

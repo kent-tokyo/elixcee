@@ -26,6 +26,36 @@ JavaScript互換APIは別トラックで、`packages/xlsx` はprivate・未公�
 5. **G6 判定**: quiet-host再測定、Excel oracle、3 OS、配布・安全性ゲート。以下の性能バックログも継続する。
 6. **LogiSheets対抗 L0–L6**: workbook数式・共有runtime・操作履歴を、既存の安全性と互換性ゲートを維持したまま段階導入する。
 7. **品質保証トラック L7–L10**: Rubberduck後のCI診断、公開可能なworkbook pair benchmark、snapshot／依存関係、動的配列oracleを分離して進める。
+8. **Browser Spreadsheetトラック B0–B5**: playgroundを実演用グリッドから、XLSXを読み込んで編集・再計算・ダウンロードできる安全なブラウザーUIへ段階拡張する。UIとVBA実行は別ゲートで扱う。
+
+## Browser Spreadsheetトラック（B0–B5）
+
+既存の`packages/xlsx` WASM runtimeとplaygroundを基盤にする。SpreadJS、Univer、Jspreadsheetのような
+Excel風UI／XLSX入出力は競合が存在する一方、主要なブラウザー表計算製品は任意のExcel VBAを
+ブラウザー内で実行しない。したがって、まず編集体験とファイル往復を成立させ、その後に
+外部効果を遮断したVBAサブセット実行を追加する。これはExcel完全互換や任意VBA実行を保証する計画ではない。
+
+- [ ] **B0 現状契約・脅威モデル**: playgroundのSpreadsheet／Excel downloadタブ、private WASM runtime、現行の対応数式、未対応OOXMLを棚卸しする。アップロードサイズ、展開後サイズ、シート数、セル数、式長、実行時間の上限と、XLSM／VBA／外部リンクの扱いを文書化する。
+- [ ] **B1 XLSX upload/read**: ブラウザーで任意の`.xlsx`を選択し、WASMの既存read経路で複数シート、値、数式、基本書式を表示する。読み込み失敗時は元ファイルを保持し、巨大・不正・未対応partを明示する。まず`.xlsm`はVBAを実行せず、保持可否を明示する。
+- [ ] **B2 Spreadsheet editing UX**: シートタブ、1-basedセル選択、範囲選択、セル編集、数式バー、Enter／Escape、基本Undo／Redoを追加する。選択状態と数式表示をDOMテストで固定し、UI表示用状態とRust workbook stateを分離する。
+- [ ] **B3 Clipboard and structure**: 同一アプリ内のコピー／カット／ペースト、Paste Specialの最小範囲、行／列の追加・削除・幅変更、シート追加／名前変更を実装する。Chart／Pivot／Drawing／External Linksを含む構造編集は、参照更新経路がない限り拒否する。
+- [ ] **B4 Recalculate and export**: 編集セルから依存関係付き再計算を行い、結果・数式・エラーを確認できるようにする。編集済みWorkbookを`.xlsx`としてダウンロードし、ZIP接続、数式、シート順、既知のOOXML保持状態を検証する。計算未対応関数は推測せず警告する。
+- [ ] **B5 Browser VBA sandbox**: Web Worker内の小型allowlist interpreterで、セル値・変数・算術代入に限定したVBAサブセットを実行する。ファイル書き込み、ネットワーク、COM、Shell、MsgBox／UserForm、制御構文は拒否し、ソース長・文数のbudgetと構造化診断を必須にする。フルRust VMのブラウザー同梱はWASMサイズゲートを超えるため採用しない。
+
+進捗（2026-09-11）:
+
+- [x] **B1 部分 BUILD**: playgroundに`.xlsx` file inputを追加し、ブラウザー版WASM `read()`でWorkbookを読み込んで`SheetNames`をシートタブへ投影する経路を実装した。読み込み失敗は現在のWorkbookを保持して状態表示へ戻す。実Chrome E2Eで2シートのXLSXアップロードと`Summary`／`Notes`タブ表示を確認した。XLSMのVBA実行、未対応OOXMLの完全保持は未検証。
+- [x] **B2 部分 BUILD**: 1-based A1表示、シートタブ、セル選択、数式バー、セル／数式編集、矩形範囲選択、TSV形式の範囲コピー／貼り付け、内部clipboard fallbackを実装した。実ブラウザーで6セルの範囲ハイライトとセル編集後のRust/WASM再計算（990→1000）を確認した。キーボード操作、Paste Special、完全なUndo／Redoは未完。
+- [x] **B3 部分 BUILD**: 選択セルを基準にした行／列の追加・削除ボタンと、行番号／列見出しの右クリックメニューを追加した。数式を含むsheetは参照更新なしの構造変更を拒否し、データのみのsheetに限定して安全に行列を移動する。数式参照の構造更新、シート追加／名前変更は未完。
+- [x] **B5 部分 BUILD**: Web Worker内で`Sub`、`Dim`、スカラー代入、`Cells(row,col).Value`、四則演算だけを実行する小型サブセットを追加した。禁止API・制御構文・未対応文は拒否して診断を表示する。Rust/WASMの数式再計算経路とは分離し、Workerから任意ファイル・ネットワーク・COMへ到達できない構成にした。既存VMとのparity、範囲値・条件分岐・bounded loop、キャンセルは未完。
+- [x] **B4 部分 BUILD**: 編集済みバイト列をブラウザー側で再読込してシート数を検証してからダウンロードする経路を追加した。Rust/WASMの再計算結果と診断を出力へ反映する。実Chrome E2Eでアップロード→編集→再計算（35）→ダウンロード→2シート再読込検証を確認した。複雑なOOXML partの保持、実Excel再openは未完。
+
+### Browserトラックのゲート
+
+- B1–B4は、同一fixtureのブラウザー読込→編集→再計算→ダウンロード→再読込を値・数式・ZIP構造で検証する。
+- B5は、Node／Pythonの既存VMと同じ入力に対する値・エラー・拒否理由のparityを確認する。Excel VBA完全互換の件数や任意マクロ実行を達成条件にしない。
+- `.xlsm`のVBA project保持、Chart／Pivot／Drawingの完全編集、外部リンク更新、Excel再openは、Bトラックの完了条件と分離してG2／G6の外部ゲートで判定する。
+- B1–B5の完了までは、playgroundを「サンプルを編集できるWASMデモ」と表記し、「Excelをブラウザーで完全再現」「VBAを任意実行」と表記しない。
 
 ## 競合ウォッチ反映（2026-09-11）
 
@@ -664,7 +694,7 @@ formula dirty propagationの同日controlled matrixでは、single-input chain 1
 
 | 分類 | 対象 | 完了条件 |
 |---|---|---|
-| ローカル実装が残る | G2dのChart/Drawing作成・一般編集、Pivotのcache一般編集（worksheet-backed sourceの限定編集は実装済み）、VBAの実保存／Close後state・イベント・型付きruntime error | API設計、実装、fixture回帰、Rust/Python/WASM境界の検証 |
+| ローカル実装が残る | G2dのChart/Drawing作成・一般編集、Pivotのcache一般編集（worksheet-backed sourceの限定編集は実装済み）、VBAの実保存／Close後state・イベント・型付きruntime error、B1–B5のブラウザーXLSX編集・UI・VBA sandbox | API設計、実装、fixture回帰、Rust/Python/WASM境界、browser worker境界の検証 |
 | ローカル測定が残る | 大規模1mの1.2倍、formula dirty propagation完全校正、実運用macro corpus、長時間fuzz／CPU／RSS | 固定入力・反復・資源上限・失敗条件を記録した再現可能な測定 |
 | 外部環境に依存 | Excel再open／修復警告、Excel oracle、Linux／Windows clean-install・資源校正、3 OS検証 | 対象環境の実行結果とversionを取得。macOSローカル結果では代替しない |
 | 外部サービス・将来公開に依存 | LogiSheets固定版の取得を伴う競合比較、外部レビュー、registry／GitHub Release／tag公開 | 取得元・固定version・公開状態を別途記録。未実施の推測は完了扱いにしない |
