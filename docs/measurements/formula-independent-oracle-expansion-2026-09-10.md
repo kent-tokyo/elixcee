@@ -86,3 +86,10 @@ binding each evaluated 118 common probes with 118/118 matches. The run uses a
 local source wheel and is not a published-package, Microsoft Excel, or
 cross-platform claim. `INDEX` now accepts the array results produced by the
 multi-column regression functions in this corpus.
+
+The paired command was rerun after rebuilding the wheel from the current
+source in a fresh temporary Python environment. It again produced 118
+LibreOffice-comparable cases and 118/118 matches; 37 cases were explicitly
+skipped because this LibreOffice build returned unsupported or non-comparable
+results. This confirms the existing fixture result, but does not expand the
+supported function set or establish Microsoft Excel agreement.
