@@ -4,6 +4,11 @@
 
 ## [Unreleased]
 
+- CI/package metadata: restore the exact workspace-versus-root version check
+  for the independently published `elixcee-types` crate and align the root
+  dependency pin with `elixcee-types` 0.4.1. The published-source hash check
+  is not run in ordinary CI, so feature branches are not blocked by a release
+  bookkeeping gate.
 - Formula dirty propagation: index range dependencies by source worksheet so
   a changed cell does not inspect ranges belonging to unrelated sheets. The
   existing formula and cross-sheet value-parity tests remain green; the

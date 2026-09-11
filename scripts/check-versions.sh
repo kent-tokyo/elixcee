@@ -24,6 +24,20 @@ if [[ "$cargo_version" != "$pyproject_version" ]]; then
   exit 1
 fi
 
+# The shared types crate is published independently. Keep the root's registry
+# dependency requirement aligned with the workspace member so cargo publish
+# cannot silently resolve a different public version from the one tested here.
+types_toml="crates/elixcee-types/Cargo.toml"
+if [[ -f "$types_toml" ]]; then
+  types_version=$(grep -m1 '^version = "' "$types_toml" | sed -E 's/^version = "(.*)"$/\1/')
+  pinned_types_version=$(grep -m1 'elixcee-types = ' Cargo.toml | sed -E 's/.*version = "([^"]*)".*/\1/')
+
+  if [[ -n "$pinned_types_version" && "$types_version" != "$pinned_types_version" ]]; then
+    echo "check-versions: elixcee-types version mismatch — crates/elixcee-types/Cargo.toml version=$types_version, root Cargo.toml pins version=$pinned_types_version" >&2
+    exit 1
+  fi
+fi
+
 # @elixcee/xlsx versions independently of the root crate (see ROADMAP.md), so this
 # doesn't cross-check its version against Cargo.toml/pyproject.toml — it only guards
 # the one concrete drift this project has actually hit: "private" flipped to false
