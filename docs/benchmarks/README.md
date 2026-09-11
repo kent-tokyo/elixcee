@@ -4,6 +4,10 @@ These are dated local measurements, not universal library rankings.
 Each report records its own baseline, versions, timing/durability policy,
 validation, raw samples, and limitations. The current source may be newer.
 
+| Report (2026-09-11) | What it establishes |
+|---|---|
+| [ClosedXML / openpyxl / elixcee](workbook-closedxml-2026-09-11.md) | Current-source 1.0.10 comparison on macOS arm64; 2.04–9.36× versus ClosedXML and 2.50–12.19× versus openpyxl across the recorded fixtures |
+
 | Report (2026-09-06) | What it establishes |
 |---|---|
 | [Large-workbook optimization](workbook-large-speedup-2026-09-06.md) | Latest incremental comparison: 100k / 400k / 1m cells; strict 1.2× target met only at 400k |
