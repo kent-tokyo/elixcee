@@ -2,14 +2,141 @@
 // Supports: .xlsx, .xlsm (Office Open XML ZIP), .ods (OpenDocument ZIP).
 // Row/col indices are 1-based, matching the VM's convention.
 
-use std::collections::HashMap;
+use std::borrow::Cow;
+use std::collections::{HashMap, HashSet};
 use std::io::{Cursor, Read, Seek};
 use std::str::FromStr;
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
+use std::time::{Duration, Instant};
 
 use elixcee_types::ExcelError;
 use zip::ZipArchive;
 
 // ── Public types ──────────────────────────────────────────────────────────────
+
+/// Limits and cancellation controls for a workbook read.
+///
+/// `max_work_units` accounts for every ZIP entry's declared decompressed bytes
+/// plus a fixed per-entry parsing allowance. This is deliberately conservative:
+/// it rejects a combination of many individually legal entries before XML/model
+/// construction begins. `cancellation` is shared with the caller and can be
+/// flipped from another thread while a read is in progress.
+pub const DEFAULT_READ_MAX_WORK_UNITS: u64 = 2 * 1024 * 1024 * 1024;
+
+/// Policy for workbook-level OOXML external-link relationships.
+///
+/// The reader never follows external URLs. `Preserve` keeps the relationship
+/// available for a round-trip save; `Reject` fails closed before workbook
+/// model construction when an external-link relationship is present.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ExternalLinksPolicy {
+    #[default]
+    Preserve,
+    Reject,
+    Drop,
+}
+
+#[derive(Clone)]
+pub struct ReadOptions {
+    pub max_work_units: Option<u64>,
+    pub timeout_ms: Option<u64>,
+    pub cancellation: Option<Arc<AtomicBool>>,
+    pub external_links: ExternalLinksPolicy,
+}
+
+fn workbook_has_external_link_relationship(xml: &str) -> bool {
+    !xlsx_rels(xml, "/externalLink").is_empty()
+}
+
+impl Default for ReadOptions {
+    fn default() -> Self {
+        Self {
+            max_work_units: Some(DEFAULT_READ_MAX_WORK_UNITS),
+            timeout_ms: None,
+            cancellation: None,
+            external_links: ExternalLinksPolicy::Preserve,
+        }
+    }
+}
+
+impl ReadOptions {
+    pub fn validate(&self) -> Result<(), String> {
+        if self.max_work_units == Some(0) {
+            return Err("max_work_units must be greater than zero".to_string());
+        }
+        if self.timeout_ms == Some(0) {
+            return Err("read timeout_ms must be greater than zero".to_string());
+        }
+        Ok(())
+    }
+}
+
+struct ReadBudget {
+    max_work_units: Option<u64>,
+    deadline: Option<Instant>,
+    cancellation: Option<Arc<AtomicBool>>,
+    consumed: u64,
+}
+
+impl ReadBudget {
+    fn new(options: &ReadOptions) -> Result<Self, String> {
+        options.validate()?;
+        Ok(Self {
+            max_work_units: options.max_work_units,
+            deadline: options
+                .timeout_ms
+                .map(|ms| Instant::now() + Duration::from_millis(ms)),
+            cancellation: options.cancellation.clone(),
+            consumed: 0,
+        })
+    }
+
+    fn check(&self) -> Result<(), String> {
+        if self
+            .cancellation
+            .as_ref()
+            .is_some_and(|flag| flag.load(Ordering::Relaxed))
+        {
+            return Err("READER_CANCELED: workbook read was canceled".to_string());
+        }
+        if self
+            .deadline
+            .is_some_and(|deadline| Instant::now() >= deadline)
+        {
+            return Err("READER_TIMEOUT: workbook read exceeded its deadline".to_string());
+        }
+        Ok(())
+    }
+
+    /// Event-by-event checks are needed only when the caller supplied a
+    /// deadline or cancellation flag. The work-unit limit is charged before
+    /// XML parsing, so the default path need not branch on this for every
+    /// token in a large worksheet.
+    fn needs_event_checks(&self) -> bool {
+        self.deadline.is_some() || self.cancellation.is_some()
+    }
+
+    fn charge(&mut self, bytes: u64, entry_name: &str) -> Result<(), String> {
+        self.check()?;
+        let units = bytes.saturating_add(4096);
+        self.consumed = self
+            .consumed
+            .checked_add(units)
+            .ok_or_else(|| "READER_WORK_BUDGET: work counter overflowed".to_string())?;
+        if let Some(max) = self.max_work_units
+            && self.consumed > max
+        {
+            return Err(format!(
+                "READER_WORK_BUDGET: workbook read exceeded max_work_units at {entry_name} ({} > {max})",
+                self.consumed
+            ));
+        }
+        Ok(())
+    }
+}
 
 /// A 1-based inclusive `((row1,col1),(row2,col2))` rect (Milestone B6c2) —
 /// a private per-module alias, not a shared type, matching this codebase's
@@ -123,6 +250,16 @@ pub struct WorkbookSheet {
     /// like `tables`; `Vm::add_data_validation_on_sheet`/`remove_data_validation_on_sheet`
     /// mutate the `Vm`-side copy afterward. Always empty for `.ods`.
     pub data_validations: Vec<DataValidationRule>,
+    /// Cell ranges carrying worksheet conditional-format rules. Each outer
+    /// entry is one `<conditionalFormatting>` block and retains its complete
+    /// `sqref` set so `xlCellTypeSameFormatConditions` can compare rule-group
+    /// identity, not merely whether a cell has any conditional format.
+    pub conditional_format_ranges: Vec<Vec<MergeRect>>,
+    /// 1-based cells with legacy worksheet comments/notes. Comment text is
+    /// intentionally not loaded: `SpecialCells(xlCellTypeComments)` only
+    /// needs membership, while unknown comment-part bytes remain handled by
+    /// the package passthrough layer.
+    pub comment_cells: Vec<(u32, u32)>,
     /// Standalone (worksheet-level) `<autoFilter>`, when present (0.16.0-B) -- `None` for
     /// a sheet with no autofilter at all, distinct from `Some` with an empty `columns`
     /// list (a bare `<autoFilter ref="...">` with no active criteria, real Excel's own
@@ -222,10 +359,10 @@ fn parse_filter_criteria_xml(filter_column_span: &str) -> Option<FilterCriteria>
     let mut top10: Option<(bool, bool, f64)> = None;
 
     while let Some(ev) = iter.next_ev() {
-        let (Ev::Open(ref tag, ref attrs) | Ev::SelfClose(ref tag, ref attrs)) = ev else {
+        let (Ev::Open(tag, ref attrs) | Ev::SelfClose(tag, ref attrs)) = ev else {
             continue;
         };
-        match tag.split(':').next_back().unwrap_or(tag.as_str()) {
+        match tag.split(':').next_back().unwrap_or(tag) {
             "filters" => {
                 if matches!(attr_get(attrs, "blank"), Some("1")) {
                     is_blank = true;
@@ -422,8 +559,8 @@ fn parse_data_validation_xml(span: &str) -> Option<DataValidationRule> {
 
     while let Some(ev) = iter.next_ev() {
         match ev {
-            Ev::Open(ref tag, ref attrs) | Ev::SelfClose(ref tag, ref attrs) => {
-                let local = tag.split(':').next_back().unwrap_or(tag.as_str());
+            Ev::Open(tag, ref attrs) | Ev::SelfClose(tag, ref attrs) => {
+                let local = tag.split(':').next_back().unwrap_or(tag);
                 match local {
                     "dataValidation" => {
                         rule = Some(DataValidationRule {
@@ -457,8 +594,8 @@ fn parse_data_validation_xml(span: &str) -> Option<DataValidationRule> {
                     _ => {}
                 }
             }
-            Ev::Close(ref tag) => {
-                let local = tag.split(':').next_back().unwrap_or(tag.as_str());
+            Ev::Close(tag) => {
+                let local = tag.split(':').next_back().unwrap_or(tag);
                 match local {
                     "formula1" if in_formula1 => {
                         if let Some(r) = rule.as_mut() {
@@ -495,6 +632,53 @@ pub(crate) fn xlsx_data_validations(sheet_xml: &str) -> Vec<DataValidationRule> 
         .iter()
         .filter_map(|span| parse_data_validation_xml(span))
         .collect()
+}
+
+/// Parses each worksheet-level conditional-format block's `sqref`. Rule
+/// bodies remain opaque; block identity is sufficient for both All and Same
+/// format-condition `SpecialCells` queries.
+pub(crate) fn xlsx_conditional_format_ranges(sheet_xml: &str) -> Vec<Vec<MergeRect>> {
+    extract_all_raw_elements(sheet_xml, "conditionalFormatting")
+        .into_iter()
+        .filter_map(|span| {
+            let mut iter = XmlIter::new(&span);
+            while let Some(ev) = iter.next_ev() {
+                match ev {
+                    Ev::Open(tag, attrs) | Ev::SelfClose(tag, attrs)
+                        if tag.split(':').next_back() == Some("conditionalFormatting") =>
+                    {
+                        let ranges = attr_get(&attrs, "sqref")
+                            .map(parse_sqref)
+                            .unwrap_or_default();
+                        return (!ranges.is_empty()).then_some(ranges);
+                    }
+                    _ => {}
+                }
+            }
+            None
+        })
+        .collect()
+}
+
+/// Parses legacy comment/note anchors from an `xl/comments*.xml` part.
+pub(crate) fn xlsx_comment_cells(comments_xml: &str) -> Vec<(u32, u32)> {
+    let mut iter = XmlIter::new(comments_xml);
+    let mut cells = HashSet::new();
+    while let Some(ev) = iter.next_ev() {
+        match ev {
+            Ev::Open(tag, attrs) | Ev::SelfClose(tag, attrs)
+                if tag.split(':').next_back() == Some("comment") =>
+            {
+                if let Some(cell) = attr_get(&attrs, "ref").and_then(parse_cell_ref) {
+                    cells.insert(cell);
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut cells: Vec<_> = cells.into_iter().collect();
+    cells.sort_unstable();
+    cells
 }
 
 /// One `<tableColumn>` entry inside a `<table>`'s `<tableColumns>` (0.16.0-A1).
@@ -734,7 +918,7 @@ pub(crate) fn relationship_ids(xml: &str) -> Vec<String> {
     let mut ids = vec![];
     let mut iter = XmlIter::new(xml);
     while let Some(ev) = iter.next_ev() {
-        if let Ev::Open(ref tag, ref attrs) | Ev::SelfClose(ref tag, ref attrs) = ev {
+        if let Ev::Open(tag, ref attrs) | Ev::SelfClose(tag, ref attrs) = ev {
             let local = tag.split(':').next_back().unwrap_or(tag);
             if local == "Relationship"
                 && let Some(id) = attr_get(attrs, "Id")
@@ -818,14 +1002,53 @@ pub enum SheetCell {
 }
 
 /// Read a spreadsheet file into sheets. Supports .xlsx, .xlsm, .ods.
+///
+/// The extension is validated before opening the path. This keeps the path-based
+/// API's format boundary explicit and avoids treating an XLSX payload as an
+/// arbitrary input format. Extension matching is case-insensitive.
 pub fn read_workbook(path: &str) -> Result<Vec<WorkbookSheet>, String> {
-    let lower = path.to_lowercase();
-    if lower.ends_with(".ods") {
-        read_ods(path)
-    } else if lower.ends_with(".xlsx") || lower.ends_with(".xlsm") {
-        read_xlsx(path)
+    read_workbook_with_options(path, &ReadOptions::default())
+}
+
+/// Read a workbook with explicit resource and cancellation controls.
+pub fn read_workbook_with_options(
+    path: &str,
+    options: &ReadOptions,
+) -> Result<Vec<WorkbookSheet>, String> {
+    ReadBudget::new(options)?.check()?;
+    let extension = std::path::Path::new(path)
+        .extension()
+        .and_then(|value| value.to_str());
+    if extension.is_some_and(|value| value.eq_ignore_ascii_case("ods")) {
+        read_ods(path, options)
+    } else if extension.is_some_and(|value| {
+        value.eq_ignore_ascii_case("xlsx") || value.eq_ignore_ascii_case("xlsm")
+    }) {
+        read_xlsx(path, options)
     } else {
-        Err(format!("unsupported file format: {}", path))
+        Err("unsupported input extension; use .xlsx, .xlsm, or .ods".to_string())
+    }
+}
+
+/// Path-based buffer reader used by the VM load path. Keeping the workbook-level
+/// metadata alongside the sheets avoids reopening the same ZIP entry for date1904
+/// and defined-name handling after the main parse has completed.
+pub(crate) fn read_workbook_buffer_with_options(
+    path: &str,
+    options: &ReadOptions,
+) -> Result<BufferWorkbook, String> {
+    ReadBudget::new(options)?.check()?;
+    let extension = std::path::Path::new(path)
+        .extension()
+        .and_then(|value| value.to_str());
+    if extension.is_some_and(|value| {
+        value.eq_ignore_ascii_case("xlsx") || value.eq_ignore_ascii_case("xlsm")
+    }) {
+        let file = std::fs::File::open(path).map_err(|e| e.to_string())?;
+        let archive = ZipArchive::new(file).map_err(|e| e.to_string())?;
+        read_workbook_from_archive(archive, options)
+    } else {
+        Err("unsupported input extension; use .xlsx, .xlsm, or .ods".to_string())
     }
 }
 
@@ -843,8 +1066,17 @@ pub fn read_workbook(path: &str) -> Result<Vec<WorkbookSheet>, String> {
 /// one of its other construction sites (`src/vm/mod.rs`'s tests, `src/snapshot.rs`), which
 /// are out of scope this phase.
 pub fn read_workbook_from_bytes(bytes: &[u8]) -> Result<BufferWorkbook, String> {
+    read_workbook_from_bytes_with_options(bytes, &ReadOptions::default())
+}
+
+/// Read an in-memory XLSX/XLSM buffer with explicit resource and cancellation controls.
+pub fn read_workbook_from_bytes_with_options(
+    bytes: &[u8],
+    options: &ReadOptions,
+) -> Result<BufferWorkbook, String> {
+    ReadBudget::new(options)?.check()?;
     let archive = ZipArchive::new(Cursor::new(bytes)).map_err(|e| e.to_string())?;
-    read_workbook_from_archive(archive)
+    read_workbook_from_archive(archive, options)
 }
 
 /// The buffer-API-only output of `read_workbook_from_bytes`: per-sheet data plus the two
@@ -863,6 +1095,8 @@ pub struct BufferWorkbook {
     /// from `xl/workbook.xml`, read once for the whole workbook (all sheets share it, this
     /// isn't a per-sheet setting). `false` (the default 1900 system) when absent.
     pub date1904: bool,
+    /// Defined-name declarations captured while `workbook.xml` is already in memory.
+    pub defined_names: Vec<XlsxDefinedName>,
 }
 
 /// A `WorkbookSheet` plus buffer-API-only data (`read_workbook_from_bytes`) that has no
@@ -906,30 +1140,36 @@ pub struct BufferSheet {
 // ── Minimal pull XML parser ───────────────────────────────────────────────────
 
 #[derive(Debug)]
-struct Attr {
-    name: String,
-    value: String,
+struct Attr<'a> {
+    name: &'a str,
+    value: Cow<'a, str>,
 }
 
 #[derive(Debug)]
-enum Ev {
-    Open(String, Vec<Attr>),
-    Close(String),
-    SelfClose(String, Vec<Attr>),
+enum Ev<'a> {
+    Open(&'a str, Vec<Attr<'a>>),
+    Close(&'a str),
+    SelfClose(&'a str, Vec<Attr<'a>>),
     /// Raw, unescaped text preserved verbatim.
-    Text(String),
+    Text(Cow<'a, str>),
 }
 
 struct XmlIter<'a> {
     s: &'a str,
+    malformed: bool,
+    recycled_attrs: Vec<Attr<'a>>,
 }
 
 impl<'a> XmlIter<'a> {
     fn new(s: &'a str) -> Self {
-        XmlIter { s }
+        XmlIter {
+            s,
+            malformed: false,
+            recycled_attrs: Vec::new(),
+        }
     }
 
-    fn next_ev(&mut self) -> Option<Ev> {
+    fn next_ev(&mut self) -> Option<Ev<'a>> {
         loop {
             if self.s.is_empty() {
                 return None;
@@ -940,7 +1180,7 @@ impl<'a> XmlIter<'a> {
                 let end = self.s.find('<').unwrap_or(self.s.len());
                 let raw = &self.s[..end];
                 self.s = &self.s[end..];
-                let text = xml_unescape(raw);
+                let text = xml_unescape_cow(raw);
                 if text.is_empty() {
                     continue;
                 }
@@ -952,15 +1192,27 @@ impl<'a> XmlIter<'a> {
             // Closing tag
             if self.s.starts_with('/') {
                 self.s = &self.s[1..];
-                let end = self.s.find('>').unwrap_or(self.s.len());
-                let name = self.s[..end].trim().to_string();
-                self.s = &self.s[(end + 1).min(self.s.len())..];
+                let Some(end) = self.s.find('>') else {
+                    self.malformed = true;
+                    self.s = "";
+                    return None;
+                };
+                let name = self.s[..end].trim();
+                self.s = &self.s[end + 1..];
+                if name.is_empty() {
+                    self.malformed = true;
+                    return None;
+                }
                 return Some(Ev::Close(name));
             }
 
             // Comment
             if self.s.starts_with("!--") {
-                let end = self.s.find("-->").map(|p| p + 3).unwrap_or(self.s.len());
+                let Some(end) = self.s.find("-->").map(|p| p + 3) else {
+                    self.malformed = true;
+                    self.s = "";
+                    return None;
+                };
                 self.s = &self.s[end..];
                 continue;
             }
@@ -968,24 +1220,44 @@ impl<'a> XmlIter<'a> {
             // CDATA
             if self.s.starts_with("![CDATA[") {
                 self.s = &self.s[8..];
-                let end = self.s.find("]]>").unwrap_or(self.s.len());
-                let text = self.s[..end].to_string();
-                self.s = &self.s[(end + 3).min(self.s.len())..];
+                let Some(end) = self.s.find("]]>") else {
+                    self.malformed = true;
+                    self.s = "";
+                    return None;
+                };
+                let text = Cow::Borrowed(&self.s[..end]);
+                self.s = &self.s[end + 3..];
                 if !text.is_empty() {
                     return Some(Ev::Text(text));
                 }
                 continue;
             }
 
-            // Processing instruction or DOCTYPE
-            if self.s.starts_with('?') || self.s.starts_with('!') {
-                let end = self.s.find('>').map(|p| p + 1).unwrap_or(self.s.len());
+            // Processing instructions must use XML's `?>` terminator. Any other
+            // declaration is rejected: DTD/entity declarations are forbidden,
+            // and silently skipping an unknown `<!...>` construct would turn
+            // malformed input into a partial document.
+            if self.s.starts_with('?') {
+                let Some(end) = self.s.find("?>").map(|p| p + 2) else {
+                    self.malformed = true;
+                    self.s = "";
+                    return None;
+                };
                 self.s = &self.s[end..];
                 continue;
             }
+            if self.s.starts_with('!') {
+                self.malformed = true;
+                self.s = "";
+                return None;
+            }
 
             // Opening / self-closing tag
-            let tag_end = find_tag_close(self.s);
+            let Some(tag_end) = find_tag_close(self.s) else {
+                self.malformed = true;
+                self.s = "";
+                return None;
+            };
             let tag_inner = self.s[..tag_end].trim_end();
             let self_close = tag_inner.ends_with('/');
             let tag_body = if self_close {
@@ -998,42 +1270,62 @@ impl<'a> XmlIter<'a> {
             let name_end = tag_body
                 .find(|c: char| c.is_ascii_whitespace())
                 .unwrap_or(tag_body.len());
-            let name = tag_body[..name_end].to_string();
-            let attrs = parse_attrs(&tag_body[name_end..]);
-
+            let name = &tag_body[..name_end];
+            let attrs = match parse_attrs_strict(
+                &tag_body[name_end..],
+                std::mem::take(&mut self.recycled_attrs),
+            ) {
+                Ok(attrs) if !name.is_empty() => attrs,
+                _ => {
+                    self.malformed = true;
+                    return None;
+                }
+            };
             if self_close {
                 return Some(Ev::SelfClose(name, attrs));
             }
             return Some(Ev::Open(name, attrs));
         }
     }
+
+    /// Worksheet consumers return each fully processed event's storage. Names
+    /// still borrow the immutable XML, while owned entity-expanded values are
+    /// dropped on clear, exactly as when the event was previously dropped.
+    fn recycle_attributes(&mut self, event: Ev<'a>) {
+        if let Ev::Open(_, mut attrs) | Ev::SelfClose(_, mut attrs) = event {
+            attrs.clear();
+            self.recycled_attrs = attrs;
+        }
+    }
 }
 
 /// Find the byte position of the unquoted `>` that closes the current tag body.
-fn find_tag_close(s: &str) -> usize {
+fn find_tag_close(s: &str) -> Option<usize> {
     let mut in_quote = false;
-    let mut qchar = '"';
-    for (i, c) in s.char_indices() {
+    let mut qchar = b'"';
+    // XML delimiters are ASCII; byte scanning preserves UTF-8 boundaries while
+    // avoiding decoding every character in a quoted attribute value.
+    for (i, &c) in s.as_bytes().iter().enumerate() {
         if in_quote {
             if c == qchar {
                 in_quote = false;
             }
         } else {
             match c {
-                '"' | '\'' => {
+                b'"' | b'\'' => {
                     in_quote = true;
                     qchar = c;
                 }
-                '>' => return i,
+                b'>' => return Some(i),
                 _ => {}
             }
         }
     }
-    s.len()
+    None
 }
 
 /// Parse ` name="value" ...` attribute string.
-fn parse_attrs(mut s: &str) -> Vec<Attr> {
+fn parse_attrs(mut s: &str) -> Vec<Attr<'_>> {
     let mut attrs = vec![];
     loop {
         s = s.trim_start();
@@ -1041,7 +1333,7 @@ fn parse_attrs(mut s: &str) -> Vec<Attr> {
             break;
         }
         let Some(eq) = s.find('=') else { break };
-        let name = s[..eq].trim().to_string();
+        let name = s[..eq].trim();
         if name.is_empty() {
             break;
         }
@@ -1052,18 +1344,61 @@ fn parse_attrs(mut s: &str) -> Vec<Attr> {
         }
         s = &s[1..]; // skip opening quote
         let end = s.find(quote).unwrap_or(s.len());
-        let value = xml_unescape(&s[..end]);
+        let value = xml_unescape_cow(&s[..end]);
         s = &s[(end + 1).min(s.len())..];
         attrs.push(Attr { name, value });
     }
     attrs
 }
 
-fn attr_get<'a>(attrs: &'a [Attr], name: &str) -> Option<&'a str> {
+/// Parse and validate attributes in one pass. `XmlIter` uses this strict path so
+/// malformed attributes cannot be silently truncated into a partial element.
+/// Other targeted XML helpers intentionally retain the permissive `parse_attrs`.
+fn parse_attrs_strict<'a>(mut s: &'a str, mut attrs: Vec<Attr<'a>>) -> Result<Vec<Attr<'a>>, ()> {
+    debug_assert!(attrs.is_empty());
+    loop {
+        s = s.trim_start();
+        if s.is_empty() {
+            return Ok(attrs);
+        }
+        let Some(eq) = s.find('=') else {
+            return Err(());
+        };
+        let name = s[..eq].trim();
+        if name.is_empty()
+            || name
+                .chars()
+                .any(|c| c.is_ascii_whitespace() || c == '<' || c == '>')
+        {
+            return Err(());
+        }
+        s = s[eq + 1..].trim_start();
+        let Some(quote) = s.chars().next() else {
+            return Err(());
+        };
+        if quote != '"' && quote != '\'' {
+            return Err(());
+        }
+        s = &s[1..];
+        let Some(end) = s.find(quote) else {
+            return Err(());
+        };
+        if s[..end].contains('<') {
+            return Err(());
+        }
+        attrs.push(Attr {
+            name,
+            value: xml_unescape_cow(&s[..end]),
+        });
+        s = &s[end + 1..];
+    }
+}
+
+fn attr_get<'a>(attrs: &'a [Attr<'_>], name: &str) -> Option<&'a str> {
     attrs
         .iter()
         .find(|a| a.name == name || a.name.split(':').next_back() == Some(name))
-        .map(|a| a.value.as_str())
+        .map(|a| a.value.as_ref())
 }
 
 /// True when a named attribute is present and its value is a "true" xsd:boolean literal —
@@ -1074,7 +1409,7 @@ fn attr_get<'a>(attrs: &'a [Attr], name: &str) -> Option<&'a str> {
 /// the oracle's own writer, not a hypothetical) — so a "1"-only check silently never
 /// recognized an oracle-written hidden column at all. Used for both `<row>` and `<col>`
 /// so the two stay consistent rather than each hardcoding its own literal.
-fn attr_is_true(attrs: &[Attr], name: &str) -> bool {
+fn attr_is_true(attrs: &[Attr<'_>], name: &str) -> bool {
     matches!(
         attr_get(attrs, name),
         Some("1") | Some("true") | Some("TRUE")
@@ -1087,9 +1422,9 @@ fn attr_is_true(attrs: &[Attr], name: &str) -> bool {
 // would otherwise rescan to the end of the string).
 const MAX_ENTITY_BODY_LEN: usize = 12;
 
-pub(crate) fn xml_unescape(s: &str) -> String {
+fn xml_unescape_cow(s: &str) -> Cow<'_, str> {
     if !s.contains('&') {
-        return s.to_string();
+        return Cow::Borrowed(s);
     }
     // Single forward pass, each '&...;' consumed at most once — chained
     // .replace() calls (the previous implementation) double-unescape
@@ -1139,14 +1474,407 @@ pub(crate) fn xml_unescape(s: &str) -> String {
         }
     }
     out.push_str(rest);
-    out
+    Cow::Owned(out)
+}
+
+pub(crate) fn xml_unescape(s: &str) -> String {
+    xml_unescape_cow(s).into_owned()
 }
 
 // ── Helper: read a ZIP entry into a String ────────────────────────────────────
 
-/// 64 MB decompressed cap per entry — enough for any real spreadsheet XML.
-const ZIP_ENTRY_MAX_BYTES: u64 = 64 * 1024 * 1024;
+/// Per-entry decompressed cap. Large worksheets need more room than the previous 64 MB
+/// ceiling, but an explicit limit keeps malformed XML from turning one read into an
+/// unbounded allocation.
+const ZIP_ENTRY_MAX_BYTES: u64 = 256 * 1024 * 1024;
+const ZIP_MAX_ENTRIES: usize = 10_000;
+const ZIP_MAX_TOTAL_BYTES: u64 = 1024 * 1024 * 1024;
+const ZIP_MAX_COMPRESSION_RATIO: u64 = 1_000;
+const XML_MAX_ELEMENTS: usize = 1_000_000;
+const XML_MAX_ATTRIBUTES: usize = 2_000_000;
+const XML_MAX_ATTRIBUTE_VALUE_BYTES: usize = 16 * 1024 * 1024;
+const XML_MAX_TEXT_NODE_BYTES: usize = 64 * 1024 * 1024;
+const XML_MAX_DEPTH: usize = 1_024;
+const WORKBOOK_MAX_SHEETS: usize = 4_096;
+const SHEET_MAX_CELLS: usize = 5_000_000;
+const SHEET_MAX_MERGES: usize = 1_000_000;
+const SHARED_STRINGS_MAX_COUNT: usize = 1_000_000;
+const SHARED_STRINGS_MAX_TOTAL_BYTES: usize = 256 * 1024 * 1024;
+const DEFINED_NAMES_MAX_COUNT: usize = 100_000;
+const DEFINED_NAME_MAX_TEXT_BYTES: usize = 1024 * 1024;
 
+fn validate_workbook_model_count(sheet_count: usize) -> Result<(), String> {
+    if sheet_count > WORKBOOK_MAX_SHEETS {
+        return Err(format!(
+            "workbook has too many sheets ({}; maximum is {})",
+            sheet_count, WORKBOOK_MAX_SHEETS
+        ));
+    }
+    Ok(())
+}
+
+fn validate_shared_strings(strings: &[String]) -> Result<(), String> {
+    if strings.len() > SHARED_STRINGS_MAX_COUNT {
+        return Err(format!(
+            "shared strings table is too large ({}; maximum is {})",
+            strings.len(),
+            SHARED_STRINGS_MAX_COUNT
+        ));
+    }
+    let total_bytes = strings
+        .iter()
+        .try_fold(0usize, |total, value| total.checked_add(value.len()));
+    let Some(total_bytes) = total_bytes else {
+        return Err("shared strings size overflows usize".to_string());
+    };
+    if total_bytes > SHARED_STRINGS_MAX_TOTAL_BYTES {
+        return Err(format!(
+            "shared strings table is too large ({} bytes; maximum is {} bytes)",
+            total_bytes, SHARED_STRINGS_MAX_TOTAL_BYTES
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(any(test, feature = "python"))]
+fn validate_shared_string_refs(xml: &str, shared: &[String]) -> Result<(), String> {
+    let mut iter = XmlIter::new(xml);
+    let mut cell_type: Option<String> = None;
+    let mut in_value = false;
+    let mut value = String::new();
+
+    while let Some(ev) = iter.next_ev() {
+        let is_self_close = matches!(&ev, Ev::SelfClose(_, _));
+        match &ev {
+            Ev::Open(tag, attrs) | Ev::SelfClose(tag, attrs) => {
+                let local = tag.split(':').next_back().unwrap_or(tag);
+                match local {
+                    "c" => {
+                        cell_type = attr_get(attrs, "t").map(str::to_string);
+                    }
+                    "v" => {
+                        in_value = true;
+                        value.clear();
+                        if is_self_close && cell_type.as_deref() == Some("s") {
+                            return Err("shared string cell has an invalid index".to_string());
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            Ev::Close(tag) => {
+                let local = tag.split(':').next_back().unwrap_or(tag);
+                match local {
+                    "v" => {
+                        if in_value && cell_type.as_deref() == Some("s") {
+                            let index = value
+                                .trim()
+                                .parse::<usize>()
+                                .ok()
+                                .filter(|&index| index < shared.len());
+                            if index.is_none() {
+                                return Err(
+                                    "shared string cell refers to an invalid index".to_string()
+                                );
+                            }
+                        }
+                        in_value = false;
+                    }
+                    "c" => cell_type = None,
+                    _ => {}
+                }
+            }
+            Ev::Text(text) if in_value => value.push_str(text),
+            Ev::Text(_) => {}
+        }
+    }
+    Ok(())
+}
+
+fn validate_sheet_model(
+    sheet_name: &str,
+    cell_count: usize,
+    merged_range_count: usize,
+) -> Result<(), String> {
+    if cell_count > SHEET_MAX_CELLS {
+        return Err(format!(
+            "sheet has too many cells: {sheet_name} ({}; maximum is {})",
+            cell_count, SHEET_MAX_CELLS
+        ));
+    }
+    if merged_range_count > SHEET_MAX_MERGES {
+        return Err(format!(
+            "sheet has too many merged ranges: {sheet_name} ({}; maximum is {})",
+            merged_range_count, SHEET_MAX_MERGES
+        ));
+    }
+    Ok(())
+}
+
+fn validate_zip_entry_metadata(
+    name: &str,
+    uncompressed: u64,
+    compressed: u64,
+    total_before: u64,
+) -> Result<u64, String> {
+    if name.starts_with('/')
+        || name.starts_with('\\')
+        || name.split('/').any(|part| part == "..")
+        || name.contains('\0')
+    {
+        return Err(format!("ZIP entry has an unsafe path: {name}"));
+    }
+    if uncompressed > ZIP_ENTRY_MAX_BYTES {
+        return Err(format!(
+            "ZIP entry is too large: {name} ({} bytes; maximum is {})",
+            uncompressed, ZIP_ENTRY_MAX_BYTES
+        ));
+    }
+    let total_uncompressed = total_before
+        .checked_add(uncompressed)
+        .ok_or_else(|| "ZIP archive uncompressed size overflows u64".to_string())?;
+    if total_uncompressed > ZIP_MAX_TOTAL_BYTES {
+        return Err(format!(
+            "ZIP archive expands beyond the maximum size ({} bytes; maximum is {})",
+            total_uncompressed, ZIP_MAX_TOTAL_BYTES
+        ));
+    }
+    if compressed > 0 && uncompressed / compressed > ZIP_MAX_COMPRESSION_RATIO {
+        return Err(format!(
+            "ZIP entry has an excessive compression ratio: {name} ({}:1; maximum is {}:1)",
+            uncompressed / compressed,
+            ZIP_MAX_COMPRESSION_RATIO
+        ));
+    }
+    Ok(total_uncompressed)
+}
+
+fn validate_zip_archive<R: Read + Seek>(archive: &mut ZipArchive<R>) -> Result<(), String> {
+    let mut budget = ReadBudget::new(&ReadOptions::default())?;
+    validate_zip_archive_with_budget(archive, &mut budget)
+}
+
+fn validate_zip_archive_with_budget<R: Read + Seek>(
+    archive: &mut ZipArchive<R>,
+    budget: &mut ReadBudget,
+) -> Result<(), String> {
+    budget.check()?;
+    if archive.len() > ZIP_MAX_ENTRIES {
+        return Err(format!(
+            "ZIP archive has too many entries ({}; maximum is {})",
+            archive.len(),
+            ZIP_MAX_ENTRIES
+        ));
+    }
+    let mut total_uncompressed = 0u64;
+    for i in 0..archive.len() {
+        budget.check()?;
+        let entry = archive.by_index(i).map_err(|e| e.to_string())?;
+        budget.charge(entry.size(), entry.name())?;
+        total_uncompressed = validate_zip_entry_metadata(
+            entry.name(),
+            entry.size(),
+            entry.compressed_size(),
+            total_uncompressed,
+        )?;
+    }
+    Ok(())
+}
+
+struct XmlBudgetValidator<'xml> {
+    name: String,
+    elements: usize,
+    attributes: usize,
+    depth: usize,
+    open_tags: Vec<&'xml str>,
+    attribute_names: HashSet<&'xml str>,
+    root_seen: bool,
+}
+
+impl<'xml> XmlBudgetValidator<'xml> {
+    fn new(name: &str, xml: &str) -> Result<Self, String> {
+        validate_xml_preamble(name, xml)?;
+        Ok(Self {
+            name: name.to_string(),
+            elements: 0,
+            attributes: 0,
+            depth: 0,
+            open_tags: Vec::new(),
+            attribute_names: HashSet::new(),
+            root_seen: false,
+        })
+    }
+
+    fn observe(&mut self, event: &Ev<'xml>) -> Result<(), String> {
+        match event {
+            Ev::Open(tag, attrs) => self.observe_element(tag, attrs, true),
+            Ev::SelfClose(tag, attrs) => self.observe_element(tag, attrs, false),
+            Ev::Close(tag) => {
+                self.depth = self.depth.checked_sub(1).ok_or_else(|| {
+                    format!("XML document has an unmatched closing tag: {}", self.name)
+                })?;
+                let Some(open_tag) = self.open_tags.pop() else {
+                    return Err(format!(
+                        "XML document has an unmatched closing tag: {}",
+                        self.name
+                    ));
+                };
+                if open_tag != *tag {
+                    return Err(format!(
+                        "XML document has mismatched closing tag: {} (expected </{open_tag}>, got </{tag}>)",
+                        self.name
+                    ));
+                }
+                Ok(())
+            }
+            Ev::Text(text) => {
+                if text.len() > XML_MAX_TEXT_NODE_BYTES {
+                    return Err(format!(
+                        "XML text node is too long: {} (maximum is {} bytes)",
+                        self.name, XML_MAX_TEXT_NODE_BYTES
+                    ));
+                }
+                if self.depth == 0 && !text.trim().is_empty() {
+                    return Err(format!(
+                        "XML document has non-whitespace text outside the root element: {}",
+                        self.name
+                    ));
+                }
+                Ok(())
+            }
+        }
+    }
+
+    fn observe_element(
+        &mut self,
+        tag: &'xml str,
+        attrs: &[Attr<'xml>],
+        opens: bool,
+    ) -> Result<(), String> {
+        if self.depth == 0 && self.root_seen {
+            return Err(format!(
+                "XML document has multiple root elements: {}",
+                self.name
+            ));
+        }
+        if self.depth == 0 {
+            self.root_seen = true;
+        }
+        self.elements = self
+            .elements
+            .checked_add(1)
+            .ok_or_else(|| format!("XML document element count overflows: {}", self.name))?;
+        if self.elements > XML_MAX_ELEMENTS {
+            return Err(format!(
+                "XML document has too many elements: {} (maximum is {})",
+                self.name, XML_MAX_ELEMENTS
+            ));
+        }
+        if opens {
+            self.depth += 1;
+            if self.depth > XML_MAX_DEPTH {
+                return Err(format!(
+                    "XML document is nested too deeply: {} (maximum is {})",
+                    self.name, XML_MAX_DEPTH
+                ));
+            }
+            self.open_tags.push(tag);
+        }
+
+        // Cell/row tags usually have at most a handful of attributes. Compare
+        // those directly, keeping the hash set for larger lists so adversarial
+        // input cannot turn duplicate detection into unbounded quadratic work.
+        let small_attributes = attrs.len() <= 8;
+        if !small_attributes {
+            self.attribute_names.clear();
+        }
+        for (index, attr) in attrs.iter().enumerate() {
+            let duplicate = if small_attributes {
+                attrs[..index]
+                    .iter()
+                    .any(|previous| previous.name == attr.name)
+            } else {
+                !self.attribute_names.insert(attr.name)
+            };
+            if duplicate {
+                return Err(format!(
+                    "XML element has a duplicate attribute: {} ({tag})",
+                    self.name
+                ));
+            }
+            self.attributes = self
+                .attributes
+                .checked_add(1)
+                .ok_or_else(|| format!("XML document attribute count overflows: {}", self.name))?;
+            if self.attributes > XML_MAX_ATTRIBUTES {
+                return Err(format!(
+                    "XML document has too many attributes: {} (maximum is {})",
+                    self.name, XML_MAX_ATTRIBUTES
+                ));
+            }
+            if attr.value.len() > XML_MAX_ATTRIBUTE_VALUE_BYTES {
+                return Err(format!(
+                    "XML attribute value is too long: {} (maximum is {} bytes)",
+                    self.name, XML_MAX_ATTRIBUTE_VALUE_BYTES
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    fn finish(self, malformed: bool) -> Result<(), String> {
+        if malformed {
+            return Err(format!("XML document has malformed syntax: {}", self.name));
+        }
+        if self.depth != 0 {
+            return Err(format!("XML document has unclosed elements: {}", self.name));
+        }
+        if !self.root_seen {
+            return Err(format!("XML document has no root element: {}", self.name));
+        }
+        Ok(())
+    }
+}
+
+fn validate_xml_preamble(name: &str, xml: &str) -> Result<(), String> {
+    if xml
+        .chars()
+        .any(|c| c.is_control() && !matches!(c, '\t' | '\n' | '\r'))
+    {
+        return Err(format!(
+            "XML document contains a forbidden control character: {name}"
+        ));
+    }
+    // Both forbidden literals have the same case-independent ASCII prefix.
+    // Search that prefix once instead of lowercasing windows at every byte in
+    // two whole-document passes. Still inspect EVERY occurrence, even inside
+    // comments/CDATA/attributes, preserving the conservative rejection policy.
+    if xml.match_indices("<!").any(|(index, _)| {
+        let tail = &xml.as_bytes()[index..];
+        [b"<!doctype".as_slice(), b"<!entity".as_slice()]
+            .iter()
+            .any(|needle| {
+                tail.get(..needle.len())
+                    .is_some_and(|value| value.eq_ignore_ascii_case(needle))
+            })
+    }) {
+        return Err(format!(
+            "XML document uses a forbidden DTD or entity declaration: {name}"
+        ));
+    }
+    Ok(())
+}
+
+fn validate_xml_budget(name: &str, xml: &str) -> Result<(), String> {
+    let mut validator = XmlBudgetValidator::new(name, xml)?;
+    let mut iter = XmlIter::new(xml);
+    while let Some(event) = iter.next_ev() {
+        validator.observe(&event)?;
+    }
+    validator.finish(iter.malformed)
+}
+
+#[cfg(feature = "python")]
 fn zip_read_text<R: Read + Seek>(
     archive: &mut ZipArchive<R>,
     name: &str,
@@ -1160,21 +1888,135 @@ fn zip_read_text<R: Read + Seek>(
         .take(ZIP_ENTRY_MAX_BYTES)
         .read_to_string(&mut s)
         .map_err(|e| e.to_string())?;
+    validate_xml_budget(name, &s)?;
     Ok(s)
+}
+
+/// Read wrapper that makes a ZIP entry's decompression loop interruptible at
+/// the underlying reader's byte/chunk boundary. ZIP itself cannot abort a
+/// blocking filesystem read, but every subsequent read observes the shared
+/// deadline and cancellation flag before and after decompression.
+struct BudgetedRead<'a, R> {
+    inner: R,
+    budget: &'a ReadBudget,
+}
+
+impl<R: Read> Read for BudgetedRead<'_, R> {
+    fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+        self.budget.check().map_err(std::io::Error::other)?;
+        let read = self.inner.read(buffer)?;
+        self.budget.check().map_err(std::io::Error::other)?;
+        Ok(read)
+    }
+}
+
+fn zip_read_text_with_budget<R: Read + Seek>(
+    archive: &mut ZipArchive<R>,
+    name: &str,
+    budget: &ReadBudget,
+) -> Result<String, String> {
+    let s = zip_read_text_unvalidated_with_budget(archive, name, budget)?;
+    validate_xml_budget(name, &s)?;
+    Ok(s)
+}
+
+/// Read UTF-8 XML with ZIP/deadline/cancellation limits but leave structural
+/// validation to a parser that consumes the same event stream. Only worksheet
+/// parsing uses this path; every other XML part keeps `zip_read_text_with_budget`.
+fn zip_read_text_unvalidated_with_budget<R: Read + Seek>(
+    archive: &mut ZipArchive<R>,
+    name: &str,
+    budget: &ReadBudget,
+) -> Result<String, String> {
+    let entry = archive
+        .by_name(name)
+        .map_err(|e| format!("{}: {}", name, e))?;
+    let mut s = String::new();
+    BudgetedRead {
+        inner: entry.take(ZIP_ENTRY_MAX_BYTES),
+        budget,
+    }
+    .read_to_string(&mut s)
+    .map_err(|e| e.to_string())?;
+    Ok(s)
+}
+
+#[cfg(feature = "python")]
+pub(crate) fn validate_zip_archive_for_stream<R: Read + Seek>(
+    archive: &mut ZipArchive<R>,
+) -> Result<(), String> {
+    validate_zip_archive(archive)
+}
+#[cfg(feature = "python")]
+pub(crate) fn zip_read_text_for_stream<R: Read + Seek>(
+    archive: &mut ZipArchive<R>,
+    name: &str,
+) -> Result<String, String> {
+    zip_read_text(archive, name)
+}
+#[cfg(feature = "python")]
+pub(crate) fn xlsx_workbook_sheets_for_stream(
+    xml: &str,
+) -> Vec<(String, String, Option<String>, Option<String>)> {
+    xlsx_workbook_sheets(xml)
+}
+#[cfg(feature = "python")]
+pub(crate) fn validate_workbook_sheet_elements_for_stream(xml: &str) -> Result<(), String> {
+    validate_workbook_sheet_elements(xml)
+}
+#[cfg(feature = "python")]
+pub(crate) fn validate_workbook_sheets_for_stream(
+    sheets: &[(String, String, Option<String>, Option<String>)],
+) -> Result<(), String> {
+    validate_workbook_sheets(sheets)
+}
+#[cfg(feature = "python")]
+pub(crate) fn xlsx_worksheet_rels_for_stream(xml: &str) -> Result<HashMap<String, String>, String> {
+    xlsx_worksheet_rels(xml)
+}
+#[cfg(feature = "python")]
+pub(crate) fn xlsx_sheet_cells_for_stream(xml: &str, shared: &[String]) -> XlsxSheetData {
+    xlsx_sheet_cells(xml, shared, &[])
+}
+pub(crate) fn xlsx_shared_strings_for_stream(xml: &str) -> Vec<String> {
+    xlsx_shared_strings(xml)
+}
+#[cfg(feature = "python")]
+pub(crate) fn validate_shared_strings_for_stream(strings: &[String]) -> Result<(), String> {
+    validate_shared_strings(strings)
+}
+#[cfg(feature = "python")]
+pub(crate) fn validate_shared_string_refs_for_stream(
+    xml: &str,
+    shared: &[String],
+) -> Result<(), String> {
+    validate_shared_string_refs(xml, shared)
 }
 
 // ── Raw ZIP passthrough (Milestone: safe round-trip) ───────────────────────────
 
-/// Every ZIP entry's decompressed bytes, keyed by entry name — used only by
-/// `save_xlsx_impl` (`src/lib.rs`) at save time, to pass through OOXML parts this
-/// reader doesn't parse (`xl/vbaProject.bin`, tables, named ranges, full styles,
-/// etc.) unchanged instead of losing them on every save. Not called from any
-/// read-only path (`check`/`snapshot`/`diagnose`/`test-workbook` never write a
-/// workbook back out), so those paths never pay this cost — see
-/// `docs/xlsx-architecture.md`.
+/// Save-analysis XML/rels entry bytes and all entry names, keyed by entry name —
+/// used only by `save_xlsx_impl` (`src/lib.rs`) at save time. Unneeded XML and
+/// binary payloads are represented by an empty vector and reopened from the
+/// source ZIP at output time, so images, VBA projects, drawings, and properties
+/// do not occupy a large save-time memory copy. Not called from any read-only
+/// path (`check`/`snapshot`/`diagnose`/`test-workbook` never write a workbook
+/// back out), so those paths never pay this cost — see `docs/xlsx-architecture.md`.
+#[cfg(test)]
 pub(crate) fn read_raw_zip_entries(path: &str) -> Result<HashMap<String, Vec<u8>>, String> {
     let file = std::fs::File::open(path).map_err(|e| e.to_string())?;
     let mut archive = ZipArchive::new(file).map_err(|e| e.to_string())?;
+    validate_zip_archive(&mut archive)?;
+    read_raw_zip_entries_from_archive(&mut archive)
+}
+
+/// Read save-path entries from an already validated source archive. Keeping the
+/// archive open lets the writer reuse the same file handle for raw passthrough,
+/// avoiding a second open and full validation while preserving the validated
+/// source snapshot used by the save.
+pub(crate) fn read_raw_zip_entries_from_archive<R: Read + Seek>(
+    archive: &mut ZipArchive<R>,
+) -> Result<HashMap<String, Vec<u8>>, String> {
     let mut out = HashMap::new();
     for i in 0..archive.len() {
         let mut entry = archive.by_index(i).map_err(|e| e.to_string())?;
@@ -1183,14 +2025,193 @@ pub(crate) fn read_raw_zip_entries(path: &str) -> Result<HashMap<String, Vec<u8>
         }
         let name = entry.name().to_string();
         let mut buf = Vec::new();
-        entry
-            .by_ref()
-            .take(ZIP_ENTRY_MAX_BYTES)
-            .read_to_end(&mut buf)
-            .map_err(|e| e.to_string())?;
+        // Relationship analysis and the writer's structural edits need these
+        // XML families. Other XML parts are passed through on demand by the
+        // save path, avoiding retention of large drawings/charts/properties.
+        let needed_for_save = name.ends_with(".rels")
+            || name == "[Content_Types].xml"
+            || name == "xl/workbook.xml"
+            || name == "xl/styles.xml"
+            || name.starts_with("xl/worksheets/");
+        if needed_for_save {
+            entry
+                .by_ref()
+                .take(ZIP_ENTRY_MAX_BYTES)
+                .read_to_end(&mut buf)
+                .map_err(|e| e.to_string())?;
+        }
         out.insert(name, buf);
     }
     Ok(out)
+}
+
+/// Read one bounded ZIP entry, returning `None` when the entry is absent.
+/// The archive is still fully validated before the lookup result is returned.
+///
+/// This is intentionally separate from `read_raw_zip_entries`: callers that need a
+/// single small XML part (for example `xl/workbook.xml` for defined names) should not
+/// pay the save-path analysis cost of reading worksheet/table XML as well.
+pub(crate) fn read_raw_zip_entry_if_present(
+    path: &str,
+    name: &str,
+) -> Result<Option<Vec<u8>>, String> {
+    let file = std::fs::File::open(path).map_err(|e| e.to_string())?;
+    let mut archive = ZipArchive::new(file).map_err(|e| e.to_string())?;
+    validate_zip_archive(&mut archive)?;
+    let Ok(mut entry) = archive.by_name(name) else {
+        return Ok(None);
+    };
+    let mut buf = Vec::with_capacity(entry.size().min(ZIP_ENTRY_MAX_BYTES) as usize);
+    entry
+        .by_ref()
+        .take(ZIP_ENTRY_MAX_BYTES)
+        .read_to_end(&mut buf)
+        .map_err(|e| e.to_string())?;
+    if buf.len() as u64 != entry.size() {
+        return Err(format!(
+            "ZIP entry was truncated: {name} ({} of {} bytes)",
+            buf.len(),
+            entry.size()
+        ));
+    }
+    Ok(Some(buf))
+}
+
+/// Copy one deferred passthrough entry directly from an open source archive to
+/// the destination writer. It never allocates a buffer proportional to the
+/// entry payload.
+pub(crate) fn copy_raw_zip_entry<R: Read + Seek, W: std::io::Write>(
+    archive: &mut ZipArchive<R>,
+    name: &str,
+    out: &mut W,
+) -> Result<(), String> {
+    let mut entry = archive.by_name(name).map_err(|e| e.to_string())?;
+    let expected = entry.size();
+    let copied = std::io::copy(&mut entry.by_ref().take(ZIP_ENTRY_MAX_BYTES), out)
+        .map_err(|e| e.to_string())?;
+    if copied != expected {
+        return Err(format!(
+            "ZIP passthrough entry was truncated: {name} ({copied} of {expected} bytes)"
+        ));
+    }
+    Ok(())
+}
+
+pub(crate) fn validate_raw_zip_archive<R: Read + Seek>(
+    archive: &mut ZipArchive<R>,
+) -> Result<(), String> {
+    validate_zip_archive(archive)
+}
+
+#[cfg(test)]
+mod raw_zip_passthrough_tests {
+    use super::{copy_raw_zip_entry, read_raw_zip_entries, read_raw_zip_entry_if_present};
+    use std::io::{Cursor, Write};
+    use zip::write::SimpleFileOptions;
+
+    struct ShortWriter {
+        bytes: Vec<u8>,
+        limit: usize,
+    }
+
+    impl Write for ShortWriter {
+        fn write(&mut self, input: &[u8]) -> std::io::Result<usize> {
+            let count = input.len().min(self.limit.saturating_sub(self.bytes.len()));
+            self.bytes.extend_from_slice(&input[..count]);
+            Ok(count)
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    fn archive_bytes() -> Vec<u8> {
+        let mut writer = zip::ZipWriter::new(Cursor::new(Vec::new()));
+        writer
+            .start_file("xl/media/image1.bin", SimpleFileOptions::default())
+            .unwrap();
+        writer.write_all(b"payload").unwrap();
+        writer.finish().unwrap().into_inner()
+    }
+
+    #[test]
+    fn read_index_keeps_deferred_payloads_out_of_memory() {
+        let mut writer = zip::ZipWriter::new(Cursor::new(Vec::new()));
+        writer
+            .start_file("xl/worksheets/sheet1.xml", SimpleFileOptions::default())
+            .unwrap();
+        writer.write_all(b"<worksheet/>").unwrap();
+        writer
+            .start_file("xl/media/image1.bin", SimpleFileOptions::default())
+            .unwrap();
+        let payload: Vec<u8> = (0..1024 * 1024).map(|i| (i % 251) as u8).collect();
+        writer.write_all(&payload).unwrap();
+        let bytes = writer.finish().unwrap().into_inner();
+
+        let path = std::env::temp_dir().join(format!(
+            "elixcee-raw-zip-{}-{}.xlsx",
+            std::process::id(),
+            std::thread::current().name().unwrap_or("test")
+        ));
+        std::fs::write(&path, bytes).unwrap();
+        let entries = read_raw_zip_entries(path.to_str().unwrap()).unwrap();
+        std::fs::remove_file(&path).unwrap();
+
+        assert_eq!(
+            entries.get("xl/worksheets/sheet1.xml").unwrap(),
+            b"<worksheet/>"
+        );
+        assert!(entries.get("xl/media/image1.bin").unwrap().is_empty());
+    }
+
+    #[test]
+    fn copies_deferred_entry_without_changing_payload() {
+        let mut archive = zip::ZipArchive::new(Cursor::new(archive_bytes())).unwrap();
+        let mut output = Vec::new();
+        copy_raw_zip_entry(&mut archive, "xl/media/image1.bin", &mut output).unwrap();
+        assert_eq!(output, b"payload");
+    }
+
+    #[test]
+    fn reads_only_the_requested_entry() {
+        let mut writer = zip::ZipWriter::new(Cursor::new(Vec::new()));
+        writer
+            .start_file("xl/workbook.xml", SimpleFileOptions::default())
+            .unwrap();
+        writer.write_all(b"<workbook/>").unwrap();
+        writer
+            .start_file("xl/worksheets/sheet1.xml", SimpleFileOptions::default())
+            .unwrap();
+        let payload: Vec<u8> = (0..1024 * 1024).map(|i| (i % 251) as u8).collect();
+        writer.write_all(&payload).unwrap();
+        let bytes = writer.finish().unwrap().into_inner();
+        let path = std::env::temp_dir().join(format!(
+            "elixcee-raw-entry-{}-{}.xlsx",
+            std::process::id(),
+            std::thread::current().name().unwrap_or("test")
+        ));
+        std::fs::write(&path, bytes).unwrap();
+
+        let workbook = read_raw_zip_entry_if_present(path.to_str().unwrap(), "xl/workbook.xml")
+            .unwrap()
+            .unwrap();
+
+        std::fs::remove_file(&path).unwrap();
+        assert_eq!(workbook, b"<workbook/>");
+    }
+
+    #[test]
+    fn rejects_a_destination_that_cannot_accept_the_full_payload() {
+        let mut archive = zip::ZipArchive::new(Cursor::new(archive_bytes())).unwrap();
+        let mut output = ShortWriter {
+            bytes: Vec::new(),
+            limit: 3,
+        };
+        let error = copy_raw_zip_entry(&mut archive, "xl/media/image1.bin", &mut output);
+        assert!(error.is_err());
+        assert_eq!(output.bytes, b"pay");
+    }
 }
 
 /// `(defaults, overrides)` — see `content_type_decls`.
@@ -1205,7 +2226,7 @@ pub(crate) fn content_type_decls(xml: &str) -> ContentTypeDecls {
     let mut overrides = vec![];
     let mut iter = XmlIter::new(xml);
     while let Some(ev) = iter.next_ev() {
-        if let Ev::Open(ref tag, ref attrs) | Ev::SelfClose(ref tag, ref attrs) = ev {
+        if let Ev::Open(tag, ref attrs) | Ev::SelfClose(tag, ref attrs) = ev {
             let local = tag.split(':').next_back().unwrap_or(tag);
             match local {
                 "Default" => {
@@ -1238,7 +2259,7 @@ pub(crate) fn content_type_decls(xml: &str) -> ContentTypeDecls {
 /// selectively — see docs/xlsx-worksheet-preservation-0.10.0-design.md §8.
 pub(crate) fn extract_root_attrs(xml: &str, local_name: &str) -> Option<String> {
     let (start, tag_close_rel, full_name) = find_next_open_tag(xml, 0)?;
-    if full_name.rsplit(':').next().unwrap_or(&full_name) != local_name {
+    if full_name.rsplit(':').next().unwrap_or(full_name) != local_name {
         return None;
     }
     let after_name = &xml[start + 1 + full_name.len()..];
@@ -1300,10 +2321,16 @@ pub(crate) fn ensure_r_prefix_bound(attrs: &str) -> Option<String> {
 /// (`sheetViews`, `sheetPr`, `sheetFormatPr`, `dataValidations`, `autoFilter`,
 /// `pageMargins` don't self-nest).
 pub(crate) fn extract_raw_element(xml: &str, local_name: &str) -> Option<String> {
+    // XML tag names are literal bytes (not entity-expanded). A missing local
+    // name therefore proves absence, without visiting every cell tag in a large
+    // sheet. A hit is only a prefilter: the normal tag-boundary checks still run.
+    if !xml.contains(local_name) {
+        return None;
+    }
     let mut search_from = 0;
     loop {
         let (tag_start, tag_close_rel, full_name) = find_next_open_tag(xml, search_from)?;
-        if full_name.rsplit(':').next().unwrap_or(&full_name) != local_name {
+        if full_name.rsplit(':').next().unwrap_or(full_name) != local_name {
             search_from = tag_start + 1;
             continue;
         }
@@ -1332,10 +2359,13 @@ pub(crate) fn extract_raw_element(xml: &str, local_name: &str) -> Option<String>
 /// — its children are `cfRule`/`extLst`, never another `conditionalFormatting`). Stops the
 /// scan (rather than misparsing) if an opening tag's matching close tag is missing.
 pub(crate) fn extract_all_raw_elements(xml: &str, local_name: &str) -> Vec<String> {
+    if !xml.contains(local_name) {
+        return Vec::new();
+    }
     let mut out = Vec::new();
     let mut search_from = 0;
     while let Some((tag_start, tag_close_rel, full_name)) = find_next_open_tag(xml, search_from) {
-        if full_name.rsplit(':').next().unwrap_or(&full_name) != local_name {
+        if full_name.rsplit(':').next().unwrap_or(full_name) != local_name {
             search_from = tag_start + 1;
             continue;
         }
@@ -1363,11 +2393,12 @@ pub(crate) fn extract_all_raw_elements(xml: &str, local_name: &str) -> Vec<Strin
 /// Shared scan primitive for `extract_root_attrs`/`extract_raw_element`: finds the next
 /// opening or self-closing tag at or after byte offset `from` (skipping closing tags,
 /// comments, CDATA, and processing instructions/XML declarations), returning
-/// `(tag_start, tag_close_rel, local_name)` — `tag_start` is the byte offset of the tag's
+/// `(tag_start, tag_close_rel, full_name)` — `tag_start` is the byte offset of the tag's
 /// `<`, `tag_close_rel` is the offset of its terminating unquoted `>` relative to just
-/// after the tag name, and `local_name` has any namespace prefix stripped. `None` if no
-/// more tags exist.
-fn find_next_open_tag(xml: &str, mut search_from: usize) -> Option<(usize, usize, String)> {
+/// after the tag name, and `full_name` borrows the original bytes, including its
+/// namespace prefix, instead of allocating a string for each scanned cell tag.
+/// `None` if no more tags exist.
+fn find_next_open_tag(xml: &str, mut search_from: usize) -> Option<(usize, usize, &str)> {
     loop {
         let rel = xml[search_from..].find('<')?;
         let tag_start = search_from + rel;
@@ -1379,9 +2410,9 @@ fn find_next_open_tag(xml: &str, mut search_from: usize) -> Option<(usize, usize
         let name_end = after_lt
             .find(|c: char| c.is_ascii_whitespace() || c == '>' || c == '/')
             .unwrap_or(after_lt.len());
-        let full_name = after_lt[..name_end].to_string();
+        let full_name = &after_lt[..name_end];
         let rest = &after_lt[name_end..];
-        let tag_close_rel = find_tag_close(rest);
+        let tag_close_rel = find_tag_close(rest)?;
         return Some((tag_start, tag_close_rel, full_name));
     }
 }
@@ -1414,7 +2445,7 @@ pub(crate) fn extract_hyperlinks(xml: &str, include_relationship_backed: bool) -
     while let Some((tag_start, tag_close_rel, full_name)) =
         find_next_open_tag(&container, search_from)
     {
-        if full_name.rsplit(':').next().unwrap_or(&full_name) != "hyperlink" {
+        if full_name.rsplit(':').next().unwrap_or(full_name) != "hyperlink" {
             search_from = tag_start + 1;
             continue;
         }
@@ -1452,7 +2483,7 @@ pub(crate) fn extract_defined_name_elements(xml: &str) -> Vec<(String, (usize, u
     while let Some((tag_start, tag_close_rel, full_name)) =
         find_next_open_tag(&container, search_from)
     {
-        if full_name.rsplit(':').next().unwrap_or(&full_name) != "definedName" {
+        if full_name.rsplit(':').next().unwrap_or(full_name) != "definedName" {
             search_from = tag_start + 1;
             continue;
         }
@@ -1634,6 +2665,36 @@ mod opaque_fragment_tests {
     fn extract_raw_element_returns_none_when_absent() {
         let xml = "<worksheet><sheetData/></worksheet>";
         assert_eq!(extract_raw_element(xml, "sheetViews"), None);
+    }
+
+    #[test]
+    fn opaque_tag_scanner_borrows_prefixed_unicode_name() {
+        let xml = "<x:表示 flag='a>b'/>";
+        let (start, close, name) = find_next_open_tag(xml, 0).unwrap();
+        assert_eq!(start, 0);
+        assert_eq!(name, "x:表示");
+        assert_eq!(name.as_ptr(), xml[1..].as_ptr());
+        assert_eq!(1 + name.len() + close, xml.len() - 1);
+    }
+
+    #[test]
+    fn opaque_name_prefilter_still_requires_exact_tag_boundaries() {
+        let xml = concat!(
+            "<worksheet note='sheetViews'><sheetData><row><c><v>",
+            "sheetViews conditionalFormatting</v></c></row></sheetData>",
+            "<sheetViewsExtra/><conditionalFormattingRule/></worksheet>"
+        );
+        assert_eq!(extract_raw_element(xml, "sheetViews"), None);
+        assert!(extract_all_raw_elements(xml, "conditionalFormatting").is_empty());
+    }
+
+    #[test]
+    fn opaque_name_prefilter_preserves_prefixes_quotes_and_repeated_fragments() {
+        let first = "<x:表示 note='a>b'>日本語 &amp; text</x:表示>";
+        let second = "<y:表示 value=\"sheetViews\"/>";
+        let xml = format!("<root xmlns:x='urn:x' xmlns:y='urn:y'>{first}{second}</root>");
+        assert_eq!(extract_raw_element(&xml, "表示").as_deref(), Some(first));
+        assert_eq!(extract_all_raw_elements(&xml, "表示"), vec![first, second]);
     }
 
     #[test]
@@ -2241,7 +3302,7 @@ pub(crate) fn workbook_rels_decls(xml: &str) -> Vec<(String, String)> {
     let mut rels = vec![];
     let mut iter = XmlIter::new(xml);
     while let Some(ev) = iter.next_ev() {
-        if let Ev::Open(ref tag, ref attrs) | Ev::SelfClose(ref tag, ref attrs) = ev {
+        if let Ev::Open(tag, ref attrs) | Ev::SelfClose(tag, ref attrs) = ev {
             let local = tag.split(':').next_back().unwrap_or(tag);
             if local == "Relationship"
                 && let (Some(ty), Some(target)) =
@@ -2254,14 +3315,68 @@ pub(crate) fn workbook_rels_decls(xml: &str) -> Vec<(String, String)> {
     rels
 }
 
+/// Same relationship declarations as workbook_rels_decls, retaining the source Id.
+/// Writer-owned relationship files are regenerated with fresh ids, so owner XML that
+/// carries an r:id needs this three-field view to be safely rewritten.
+pub(crate) fn workbook_rels_decls_with_ids(xml: &str) -> Vec<(String, String, String)> {
+    let mut rels = vec![];
+    let mut iter = XmlIter::new(xml);
+    while let Some(ev) = iter.next_ev() {
+        if let Ev::Open(tag, ref attrs) | Ev::SelfClose(tag, ref attrs) = ev {
+            let local = tag.split(':').next_back().unwrap_or(tag);
+            if local == "Relationship"
+                && let (Some(id), Some(ty), Some(target)) = (
+                    attr_get(attrs, "Id"),
+                    attr_get(attrs, "Type"),
+                    attr_get(attrs, "Target"),
+                )
+            {
+                rels.push((id.to_string(), ty.to_string(), target.to_string()));
+            }
+        }
+    }
+    rels
+}
+
 // ── XLSX reader ───────────────────────────────────────────────────────────────
 
-fn read_xlsx(path: &str) -> Result<Vec<WorkbookSheet>, String> {
+/// Resolves a worksheet relationship target relative to `xl/` and rejects targets that
+/// escape the ZIP package root. Relationship targets are package paths, not filesystem
+/// paths; keeping this validation here makes the normal and streaming readers share the
+/// same boundary.
+pub(crate) fn resolve_xlsx_target(target: &str) -> Result<String, String> {
+    let base = if target.starts_with('/') {
+        target.trim_start_matches('/').to_string()
+    } else {
+        format!("xl/{target}")
+    };
+    let mut parts = Vec::new();
+    for part in base.split('/') {
+        match part {
+            "" | "." => {}
+            ".." => {
+                if parts.pop().is_none() {
+                    return Err(format!("worksheet relationship escapes ZIP root: {target}"));
+                }
+            }
+            part => parts.push(part),
+        }
+    }
+    if parts.is_empty() {
+        return Err(format!(
+            "worksheet relationship has an empty target: {target}"
+        ));
+    }
+    Ok(parts.join("/"))
+}
+
+fn read_xlsx(path: &str, options: &ReadOptions) -> Result<Vec<WorkbookSheet>, String> {
+    ReadBudget::new(options)?.check()?;
     let file = std::fs::File::open(path).map_err(|e| e.to_string())?;
     let archive = ZipArchive::new(file).map_err(|e| e.to_string())?;
     // Path-based read_workbook doesn't expose formulas/!ref/style ids (see BufferSheet's
     // doc comment) — discard that half here rather than changing WorkbookSheet itself.
-    Ok(read_workbook_from_archive(archive)?
+    Ok(read_workbook_from_archive(archive, options)?
         .sheets
         .into_iter()
         .map(|bs| bs.sheet)
@@ -2270,43 +3385,75 @@ fn read_xlsx(path: &str) -> Result<Vec<WorkbookSheet>, String> {
 
 /// The body of the XLSX reader, generalized over any `R: Read + Seek` archive source
 /// (a `std::fs::File` for path-based reads, a `Cursor<&[u8]>` for `read_workbook_from_bytes`)
-/// — see `docs/xlsx-architecture.md`'s "reader.rs buffer-API resolution". Pure extraction
-/// from the former `read_xlsx`, no behavior change.
+/// — see `docs/xlsx-architecture.md`'s "reader.rs buffer-API resolution". Shared extraction
+/// from the former `read_xlsx`, preserving errors from malformed present parts.
 fn read_workbook_from_archive<R: Read + Seek>(
     mut archive: ZipArchive<R>,
+    options: &ReadOptions,
 ) -> Result<BufferWorkbook, String> {
-    let wb_xml = zip_read_text(&mut archive, "xl/workbook.xml")?;
+    let mut budget = ReadBudget::new(options)?;
+    validate_zip_archive_with_budget(&mut archive, &mut budget)?;
+    budget.check()?;
+    let wb_xml = zip_read_text_with_budget(&mut archive, "xl/workbook.xml", &budget)?;
+    budget.check()?;
+    validate_workbook_sheet_elements(&wb_xml)?;
     let sheet_refs = xlsx_workbook_sheets(&wb_xml);
+    validate_workbook_sheets(&sheet_refs)?;
+    validate_workbook_model_count(sheet_refs.len())?;
     let date1904 = xlsx_workbook_date1904(&wb_xml);
 
-    let rels_xml = zip_read_text(&mut archive, "xl/_rels/workbook.xml.rels")?;
-    let rels = xlsx_rels(&rels_xml, "/worksheet");
+    let rels_xml = zip_read_text_with_budget(&mut archive, "xl/_rels/workbook.xml.rels", &budget)?;
+    budget.check()?;
+    if options.external_links == ExternalLinksPolicy::Reject
+        && workbook_has_external_link_relationship(&rels_xml)
+    {
+        return Err(
+            "external workbook links are present and external_links policy is reject".to_string(),
+        );
+    }
+    let rels = xlsx_worksheet_rels(&rels_xml)?;
 
-    let shared: Vec<String> = match zip_read_text(&mut archive, "xl/sharedStrings.xml") {
-        Ok(xml) => xlsx_shared_strings(&xml),
-        Err(_) => vec![],
+    let shared: Vec<String> = if archive
+        .file_names()
+        .any(|name| name == "xl/sharedStrings.xml")
+    {
+        let xml = zip_read_text_with_budget(&mut archive, "xl/sharedStrings.xml", &budget)?;
+        budget.check()?;
+        let strings = xlsx_shared_strings(&xml);
+        validate_shared_strings(&strings)?;
+        strings
+    } else {
+        vec![]
     };
 
-    let styles = match zip_read_text(&mut archive, "xl/styles.xml") {
-        Ok(xml) => xlsx_styles(&xml),
-        Err(_) => XlsxStyles::default(),
+    let styles = if archive.file_names().any(|name| name == "xl/styles.xml") {
+        let xml = zip_read_text_with_budget(&mut archive, "xl/styles.xml", &budget)?;
+        budget.check()?;
+        xlsx_styles(&xml)
+    } else {
+        XlsxStyles::default()
     };
 
     let mut sheets = vec![];
     for (name, rid, sheet_id, sheet_state) in sheet_refs {
-        let Some(target) = rels.get(&rid) else {
-            continue;
-        };
-        let zip_path = if let Some(rest) = target.strip_prefix('/') {
-            rest.to_string()
+        let target = rels
+            .get(&rid)
+            .ok_or_else(|| format!("worksheet relationship is missing for {name} ({rid})"))?;
+        let zip_path = resolve_xlsx_target(target)?;
+        let sheet_xml = if archive.file_names().any(|name| name == zip_path) {
+            let xml = zip_read_text_unvalidated_with_budget(&mut archive, &zip_path, &budget)?;
+            budget.check()?;
+            xml
         } else {
-            format!("xl/{}", target)
+            return Err(format!("worksheet part is missing: {zip_path}"));
         };
-        let sheet_xml = match zip_read_text(&mut archive, &zip_path) {
-            Ok(s) => s,
-            Err(_) => continue,
-        };
-        let sheet_data = xlsx_sheet_cells(&sheet_xml, &shared, &styles.cell_xfs);
+        let sheet_data =
+            xlsx_sheet_cells_validated(&zip_path, &sheet_xml, &shared, &styles.cell_xfs, &budget)?;
+        validate_sheet_model(
+            &name,
+            sheet_data.cells.len(),
+            sheet_data.merged_ranges.len(),
+        )?;
         // GitHub #4: resolved from the same style_ids BufferSheet::style_ids already
         // carries -- see WorkbookSheet::cell_number_formats' doc comment.
         let cell_number_formats: HashMap<(u32, u32), String> = sheet_data
@@ -2321,20 +3468,35 @@ fn read_workbook_from_archive<R: Read + Seek>(
         // this one sheet, same OPC convention as hyperlinks/drawings. Tolerant of a
         // missing `.rels`/unresolvable target/unparseable table part -- each just
         // contributes nothing, matching this reader's convention elsewhere.
+        let sheet_rels_name = crate::part_rels_name(&zip_path);
+        let has_sheet_rels = archive.file_names().any(|name| name == sheet_rels_name);
+        let sheet_rels_xml = if has_sheet_rels {
+            Some(zip_read_text_with_budget(
+                &mut archive,
+                &sheet_rels_name,
+                &budget,
+            )?)
+        } else {
+            None
+        };
+        let sheet_rels_base = crate::rels_target_dir(&sheet_rels_name).to_string();
         let mut tables = Vec::new();
-        let table_rids = xlsx_table_part_rids(&sheet_xml);
+        let table_rids = if sheet_xml.contains("tableParts") {
+            xlsx_table_part_rids(&sheet_xml)
+        } else {
+            Vec::new()
+        };
         if !table_rids.is_empty()
-            && let Ok(sheet_rels_xml) =
-                zip_read_text(&mut archive, &crate::part_rels_name(&zip_path))
+            && let Some(sheet_rels_xml) = &sheet_rels_xml
         {
-            let table_rels = xlsx_rels(&sheet_rels_xml, "/table");
-            let base = crate::rels_target_dir(&crate::part_rels_name(&zip_path)).to_string();
+            budget.check()?;
+            let table_rels = xlsx_rels(sheet_rels_xml, "/table");
             for rid in &table_rids {
                 let Some(target) = table_rels.get(rid) else {
                     continue;
                 };
-                let resolved = crate::normalize_part_path(&format!("{base}{target}"));
-                if let Ok(table_xml) = zip_read_text(&mut archive, &resolved)
+                let resolved = crate::normalize_part_path(&format!("{sheet_rels_base}{target}"));
+                if let Ok(table_xml) = zip_read_text_with_budget(&mut archive, &resolved, &budget)
                     && let Some(mut t) = parse_table_xml(&table_xml)
                 {
                     t.source_part = resolved;
@@ -2342,8 +3504,37 @@ fn read_workbook_from_archive<R: Read + Seek>(
                 }
             }
         }
-        let data_validations = xlsx_data_validations(&sheet_xml);
-        let autofilter = xlsx_autofilter(&sheet_xml);
+        // Optional-feature parsers each walk the worksheet XML independently.
+        // Skip those full rescans when a bulk-data sheet has no matching
+        // container; the substring checks also accept namespace-prefixed tags.
+        let data_validations = if sheet_xml.contains("dataValidations") {
+            xlsx_data_validations(&sheet_xml)
+        } else {
+            Vec::new()
+        };
+        let conditional_format_ranges = if sheet_xml.contains("conditionalFormatting") {
+            xlsx_conditional_format_ranges(&sheet_xml)
+        } else {
+            Vec::new()
+        };
+        let mut comment_cells = HashSet::new();
+        if let Some(sheet_rels_xml) = &sheet_rels_xml {
+            for target in xlsx_rels(sheet_rels_xml, "/comments").into_values() {
+                let resolved = crate::normalize_part_path(&format!("{sheet_rels_base}{target}"));
+                let exists = archive.file_names().any(|name| name == resolved);
+                if exists {
+                    let comments_xml = zip_read_text_with_budget(&mut archive, &resolved, &budget)?;
+                    comment_cells.extend(xlsx_comment_cells(&comments_xml));
+                }
+            }
+        }
+        let mut comment_cells: Vec<_> = comment_cells.into_iter().collect();
+        comment_cells.sort_unstable();
+        let autofilter = if sheet_xml.contains("autoFilter") {
+            xlsx_autofilter(&sheet_xml)
+        } else {
+            None
+        };
         sheets.push(BufferSheet {
             sheet: WorkbookSheet {
                 name,
@@ -2364,6 +3555,8 @@ fn read_workbook_from_archive<R: Read + Seek>(
                 column_styles: sheet_data.column_styles,
                 tables,
                 data_validations,
+                conditional_format_ranges,
+                comment_cells,
                 autofilter,
             },
             formulas: sheet_data.formulas,
@@ -2375,6 +3568,14 @@ fn read_workbook_from_archive<R: Read + Seek>(
         sheets,
         number_formats: styles.number_formats,
         date1904,
+        // Most workbooks do not declare names. Avoid a second XML event walk in
+        // that common case; named workbooks retain the exact existing parser and
+        // validation path.
+        defined_names: if wb_xml.contains("definedName") {
+            xlsx_defined_name_decls(&wb_xml)?
+        } else {
+            Vec::new()
+        },
     })
 }
 
@@ -2385,13 +3586,26 @@ fn read_workbook_from_archive<R: Read + Seek>(
 fn xlsx_workbook_date1904(xml: &str) -> bool {
     let mut iter = XmlIter::new(xml);
     while let Some(ev) = iter.next_ev() {
-        if let Ev::Open(ref tag, ref attrs) | Ev::SelfClose(ref tag, ref attrs) = ev
+        if let Ev::Open(tag, ref attrs) | Ev::SelfClose(tag, ref attrs) = ev
             && tag.split(':').next_back() == Some("workbookPr")
         {
             return attr_is_true(attrs, "date1904");
         }
     }
     false
+}
+
+/// Read the workbook-level date system without exposing the internal XML
+/// parser to the VM. ODS and missing workbook parts use the 1900 default.
+#[allow(dead_code)]
+pub(crate) fn xlsx_date1904_for_path(path: &str) -> Result<bool, String> {
+    let Some(bytes) = read_raw_zip_entry_if_present(path, "xl/workbook.xml")? else {
+        return Ok(false);
+    };
+    let Ok(xml) = String::from_utf8(bytes) else {
+        return Ok(false);
+    };
+    Ok(xlsx_workbook_date1904(&xml))
 }
 
 /// Returns `[(sheet_name, rId, sheetId, state)]` in document order. `state` is the
@@ -2402,7 +3616,7 @@ fn xlsx_workbook_sheets(xml: &str) -> Vec<(String, String, Option<String>, Optio
     let mut iter = XmlIter::new(xml);
     let mut result = vec![];
     while let Some(ev) = iter.next_ev() {
-        if let Ev::SelfClose(ref tag, ref attrs) = ev {
+        if let Ev::SelfClose(tag, ref attrs) = ev {
             let local = tag.split(':').next_back().unwrap_or(tag);
             if local == "sheet"
                 && let (Some(name), Some(rid)) = (attr_get(attrs, "name"), attr_get(attrs, "id"))
@@ -2416,6 +3630,149 @@ fn xlsx_workbook_sheets(xml: &str) -> Vec<(String, String, Option<String>, Optio
     result
 }
 
+fn validate_workbook_sheet_elements(xml: &str) -> Result<(), String> {
+    let mut iter = XmlIter::new(xml);
+    while let Some(ev) = iter.next_ev() {
+        match ev {
+            Ev::SelfClose(tag, attrs) if tag.split(':').next_back() == Some("sheet") => {
+                if attr_get(&attrs, "name").is_none() {
+                    return Err("worksheet is missing its name attribute".to_string());
+                }
+                if attr_get(&attrs, "id").is_none() {
+                    return Err("worksheet is missing its relationship id".to_string());
+                }
+            }
+            Ev::Open(tag, _) if tag.split(':').next_back() == Some("sheet") => {
+                return Err("worksheet element must be self-closing".to_string());
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
+fn validate_workbook_sheets(
+    sheets: &[(String, String, Option<String>, Option<String>)],
+) -> Result<(), String> {
+    let mut names = HashSet::new();
+    let mut relationship_ids = HashSet::new();
+    let mut sheet_ids = HashSet::new();
+    for (name, relationship_id, sheet_id, state) in sheets {
+        if name.trim().is_empty() {
+            return Err("worksheet name must not be empty".to_string());
+        }
+        if name.chars().count() > 31 {
+            return Err(format!(
+                "worksheet name exceeds the 31-character limit: {name}"
+            ));
+        }
+        if name
+            .chars()
+            .any(|ch| matches!(ch, ':' | '\\' | '/' | '?' | '*' | '[' | ']'))
+        {
+            return Err(format!(
+                "worksheet name contains a forbidden character: {name}"
+            ));
+        }
+        if relationship_id.trim().is_empty() {
+            return Err("worksheet relationship id must not be empty".to_string());
+        }
+        let folded_name = name.to_lowercase();
+        if !names.insert(folded_name) {
+            return Err(format!("duplicate worksheet name is not allowed: {name}"));
+        }
+        if !relationship_ids.insert(relationship_id) {
+            return Err(format!(
+                "duplicate worksheet relationship reference is not allowed: {relationship_id}"
+            ));
+        }
+        if let Some(sheet_id) = sheet_id
+            && (sheet_id.parse::<u32>().ok().filter(|id| *id > 0).is_none())
+        {
+            return Err(format!(
+                "invalid worksheet sheetId is not allowed: {sheet_id}"
+            ));
+        }
+        if let Some(sheet_id) = sheet_id
+            && !sheet_ids.insert(sheet_id)
+        {
+            return Err(format!(
+                "duplicate worksheet sheetId is not allowed: {sheet_id}"
+            ));
+        }
+        if let Some(state) = state
+            && !matches!(state.as_str(), "visible" | "hidden" | "veryHidden")
+        {
+            return Err(format!("invalid worksheet state is not allowed: {state}"));
+        }
+    }
+    Ok(())
+}
+
+/// A workbook defined-name declaration. `local_sheet_id` is the zero-based
+/// worksheet position from OOXML's `localSheetId` attribute.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct XlsxDefinedName {
+    pub name: String,
+    pub local_sheet_id: Option<usize>,
+    pub raw_text: String,
+}
+
+/// Returns defined-name declarations in document order, preserving scope.
+pub(crate) fn xlsx_defined_name_decls(xml: &str) -> Result<Vec<XlsxDefinedName>, String> {
+    let mut iter = XmlIter::new(xml);
+    let mut result = vec![];
+    let mut current_name: Option<String> = None;
+    let mut current_local_sheet_id = None;
+    let mut current_text = String::new();
+    while let Some(ev) = iter.next_ev() {
+        match &ev {
+            Ev::Open(tag, attrs) => {
+                let local = tag.split(':').next_back().unwrap_or(tag);
+                if local == "definedName" {
+                    current_name = attr_get(attrs, "name").map(str::to_string);
+                    current_local_sheet_id = attr_get(attrs, "localSheetId")
+                        .map(|value| value.parse::<usize>())
+                        .transpose()
+                        .map_err(|_| "invalid defined-name localSheetId".to_string())?;
+                    current_text.clear();
+                }
+            }
+            Ev::Close(tag) => {
+                let local = tag.split(':').next_back().unwrap_or(tag);
+                if local == "definedName"
+                    && let Some(name) = current_name.take()
+                {
+                    if result.len() >= DEFINED_NAMES_MAX_COUNT {
+                        return Err(format!(
+                            "defined-name table is too large (more than {}; maximum is {})",
+                            DEFINED_NAMES_MAX_COUNT, DEFINED_NAMES_MAX_COUNT
+                        ));
+                    }
+                    result.push(XlsxDefinedName {
+                        name,
+                        local_sheet_id: current_local_sheet_id.take(),
+                        raw_text: current_text.clone(),
+                    });
+                }
+            }
+            Ev::Text(text) => {
+                if current_name.is_some() {
+                    if current_text.len().saturating_add(text.len()) > DEFINED_NAME_MAX_TEXT_BYTES {
+                        return Err(format!(
+                            "defined-name formula is too large (more than {}; maximum is {})",
+                            DEFINED_NAME_MAX_TEXT_BYTES, DEFINED_NAME_MAX_TEXT_BYTES
+                        ));
+                    }
+                    current_text.push_str(text);
+                }
+            }
+            Ev::SelfClose(_, _) => {}
+        }
+    }
+    Ok(result)
+}
+
 /// Returns `[(name, raw_text)]` in document order, from every
 /// `<definedName name="...">TEXT</definedName>` inside `xl/workbook.xml`'s
 /// `<definedNames>`. `raw_text` is the exact formula-text content (e.g.
@@ -2425,37 +3782,11 @@ fn xlsx_workbook_sheets(xml: &str) -> Vec<(String, String, Option<String>, Optio
 /// distinguished here -- both are returned under their own `name` attribute
 /// exactly as written; `Vm::defined_names` is what decides how to flatten
 /// them into one map.
-pub(crate) fn xlsx_defined_names(xml: &str) -> Vec<(String, String)> {
-    let mut iter = XmlIter::new(xml);
-    let mut result = vec![];
-    let mut current_name: Option<String> = None;
-    let mut current_text = String::new();
-    while let Some(ev) = iter.next_ev() {
-        match &ev {
-            Ev::Open(tag, attrs) => {
-                let local = tag.split(':').next_back().unwrap_or(tag);
-                if local == "definedName" {
-                    current_name = attr_get(attrs, "name").map(|s| s.to_string());
-                    current_text.clear();
-                }
-            }
-            Ev::Close(tag) => {
-                let local = tag.split(':').next_back().unwrap_or(tag);
-                if local == "definedName"
-                    && let Some(name) = current_name.take()
-                {
-                    result.push((name, current_text.clone()));
-                }
-            }
-            Ev::Text(text) => {
-                if current_name.is_some() {
-                    current_text.push_str(text);
-                }
-            }
-            Ev::SelfClose(_, _) => {}
-        }
-    }
-    result
+pub(crate) fn xlsx_defined_names(xml: &str) -> Result<Vec<(String, String)>, String> {
+    Ok(xlsx_defined_name_decls(xml)?
+        .into_iter()
+        .map(|decl| (decl.name, decl.raw_text))
+        .collect())
 }
 
 /// Returns `{rId → target_path}` for relationships whose `Type` ends with
@@ -2465,7 +3796,7 @@ fn xlsx_rels(xml: &str, type_suffix: &str) -> HashMap<String, String> {
     let mut iter = XmlIter::new(xml);
     let mut map = HashMap::new();
     while let Some(ev) = iter.next_ev() {
-        if let Ev::SelfClose(ref tag, ref attrs) = ev {
+        if let Ev::SelfClose(tag, ref attrs) = ev {
             let local = tag.split(':').next_back().unwrap_or(tag);
             if local == "Relationship"
                 && let (Some(id), Some(ty), Some(target)) = (
@@ -2480,6 +3811,46 @@ fn xlsx_rels(xml: &str, type_suffix: &str) -> HashMap<String, String> {
         }
     }
     map
+}
+
+/// Returns worksheet relationships while rejecting external targets. A worksheet must be
+/// backed by an internal package part; treating a URL as a missing local part would make
+/// malformed input look like an ordinary absent sheet.
+fn xlsx_worksheet_rels(xml: &str) -> Result<HashMap<String, String>, String> {
+    let mut iter = XmlIter::new(xml);
+    let mut map = HashMap::new();
+    while let Some(ev) = iter.next_ev() {
+        if let Ev::SelfClose(tag, ref attrs) = ev {
+            let local = tag.split(':').next_back().unwrap_or(tag);
+            if local != "Relationship" {
+                continue;
+            }
+            let (Some(id), Some(ty), Some(target)) = (
+                attr_get(attrs, "Id"),
+                attr_get(attrs, "Type"),
+                attr_get(attrs, "Target"),
+            ) else {
+                continue;
+            };
+            if !ty.ends_with("/worksheet") {
+                continue;
+            }
+            if attr_get(attrs, "TargetMode")
+                .is_some_and(|mode| mode.eq_ignore_ascii_case("External"))
+            {
+                return Err(format!(
+                    "external worksheet relationship target is not allowed: {target}"
+                ));
+            }
+            if map.contains_key(id) {
+                return Err(format!(
+                    "duplicate worksheet relationship id is not allowed: {id}"
+                ));
+            }
+            map.insert(id.to_string(), target.to_string());
+        }
+    }
+    Ok(map)
 }
 
 /// Builds the shared-strings table.
@@ -2554,7 +3925,7 @@ fn xlsx_styles(xml: &str) -> XlsxStyles {
     while let Some(ev) = iter.next_ev() {
         match &ev {
             Ev::Open(tag, attrs) | Ev::SelfClose(tag, attrs) => {
-                let local = tag.split(':').next_back().unwrap_or(tag.as_str());
+                let local = tag.split(':').next_back().unwrap_or(tag);
                 match local {
                     "numFmt" => {
                         if let (Some(id), Some(code)) = (
@@ -2717,7 +4088,7 @@ pub(crate) fn extract_records(xml: &str, container: &str, record: &str) -> Vec<S
     while let Some((tag_start, tag_close_rel, full_name)) =
         find_next_open_tag(&container_span, search_from)
     {
-        if full_name.rsplit(':').next().unwrap_or(&full_name) != record {
+        if full_name.rsplit(':').next().unwrap_or(full_name) != record {
             search_from = tag_start + 1;
             continue;
         }
@@ -2798,7 +4169,7 @@ pub(crate) fn with_attr(span: &str, attr_name: &str, attr_value: &str) -> String
             continue;
         }
         new_attrs.push(' ');
-        new_attrs.push_str(&a.name);
+        new_attrs.push_str(a.name);
         new_attrs.push_str("=\"");
         new_attrs.push_str(&crate::xml_escape(&a.value));
         new_attrs.push('"');
@@ -3266,8 +4637,12 @@ pub(crate) fn merged_protection_span(xf_span: &str, edit: &ProtectionEdit) -> St
 /// A small return struct, not a growing bare tuple — B6c2 hit a
 /// `clippy::type_complexity` error the first time this function's return
 /// type grew, so this sidesteps a repeat of that churn.
-struct XlsxSheetData {
-    cells: HashMap<(u32, u32), SheetCell>,
+pub(crate) struct XlsxSheetData {
+    pub(crate) cells: HashMap<(u32, u32), SheetCell>,
+    /// The first worksheet row encountered. This is kept separately from `cells`
+    /// because a valid `<row r="N"/>` has no cell entries at all.
+    #[cfg_attr(not(feature = "python"), allow(dead_code))]
+    pub(crate) first_row: Option<u32>,
     merged_ranges: Vec<MergeRect>,
     /// Hidden row intervals, 1-based inclusive `(start, end)` — coalesced
     /// from consecutive `<row r=".." hidden="1">` tags (Milestone B7b).
@@ -3304,8 +4679,34 @@ struct XlsxSheetData {
     raw_style_indices: HashMap<(u32, u32), u32>,
 }
 
+#[cfg(any(test, feature = "python"))]
 fn xlsx_sheet_cells(xml: &str, shared: &[String], cell_xfs: &[Option<u32>]) -> XlsxSheetData {
+    xlsx_sheet_cells_impl(xml, shared, cell_xfs, None, None)
+        .expect("worksheet parsing without validation cannot fail")
+}
+
+fn xlsx_sheet_cells_validated(
+    name: &str,
+    xml: &str,
+    shared: &[String],
+    cell_xfs: &[Option<u32>],
+    budget: &ReadBudget,
+) -> Result<XlsxSheetData, String> {
+    xlsx_sheet_cells_impl(xml, shared, cell_xfs, Some(name), Some(budget))
+}
+
+fn xlsx_sheet_cells_impl(
+    xml: &str,
+    shared: &[String],
+    cell_xfs: &[Option<u32>],
+    validation_name: Option<&str>,
+    validation_budget: Option<&ReadBudget>,
+) -> Result<XlsxSheetData, String> {
     let mut iter = XmlIter::new(xml);
+    let mut validator = validation_name
+        .map(|name| XmlBudgetValidator::new(name, xml))
+        .transpose()?;
+    let validate_shared_refs = validation_name.is_some();
     let mut cells: HashMap<(u32, u32), SheetCell> = HashMap::new();
     let mut merged_ranges: Vec<MergeRect> = Vec::new();
     let mut hidden_rows: Vec<(u32, u32)> = Vec::new();
@@ -3319,10 +4720,13 @@ fn xlsx_sheet_cells(xml: &str, shared: &[String], cell_xfs: &[Option<u32>]) -> X
     let mut dimension: Option<MergeRect> = None;
     let mut style_ids: HashMap<(u32, u32), u32> = HashMap::new();
     let mut raw_style_indices: HashMap<(u32, u32), u32> = HashMap::new();
+    let mut first_row: Option<u32> = None;
     let mut cur_row: u32 = 0;
     let mut cur_col: u32 = 0;
     let mut cur_type = String::new();
     let mut in_v = false;
+    let mut in_shared_string_value = false;
+    let mut shared_string_value = String::new();
     // `<v xml:space="preserve">` marks significant leading/trailing
     // whitespace in a t="str" cell's literal text, same as any XML element
     // — confirmed live against compat/corpus/workbooks/with_text.xlsx's raw
@@ -3334,15 +4738,29 @@ fn xlsx_sheet_cells(xml: &str, shared: &[String], cell_xfs: &[Option<u32>]) -> X
     let mut cur_formula = String::new();
     let mut in_is_t = false; // inside <is><t>
     let mut is_text = String::new();
+    let event_checks = validation_budget.is_some_and(ReadBudget::needs_event_checks);
 
     while let Some(ev) = iter.next_ev() {
+        if event_checks && let Some(budget) = validation_budget {
+            // Check cancellation/deadline before XML-budget errors so an interrupt
+            // remains deterministic even when the input is also close to a structural
+            // XML limit. The byte read was already budgeted; this covers the CPU-bound
+            // event validation loop itself.
+            budget.check()?;
+        }
+        if let Some(validator) = validator.as_mut() {
+            validator.observe(&ev)?;
+        }
         match ev {
-            Ev::Open(ref tag, ref attrs) | Ev::SelfClose(ref tag, ref attrs) => {
-                let local = tag.split(':').next_back().unwrap_or(tag.as_str());
+            Ev::Open(tag, ref attrs) | Ev::SelfClose(tag, ref attrs) => {
+                let local = tag.split(':').next_back().unwrap_or(tag);
                 match local {
                     "row" => {
                         if let Some(r) = attr_get(attrs, "r") {
                             cur_row = r.parse().unwrap_or(0);
+                            if first_row.is_none() && cur_row != 0 {
+                                first_row = Some(cur_row);
+                            }
                         }
                         let hidden = attr_is_true(attrs, "hidden");
                         if hidden {
@@ -3400,7 +4818,8 @@ fn xlsx_sheet_cells(xml: &str, shared: &[String], cell_xfs: &[Option<u32>]) -> X
                         }
                     }
                     "c" => {
-                        cur_type = attr_get(attrs, "t").unwrap_or("").to_string();
+                        cur_type.clear();
+                        cur_type.push_str(attr_get(attrs, "t").unwrap_or(""));
                         in_v = false;
                         if let Some(r) = attr_get(attrs, "r")
                             && let Some((row, col)) = parse_cell_ref(r)
@@ -3438,6 +4857,13 @@ fn xlsx_sheet_cells(xml: &str, shared: &[String], cell_xfs: &[Option<u32>]) -> X
                     "v" => {
                         in_v = true;
                         v_preserve_space = attr_get(attrs, "xml:space") == Some("preserve");
+                        if validate_shared_refs && cur_type == "s" {
+                            shared_string_value.clear();
+                            if matches!(ev, Ev::SelfClose(_, _)) {
+                                return Err("shared string cell has an invalid index".to_string());
+                            }
+                            in_shared_string_value = true;
+                        }
                     }
                     "f" => {
                         // A self-closing <f/> (or a shared-formula follower cell,
@@ -3465,10 +4891,23 @@ fn xlsx_sheet_cells(xml: &str, shared: &[String], cell_xfs: &[Option<u32>]) -> X
                     _ => {}
                 }
             }
-            Ev::Close(ref tag) => {
-                let local = tag.split(':').next_back().unwrap_or(tag.as_str());
+            Ev::Close(tag) => {
+                let local = tag.split(':').next_back().unwrap_or(tag);
                 match local {
                     "v" => {
+                        if in_shared_string_value {
+                            let index = shared_string_value
+                                .trim()
+                                .parse::<usize>()
+                                .ok()
+                                .filter(|&index| index < shared.len());
+                            if index.is_none() {
+                                return Err(
+                                    "shared string cell refers to an invalid index".to_string()
+                                );
+                            }
+                            in_shared_string_value = false;
+                        }
                         // A zero-character <v></v> never produces an Ev::Text event (there's
                         // no text to emit), so `in_v` is still true here — the Text-event
                         // handler below never ran for this cell. Route the empty string
@@ -3500,9 +4939,12 @@ fn xlsx_sheet_cells(xml: &str, shared: &[String], cell_xfs: &[Option<u32>]) -> X
                 }
             }
             Ev::Text(ref text) => {
+                if in_shared_string_value {
+                    shared_string_value.push_str(text);
+                }
                 if in_v && cur_row > 0 && cur_col > 0 {
                     let raw = if v_preserve_space {
-                        text.as_str()
+                        text.as_ref()
                     } else {
                         text.trim()
                     };
@@ -3520,22 +4962,27 @@ fn xlsx_sheet_cells(xml: &str, shared: &[String], cell_xfs: &[Option<u32>]) -> X
         }
 
         // Emit inline string on </c>
-        if let Ev::Close(ref tag) = ev
+        if let Ev::Close(tag) = ev
             && tag.split(':').next_back() == Some("c")
-            && cur_type == "inlineStr"
-            && !is_text.is_empty()
-            && cur_row > 0
-            && cur_col > 0
         {
-            cells.insert((cur_row, cur_col), SheetCell::Str(is_text.clone()));
-            is_text.clear();
+            if cur_type == "inlineStr" && !is_text.is_empty() && cur_row > 0 && cur_col > 0 {
+                cells.insert((cur_row, cur_col), SheetCell::Str(is_text.clone()));
+                is_text.clear();
+            }
+            cur_type.clear();
+            in_shared_string_value = false;
         }
+        iter.recycle_attributes(ev);
+    }
+    if let Some(validator) = validator {
+        validator.finish(iter.malformed)?;
     }
     if let Some(run) = pending_hidden_row_run.take() {
         hidden_rows.push(run);
     }
-    XlsxSheetData {
+    Ok(XlsxSheetData {
         cells,
+        first_row,
         merged_ranges,
         hidden_rows,
         hidden_columns,
@@ -3547,7 +4994,7 @@ fn xlsx_sheet_cells(xml: &str, shared: &[String], cell_xfs: &[Option<u32>]) -> X
         dimension,
         style_ids,
         raw_style_indices,
-    }
+    })
 }
 
 fn xlsx_parse_cell(v: &str, t: &str, shared: &[String]) -> Option<SheetCell> {
@@ -3583,15 +5030,35 @@ fn num_to_cell(f: f64) -> SheetCell {
 
 /// Parse an XLSX cell reference like "A1", "AB12" → (row, col), both 1-based.
 fn parse_cell_ref(r: &str) -> Option<(u32, u32)> {
-    let r = r.trim().to_uppercase();
-    let alpha_end = r.find(|c: char| c.is_ascii_digit())?;
-    if alpha_end == 0 {
+    // Worksheet cell references are ASCII by OOXML convention.  The previous
+    // implementation uppercased the complete reference, allocating a new
+    // `String` for every `<c r="...">` in a large sheet.  Scan the borrowed
+    // bytes instead; lowercase input remains accepted without allocation and
+    // malformed/non-ASCII input still returns `None` as before.
+    let bytes = r.trim().as_bytes();
+    let mut split = 0;
+    let mut col = 0u32;
+    while split < bytes.len() {
+        let byte = bytes[split];
+        let upper = byte.to_ascii_uppercase();
+        if !upper.is_ascii_uppercase() {
+            break;
+        }
+        col = col
+            .checked_mul(26)?
+            .checked_add((upper - b'A' + 1) as u32)?;
+        split += 1;
+    }
+    if split == 0 || split == bytes.len() {
         return None;
     }
-    let col = r[..alpha_end]
-        .chars()
-        .fold(0u32, |acc, c| acc * 26 + (c as u32 - 'A' as u32 + 1));
-    let row: u32 = r[alpha_end..].parse().ok()?;
+    let mut row = 0u32;
+    for &byte in &bytes[split..] {
+        if !byte.is_ascii_digit() {
+            return None;
+        }
+        row = row.checked_mul(10)?.checked_add((byte - b'0') as u32)?;
+    }
     Some((row, col))
 }
 
@@ -3633,7 +5100,7 @@ fn xlsx_table_part_rids(sheet_xml: &str) -> Vec<String> {
     let mut iter = XmlIter::new(&tp);
     let mut rids = Vec::new();
     while let Some(ev) = iter.next_ev() {
-        if let Ev::SelfClose(ref tag, ref attrs) = ev
+        if let Ev::SelfClose(tag, ref attrs) = ev
             && tag.split(':').next_back() == Some("tablePart")
             && let Some(rid) = attr_get(attrs, "id")
         {
@@ -3656,8 +5123,8 @@ fn parse_table_xml(xml: &str) -> Option<TableDef> {
 
     while let Some(ev) = iter.next_ev() {
         match ev {
-            Ev::Open(ref tag, ref attrs) | Ev::SelfClose(ref tag, ref attrs) => {
-                let local = tag.split(':').next_back().unwrap_or(tag.as_str());
+            Ev::Open(tag, ref attrs) | Ev::SelfClose(tag, ref attrs) => {
+                let local = tag.split(':').next_back().unwrap_or(tag);
                 match local {
                     "table" => {
                         let name = attr_get(attrs, "name").unwrap_or("").to_string();
@@ -3719,8 +5186,8 @@ fn parse_table_xml(xml: &str) -> Option<TableDef> {
                     _ => {}
                 }
             }
-            Ev::Close(ref tag) => {
-                let local = tag.split(':').next_back().unwrap_or(tag.as_str());
+            Ev::Close(tag) => {
+                let local = tag.split(':').next_back().unwrap_or(tag);
                 match local {
                     "calculatedColumnFormula" if in_calc_formula => {
                         if let Some(c) = cur_column.as_mut() {
@@ -4184,6 +5651,35 @@ mod table_parsing_tests {
 }
 
 #[cfg(test)]
+mod input_extension_tests {
+    use super::read_workbook;
+
+    #[test]
+    fn read_workbook_rejects_unsupported_extension_before_opening() {
+        let error = match read_workbook("/definitely/not/there.xlsb") {
+            Ok(_) => panic!("unsupported extension should be rejected"),
+            Err(error) => error,
+        };
+        assert_eq!(
+            error,
+            "unsupported input extension; use .xlsx, .xlsm, or .ods"
+        );
+    }
+
+    #[test]
+    fn read_workbook_rejects_missing_extension_before_opening() {
+        let error = match read_workbook("/definitely/not/there") {
+            Ok(_) => panic!("missing extension should be rejected"),
+            Err(error) => error,
+        };
+        assert_eq!(
+            error,
+            "unsupported input extension; use .xlsx, .xlsm, or .ods"
+        );
+    }
+}
+
+#[cfg(test)]
 mod data_validation_parsing_tests {
     use super::*;
 
@@ -4231,6 +5727,39 @@ mod data_validation_parsing_tests {
         assert_eq!(rules.len(), 2);
         assert_eq!(rules[0].validation_type, "list");
         assert_eq!(rules[1].validation_type, "custom");
+    }
+
+    #[test]
+    fn xlsx_conditional_format_ranges_preserves_block_and_multi_area_membership() {
+        let xml = r#"<worksheet><conditionalFormatting sqref="A1:A3 C5"><cfRule type="expression"><formula>A1&gt;0</formula></cfRule></conditionalFormatting><conditionalFormatting sqref="D2:D4"><cfRule type="cellIs"/></conditionalFormatting></worksheet>"#;
+        assert_eq!(
+            xlsx_conditional_format_ranges(xml),
+            vec![
+                vec![((1, 1), (3, 1)), ((5, 3), (5, 3))],
+                vec![((2, 4), (4, 4))],
+            ]
+        );
+    }
+
+    #[test]
+    fn xlsx_comment_cells_reads_and_deduplicates_legacy_comment_anchors() {
+        let xml = r#"<comments><authors><author>A</author></authors><commentList><comment ref="C3" authorId="0"><text><t>note</t></text></comment><comment ref="A1" authorId="0"/><comment ref="C3" authorId="0"/></commentList></comments>"#;
+        assert_eq!(xlsx_comment_cells(xml), vec![(1, 1), (3, 3)]);
+    }
+
+    #[test]
+    fn real_fixture_threads_conditional_format_and_comment_membership_into_sheet_model() {
+        let path = format!(
+            "{}/compat/oracle-excel-com/fixtures/pristine/fixture4_hyperlink_comment_name.xlsm",
+            env!("CARGO_MANIFEST_DIR")
+        );
+        let sheets = read_workbook(&path).expect("real fixture must load");
+        assert_eq!(sheets.len(), 1);
+        assert_eq!(
+            sheets[0].conditional_format_ranges,
+            vec![vec![((1, 2), (5, 2))]]
+        );
+        assert_eq!(sheets[0].comment_cells, vec![(4, 3)]);
     }
 
     #[test]
@@ -4362,10 +5891,14 @@ mod data_validation_parsing_tests {
 
 // ── ODS reader ────────────────────────────────────────────────────────────────
 
-fn read_ods(path: &str) -> Result<Vec<WorkbookSheet>, String> {
+fn read_ods(path: &str, options: &ReadOptions) -> Result<Vec<WorkbookSheet>, String> {
+    ReadBudget::new(options)?.check()?;
     let file = std::fs::File::open(path).map_err(|e| e.to_string())?;
     let mut archive = ZipArchive::new(file).map_err(|e| e.to_string())?;
-    let xml = zip_read_text(&mut archive, "content.xml")?;
+    let mut budget = ReadBudget::new(options)?;
+    validate_zip_archive_with_budget(&mut archive, &mut budget)?;
+    let xml = zip_read_text_with_budget(&mut archive, "content.xml", &budget)?;
+    budget.check()?;
     Ok(ods_parse(&xml))
 }
 
@@ -4395,7 +5928,7 @@ fn ods_parse(xml: &str) -> Vec<WorkbookSheet> {
     while let Some(ev) = iter.next_ev() {
         match &ev {
             Ev::Open(tag, attrs) | Ev::SelfClose(tag, attrs) => {
-                let local = tag.split(':').next_back().unwrap_or(tag.as_str());
+                let local = tag.split(':').next_back().unwrap_or(tag);
                 match local {
                     "table" => {
                         let name = attr_get(attrs, "name").unwrap_or("sheet1").to_lowercase();
@@ -4418,6 +5951,8 @@ fn ods_parse(xml: &str) -> Vec<WorkbookSheet> {
                             column_styles: Vec::new(),
                             tables: Vec::new(),
                             data_validations: Vec::new(),
+                            conditional_format_ranges: Vec::new(),
+                            comment_cells: Vec::new(),
                             autofilter: None,
                         });
                         in_sheet = true;
@@ -4492,7 +6027,7 @@ fn ods_parse(xml: &str) -> Vec<WorkbookSheet> {
                 }
             }
             Ev::Close(tag) => {
-                let local = tag.split(':').next_back().unwrap_or(tag.as_str());
+                let local = tag.split(':').next_back().unwrap_or(tag);
                 match local {
                     "table" => {
                         in_sheet = false;
@@ -4565,6 +6100,124 @@ fn ods_make_cell(s: &OdsCellState) -> Option<SheetCell> {
 #[cfg(test)]
 mod sheet_id_tests {
     use super::*;
+
+    #[test]
+    fn validate_workbook_sheets_rejects_case_insensitive_duplicate_names() {
+        let sheets = vec![
+            ("Data".to_string(), "rId1".to_string(), None, None),
+            ("data".to_string(), "rId2".to_string(), None, None),
+        ];
+        let error = validate_workbook_sheets(&sheets).unwrap_err();
+        assert!(error.contains("duplicate worksheet name"));
+    }
+
+    #[test]
+    fn validate_workbook_sheets_rejects_duplicate_relationship_references() {
+        let sheets = vec![
+            ("Sheet1".to_string(), "rId1".to_string(), None, None),
+            ("Sheet2".to_string(), "rId1".to_string(), None, None),
+        ];
+        let error = validate_workbook_sheets(&sheets).unwrap_err();
+        assert!(error.contains("duplicate worksheet relationship reference"));
+    }
+
+    #[test]
+    fn validate_workbook_sheets_rejects_duplicate_sheet_ids() {
+        let sheets = vec![
+            (
+                "Sheet1".to_string(),
+                "rId1".to_string(),
+                Some("7".to_string()),
+                None,
+            ),
+            (
+                "Sheet2".to_string(),
+                "rId2".to_string(),
+                Some("7".to_string()),
+                None,
+            ),
+        ];
+        let error = validate_workbook_sheets(&sheets).unwrap_err();
+        assert!(error.contains("duplicate worksheet sheetId"));
+    }
+
+    #[test]
+    fn validate_workbook_sheets_rejects_unknown_states() {
+        let sheets = vec![(
+            "Sheet1".to_string(),
+            "rId1".to_string(),
+            None,
+            Some("collapsed".to_string()),
+        )];
+        let error = validate_workbook_sheets(&sheets).unwrap_err();
+        assert!(error.contains("invalid worksheet state"));
+    }
+
+    #[test]
+    fn validate_workbook_sheets_rejects_empty_identifiers() {
+        let error = validate_workbook_sheets(&[("  ".to_string(), "rId1".to_string(), None, None)])
+            .unwrap_err();
+        assert!(error.contains("worksheet name must not be empty"));
+
+        let error = validate_workbook_sheets(&[("Sheet1".to_string(), "".to_string(), None, None)])
+            .unwrap_err();
+        assert!(error.contains("relationship id must not be empty"));
+    }
+
+    #[test]
+    fn validate_workbook_sheets_rejects_invalid_name_shapes() {
+        let too_long = "a".repeat(32);
+        let error =
+            validate_workbook_sheets(&[(too_long, "rId1".to_string(), None, None)]).unwrap_err();
+        assert!(error.contains("31-character limit"));
+
+        for name in ["bad:name", "bad\\name", "bad/name", "bad?name", "bad*name"] {
+            let sheets = vec![(name.to_string(), "rId1".to_string(), None, None)];
+            let error = validate_workbook_sheets(&sheets).unwrap_err();
+            assert!(
+                error.contains("forbidden character"),
+                "unexpected error: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn validate_workbook_sheets_rejects_non_positive_or_non_numeric_sheet_ids() {
+        for sheet_id in ["0", "-1", "not-a-number"] {
+            let sheets = vec![(
+                "Sheet1".to_string(),
+                "rId1".to_string(),
+                Some(sheet_id.to_string()),
+                None,
+            )];
+            let error = validate_workbook_sheets(&sheets).unwrap_err();
+            assert!(error.contains("invalid worksheet sheetId"));
+        }
+    }
+
+    #[test]
+    fn validate_workbook_sheet_elements_rejects_missing_required_attributes() {
+        let error = validate_workbook_sheet_elements(
+            r#"<workbook><sheets><sheet sheetId="1" r:id="rId1"/></sheets></workbook>"#,
+        )
+        .unwrap_err();
+        assert!(error.contains("missing its name attribute"));
+
+        let error = validate_workbook_sheet_elements(
+            r#"<workbook><sheets><sheet name="Sheet1" sheetId="1"/></sheets></workbook>"#,
+        )
+        .unwrap_err();
+        assert!(error.contains("missing its relationship id"));
+    }
+
+    #[test]
+    fn validate_workbook_sheet_elements_rejects_non_self_closing_sheets() {
+        let error = validate_workbook_sheet_elements(
+            r#"<workbook><sheets><sheet name="Sheet1" r:id="rId1"></sheet></sheets></workbook>"#,
+        )
+        .unwrap_err();
+        assert!(error.contains("must be self-closing"));
+    }
 
     #[test]
     fn xlsx_workbook_sheets_captures_non_contiguous_sheet_ids() {
@@ -4649,7 +6302,7 @@ mod defined_names_tests {
 <definedName name="Other" localSheetId="0">Sheet1!$B$1</definedName>
 </definedNames></workbook>"#;
         assert_eq!(
-            xlsx_defined_names(xml),
+            xlsx_defined_names(xml).unwrap(),
             vec![
                 ("MyRange".to_string(), "Sheet1!$A$1:$A$3".to_string()),
                 ("Other".to_string(), "Sheet1!$B$1".to_string()),
@@ -4658,17 +6311,74 @@ mod defined_names_tests {
     }
 
     #[test]
+    fn xlsx_defined_name_decls_preserve_local_sheet_scope() {
+        let xml = r#"<workbook><definedNames>
+<definedName name="Global">$A$1:$A$3</definedName>
+<definedName name="Local" localSheetId="1">$B$2</definedName>
+</definedNames></workbook>"#;
+        assert_eq!(
+            xlsx_defined_name_decls(xml).unwrap(),
+            vec![
+                XlsxDefinedName {
+                    name: "Global".to_string(),
+                    local_sheet_id: None,
+                    raw_text: "$A$1:$A$3".to_string(),
+                },
+                XlsxDefinedName {
+                    name: "Local".to_string(),
+                    local_sheet_id: Some(1),
+                    raw_text: "$B$2".to_string(),
+                },
+            ]
+        );
+    }
+
+    #[test]
     fn xlsx_defined_names_is_empty_when_absent() {
         let xml = r#"<workbook><sheets><sheet name="Sheet1" r:id="rId1"/></sheets></workbook>"#;
-        assert_eq!(xlsx_defined_names(xml), Vec::<(String, String)>::new());
+        assert_eq!(
+            xlsx_defined_names(xml).unwrap(),
+            Vec::<(String, String)>::new()
+        );
     }
 
     #[test]
     fn xlsx_defined_names_xml_unescapes_the_text_content() {
         let xml = r#"<definedNames><definedName name="X">Sheet1!$A$1 &amp; "text"</definedName></definedNames>"#;
         assert_eq!(
-            xlsx_defined_names(xml),
+            xlsx_defined_names(xml).unwrap(),
             vec![("X".to_string(), "Sheet1!$A$1 & \"text\"".to_string())]
+        );
+    }
+
+    #[test]
+    fn xlsx_defined_names_rejects_a_table_over_the_count_limit() {
+        let mut xml = String::from("<workbook><definedNames>");
+        for index in 0..=DEFINED_NAMES_MAX_COUNT {
+            xml.push_str(&format!(
+                "<definedName name=\"Name{index}\">Sheet1!$A$1</definedName>"
+            ));
+        }
+        xml.push_str("</definedNames></workbook>");
+
+        let error = xlsx_defined_names(&xml).unwrap_err();
+        assert_eq!(
+            error,
+            "defined-name table is too large (more than 100000; maximum is 100000)"
+        );
+    }
+
+    #[test]
+    fn xlsx_defined_names_rejects_an_oversized_formula_text() {
+        let value = "A".repeat(DEFINED_NAME_MAX_TEXT_BYTES + 1);
+        let xml = format!(
+            "<workbook><definedNames><definedName name=\"Huge\">{value}</definedName></definedNames></workbook>"
+        );
+
+        let error = xlsx_defined_names(&xml).unwrap_err();
+        assert_eq!(
+            error,
+            "defined-name formula is too large (more than 1048576; maximum is 1048576)"
         );
     }
 }
@@ -5246,6 +6956,8 @@ mod merge_tests {
 #[cfg(test)]
 mod from_bytes_tests {
     use super::*;
+    use std::io::Write;
+    use zip::write::SimpleFileOptions;
 
     // The path-based and bytes-based entry points must read the exact same real .xlsx
     // fixture into equal sheet data — read_workbook_from_bytes is meant to be a pure
@@ -5291,5 +7003,580 @@ mod from_bytes_tests {
     #[test]
     fn read_workbook_from_bytes_rejects_a_non_zip_buffer() {
         assert!(read_workbook_from_bytes(b"not a zip file").is_err());
+    }
+
+    #[test]
+    fn external_link_policy_detects_only_workbook_external_link_relationships() {
+        let external = r#"<Relationships><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/externalLink" Target="externalLinks/externalLink1.xml"/></Relationships>"#;
+        let worksheet = r#"<Relationships><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/></Relationships>"#;
+        assert!(workbook_has_external_link_relationship(external));
+        assert!(!workbook_has_external_link_relationship(worksheet));
+    }
+
+    #[test]
+    fn read_options_reject_a_work_budget_before_parsing() {
+        let bytes = minimal_workbook_zip(None, br#"<worksheet/>"#);
+        let options = ReadOptions {
+            max_work_units: Some(1),
+            ..ReadOptions::default()
+        };
+        let error = match read_workbook_from_bytes_with_options(&bytes, &options) {
+            Ok(_) => panic!("work budget should reject before parsing"),
+            Err(error) => error,
+        };
+        assert!(
+            error.contains("READER_WORK_BUDGET"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn read_options_honor_cancellation_before_parsing() {
+        let bytes = minimal_workbook_zip(None, br#"<worksheet/>"#);
+        let flag = Arc::new(AtomicBool::new(true));
+        let options = ReadOptions {
+            cancellation: Some(flag),
+            ..ReadOptions::default()
+        };
+        let error = match read_workbook_from_bytes_with_options(&bytes, &options) {
+            Ok(_) => panic!("cancellation should reject before parsing"),
+            Err(error) => error,
+        };
+        assert!(
+            error.contains("READER_CANCELED"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn read_options_validate_timeout_and_budget_values() {
+        let timeout = ReadOptions {
+            timeout_ms: Some(0),
+            ..ReadOptions::default()
+        };
+        assert!(timeout.validate().unwrap_err().contains("timeout_ms"));
+        let budget = ReadOptions {
+            max_work_units: Some(0),
+            ..ReadOptions::default()
+        };
+        assert!(budget.validate().unwrap_err().contains("max_work_units"));
+    }
+
+    #[test]
+    fn read_budget_rejects_an_expired_deadline() {
+        let budget = ReadBudget {
+            max_work_units: None,
+            deadline: Some(Instant::now()),
+            cancellation: None,
+            consumed: 0,
+        };
+        let error = budget.check().unwrap_err();
+        assert!(
+            error.contains("READER_TIMEOUT"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn budgeted_entry_read_honors_cancellation_between_chunks() {
+        struct CancelAfterOneRead {
+            reads: usize,
+            cancellation: Arc<AtomicBool>,
+        }
+
+        impl Read for CancelAfterOneRead {
+            fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+                if self.reads == 0 {
+                    self.reads += 1;
+                    buffer[0] = b'a';
+                    self.cancellation.store(true, Ordering::Relaxed);
+                    Ok(1)
+                } else {
+                    Ok(0)
+                }
+            }
+        }
+
+        let cancellation = Arc::new(AtomicBool::new(false));
+        let budget = ReadBudget {
+            max_work_units: None,
+            deadline: None,
+            cancellation: Some(Arc::clone(&cancellation)),
+            consumed: 0,
+        };
+        let mut reader = BudgetedRead {
+            inner: CancelAfterOneRead {
+                reads: 0,
+                cancellation,
+            },
+            budget: &budget,
+        };
+        let mut output = String::new();
+        let error = reader.read_to_string(&mut output).unwrap_err();
+        assert!(error.to_string().contains("READER_CANCELED"));
+    }
+
+    fn minimal_workbook_zip(styles: Option<&[u8]>, sheet: &[u8]) -> Vec<u8> {
+        minimal_workbook_zip_with_target(styles, sheet, "worksheets/sheet1.xml")
+    }
+
+    fn minimal_workbook_zip_with_target(
+        styles: Option<&[u8]>,
+        sheet: &[u8],
+        target: &str,
+    ) -> Vec<u8> {
+        let mut zip = zip::ZipWriter::new(Cursor::new(Vec::new()));
+        let options = SimpleFileOptions::default();
+        zip.start_file("xl/workbook.xml", options).unwrap();
+        zip.write_all(
+            br#"<workbook><sheets><sheet name="Sheet1" sheetId="1" r:id="rId1"/></sheets></workbook>"#,
+        )
+        .unwrap();
+        zip.start_file("xl/_rels/workbook.xml.rels", options)
+            .unwrap();
+        zip.write_all(
+            format!(
+                "<Relationships><Relationship Id=\"rId1\" Type=\"/worksheet\" Target=\"{target}\"/></Relationships>"
+            )
+            .as_bytes(),
+        )
+        .unwrap();
+        zip.start_file("xl/worksheets/sheet1.xml", options).unwrap();
+        zip.write_all(sheet).unwrap();
+        if let Some(styles) = styles {
+            zip.start_file("xl/styles.xml", options).unwrap();
+            zip.write_all(styles).unwrap();
+        }
+        zip.finish().unwrap().into_inner()
+    }
+
+    #[test]
+    fn read_workbook_from_bytes_rejects_invalid_utf8_in_present_styles() {
+        let bytes = minimal_workbook_zip(Some(&[0xff]), br#"<worksheet/>"#);
+        let error = match read_workbook_from_bytes(&bytes) {
+            Ok(_) => panic!("invalid styles should be rejected"),
+            Err(error) => error,
+        };
+        assert!(error.contains("valid UTF-8"), "unexpected error: {error}");
+    }
+
+    #[test]
+    fn read_workbook_from_bytes_rejects_invalid_utf8_in_present_worksheet() {
+        let bytes = minimal_workbook_zip(None, &[0xff]);
+        let error = match read_workbook_from_bytes(&bytes) {
+            Ok(_) => panic!("invalid worksheet should be rejected"),
+            Err(error) => error,
+        };
+        assert!(error.contains("valid UTF-8"), "unexpected error: {error}");
+    }
+
+    #[test]
+    fn fused_worksheet_validation_preserves_security_errors() {
+        let cases: &[&[u8]] = &[
+            br#"<worksheet ref="A1" ref="B1"/>"#,
+            b"<worksheet><sheetData></worksheet>",
+            b"<!DOCTYPE worksheet><worksheet/>",
+            b"text<worksheet/>",
+        ];
+        for &sheet in cases {
+            let xml = std::str::from_utf8(sheet).unwrap();
+            let expected = validate_xml_budget("xl/worksheets/sheet1.xml", xml).unwrap_err();
+            let bytes = minimal_workbook_zip(None, sheet);
+            let actual = match read_workbook_from_bytes(&bytes) {
+                Ok(_) => panic!("malformed worksheet should be rejected: {xml}"),
+                Err(error) => error,
+            };
+            assert_eq!(actual, expected, "different error for {xml:?}");
+        }
+    }
+
+    #[test]
+    fn fused_worksheet_validation_preserves_shared_string_errors() {
+        let cases: &[(&[u8], &str)] = &[
+            (
+                br#"<worksheet><sheetData><row r="1"><c r="A1" t="s"><v/></c></row></sheetData></worksheet>"#,
+                "shared string cell has an invalid index",
+            ),
+            (
+                br#"<worksheet><sheetData><row r="1"><c r="A1" t="s"><v>0</v></c></row></sheetData></worksheet>"#,
+                "shared string cell refers to an invalid index",
+            ),
+        ];
+        for &(sheet, expected) in cases {
+            let bytes = minimal_workbook_zip(None, sheet);
+            let actual = match read_workbook_from_bytes(&bytes) {
+                Ok(_) => panic!("invalid shared-string reference should be rejected"),
+                Err(error) => error,
+            };
+            assert_eq!(actual, expected);
+        }
+    }
+
+    #[test]
+    fn read_workbook_from_bytes_rejects_a_missing_worksheet_part() {
+        let mut zip = zip::ZipWriter::new(Cursor::new(Vec::new()));
+        let options = SimpleFileOptions::default();
+        zip.start_file("xl/workbook.xml", options).unwrap();
+        zip.write_all(
+            br#"<workbook><sheets><sheet name="Sheet1" sheetId="1" r:id="rId1"/></sheets></workbook>"#,
+        )
+        .unwrap();
+        zip.start_file("xl/_rels/workbook.xml.rels", options)
+            .unwrap();
+        zip.write_all(
+            br#"<Relationships><Relationship Id="rId1" Type="/worksheet" Target="worksheets/sheet1.xml"/></Relationships>"#,
+        )
+        .unwrap();
+        let bytes = zip.finish().unwrap().into_inner();
+        let error = match read_workbook_from_bytes(&bytes) {
+            Ok(_) => panic!("a missing worksheet part should be rejected"),
+            Err(error) => error,
+        };
+        assert!(
+            error.contains("worksheet part is missing"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn read_workbook_from_bytes_rejects_a_missing_worksheet_relationship() {
+        let mut zip = zip::ZipWriter::new(Cursor::new(Vec::new()));
+        let options = SimpleFileOptions::default();
+        zip.start_file("xl/workbook.xml", options).unwrap();
+        zip.write_all(
+            br#"<workbook><sheets><sheet name="Sheet1" sheetId="1" r:id="rId1"/></sheets></workbook>"#,
+        )
+        .unwrap();
+        zip.start_file("xl/_rels/workbook.xml.rels", options)
+            .unwrap();
+        zip.write_all(br#"<Relationships/>"#).unwrap();
+        let bytes = zip.finish().unwrap().into_inner();
+        let error = match read_workbook_from_bytes(&bytes) {
+            Ok(_) => panic!("a missing worksheet relationship should be rejected"),
+            Err(error) => error,
+        };
+        assert!(
+            error.contains("worksheet relationship is missing"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn read_workbook_from_bytes_rejects_a_worksheet_target_that_escapes_the_package() {
+        let bytes = minimal_workbook_zip_with_target(None, br#"<worksheet/>"#, "../../outside.xml");
+        let error = match read_workbook_from_bytes(&bytes) {
+            Ok(_) => panic!("a worksheet target escaping the package should be rejected"),
+            Err(error) => error,
+        };
+        assert!(
+            error.contains("escapes ZIP root"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn worksheet_relationships_reject_external_targets() {
+        let xml = br#"<Relationships><Relationship Id="rId1" Type="/worksheet" Target="https://example.test/sheet.xml" TargetMode="External"/></Relationships>"#;
+        let error = xlsx_worksheet_rels(std::str::from_utf8(xml).unwrap()).unwrap_err();
+        assert!(
+            error.contains("external worksheet relationship target"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn worksheet_relationships_reject_duplicate_ids() {
+        let xml = br#"<Relationships><Relationship Id="rId1" Type="/worksheet" Target="worksheets/sheet1.xml"/><Relationship Id="rId1" Type="/worksheet" Target="worksheets/sheet2.xml"/></Relationships>"#;
+        let error = xlsx_worksheet_rels(std::str::from_utf8(xml).unwrap()).unwrap_err();
+        assert!(
+            error.contains("duplicate worksheet relationship id"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn zip_validation_rejects_path_traversal_entries() {
+        let mut zip = zip::ZipWriter::new(Cursor::new(Vec::new()));
+        zip.start_file("../outside.xml", SimpleFileOptions::default())
+            .unwrap();
+        zip.write_all(b"not valid workbook data").unwrap();
+        let bytes = zip.finish().unwrap().into_inner();
+        let mut archive = ZipArchive::new(Cursor::new(bytes)).unwrap();
+        let error = validate_zip_archive(&mut archive).unwrap_err();
+        assert!(error.contains("unsafe path"));
+    }
+
+    #[test]
+    fn zip_entry_metadata_rejects_each_resource_limit() {
+        let error =
+            validate_zip_entry_metadata("large.xml", ZIP_ENTRY_MAX_BYTES + 1, 1, 0).unwrap_err();
+        assert!(error.contains("too large"));
+
+        let error =
+            validate_zip_entry_metadata("combined.xml", 1, 1, ZIP_MAX_TOTAL_BYTES).unwrap_err();
+        assert!(error.contains("maximum size"));
+
+        let error = validate_zip_entry_metadata("bomb.xml", ZIP_MAX_COMPRESSION_RATIO + 1, 1, 0)
+            .unwrap_err();
+        assert!(error.contains("compression ratio"));
+
+        let error = validate_zip_entry_metadata("/absolute.xml", 1, 1, 0).unwrap_err();
+        assert!(error.contains("unsafe path"));
+    }
+
+    #[test]
+    fn zip_entry_metadata_accepts_limits_without_exceeding_them() {
+        assert_eq!(
+            validate_zip_entry_metadata(
+                "ok.xml",
+                ZIP_ENTRY_MAX_BYTES,
+                ZIP_ENTRY_MAX_BYTES / ZIP_MAX_COMPRESSION_RATIO,
+                0
+            )
+            .unwrap(),
+            ZIP_ENTRY_MAX_BYTES
+        );
+        assert_eq!(
+            validate_zip_entry_metadata("ok.xml", 1, 1, ZIP_MAX_TOTAL_BYTES - 1).unwrap(),
+            ZIP_MAX_TOTAL_BYTES
+        );
+        assert_eq!(
+            validate_zip_entry_metadata("ok.xml", ZIP_MAX_COMPRESSION_RATIO, 1, 0).unwrap(),
+            ZIP_MAX_COMPRESSION_RATIO
+        );
+    }
+
+    #[test]
+    fn xml_budget_rejects_external_entity_declarations() {
+        let error = validate_xml_budget(
+            "workbook.xml",
+            "<!DOCTYPE workbook [<!ENTITY x SYSTEM 'file:///secret'>]><workbook/>",
+        )
+        .unwrap_err();
+        assert!(error.contains("DTD or entity"));
+    }
+
+    #[test]
+    fn xml_budget_rejects_unclosed_documents() {
+        let error = validate_xml_budget("sheet.xml", "<worksheet><sheetData/>").unwrap_err();
+        assert!(error.contains("unclosed"));
+    }
+
+    #[test]
+    fn xml_budget_rejects_duplicate_attributes() {
+        let error =
+            validate_xml_budget("sheet.xml", r#"<worksheet ref="A1" ref="B1"/>"#).unwrap_err();
+        assert!(error.contains("duplicate attribute"));
+    }
+
+    #[test]
+    fn xml_attribute_duplicate_checks_cover_both_sides_of_small_list_threshold() {
+        for count in [0, 1, 7, 8, 9, 32] {
+            let attrs: String = (0..count).map(|i| format!(" a{i}='日本語>{i}'")).collect();
+            let valid = format!("<root><c{attrs}/><c a0='again'/><c{attrs}/></root>");
+            validate_xml_budget("sheet.xml", &valid).unwrap();
+            if count > 0 {
+                for duplicate in [0, count - 1] {
+                    let invalid = format!("<root><c{attrs} a{duplicate}='duplicate'/></root>");
+                    assert!(
+                        validate_xml_budget("sheet.xml", &invalid)
+                            .unwrap_err()
+                            .contains("duplicate attribute")
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn byte_tag_close_scan_preserves_unicode_quotes_and_unterminated_errors() {
+        for body in ["x 日本語='a>b'", "x a=\"日本語>🙂\" b='\"'", "x/", "x"] {
+            let xml = format!("{body}>tail");
+            assert_eq!(find_tag_close(&xml), Some(body.len()));
+        }
+        for body in ["x a='日本語>", "x a=\"🙂>", "x", ""] {
+            assert_eq!(find_tag_close(body), None);
+        }
+    }
+
+    #[test]
+    fn worksheet_attribute_storage_is_reused_without_leaking_values_or_names() {
+        let xml =
+            "<root first='&amp;' second='日本語'><c t='n' r='A1'><v>1</v></c><c r='B1'/></root>";
+        let mut iter = XmlIter::new(xml);
+        let root = iter.next_ev().unwrap();
+        let Ev::Open(_, ref attrs) = root else {
+            panic!("root event")
+        };
+        assert_eq!(attr_get(attrs, "first"), Some("&"));
+        let pointer = attrs.as_ptr();
+        iter.recycle_attributes(root);
+        let cell = iter.next_ev().unwrap();
+        let Ev::Open(_, ref attrs) = cell else {
+            panic!("cell event")
+        };
+        assert_eq!(attrs.as_ptr(), pointer);
+        assert_eq!(attrs.len(), 2);
+        assert_eq!(attr_get(attrs, "first"), None);
+        assert_eq!(attr_get(attrs, "t"), Some("n"));
+        iter.recycle_attributes(cell);
+        while let Some(event) = iter.next_ev() {
+            if let Ev::SelfClose(_, ref attrs) = event {
+                assert_eq!(attrs.as_ptr(), pointer);
+                assert_eq!(attrs.len(), 1);
+                assert_eq!(attr_get(attrs, "r"), Some("B1"));
+                assert_eq!(attr_get(attrs, "t"), None);
+            }
+            iter.recycle_attributes(event);
+        }
+        assert!(!iter.malformed);
+    }
+
+    #[test]
+    fn declaration_prefilter_matches_the_previous_byte_window_policy() {
+        for declaration in [
+            "<!doctype",
+            "<!ENTITY",
+            "<!DoCtYpE",
+            "<!eNtItY",
+            "<!entityX",
+            "<!enti",
+            "<!",
+            "🙂",
+        ] {
+            for (prefix, suffix) in [
+                ("", ""),
+                ("日本語<!-- ", " -->"),
+                ("<![CDATA[", "]]>"),
+                ("<root a='", "'/>"),
+            ] {
+                let xml = format!("{prefix}{declaration}{suffix}");
+                let expected = [b"<!doctype".as_slice(), b"<!entity".as_slice()]
+                    .iter()
+                    .any(|needle| {
+                        xml.as_bytes()
+                            .windows(needle.len())
+                            .any(|window| window.eq_ignore_ascii_case(needle))
+                    });
+                assert_eq!(
+                    validate_xml_preamble("test.xml", &xml).is_err(),
+                    expected,
+                    "{xml}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn xml_budget_rejects_mismatched_closing_tags() {
+        let error =
+            validate_xml_budget("sheet.xml", "<worksheet><sheetData></worksheet>").unwrap_err();
+        assert!(error.contains("mismatched closing tag"));
+    }
+
+    #[test]
+    fn xml_budget_rejects_multiple_roots_and_outside_text() {
+        let error = validate_xml_budget("sheet.xml", "<worksheet/><worksheet/>").unwrap_err();
+        assert!(error.contains("multiple root elements"));
+
+        let error = validate_xml_budget("sheet.xml", "text<worksheet/>").unwrap_err();
+        assert!(error.contains("outside the root element"));
+    }
+
+    #[test]
+    fn xml_budget_rejects_a_document_without_a_root() {
+        let error = validate_xml_budget("sheet.xml", "   ").unwrap_err();
+        assert!(error.contains("no root element"));
+    }
+
+    #[test]
+    fn xml_budget_rejects_unterminated_xml_constructs() {
+        for xml in [
+            "<worksheet><!-- unterminated",
+            "<worksheet><![CDATA[unterminated</worksheet>",
+            "<worksheet></worksheet",
+            "<worksheet>",
+            "<worksheet attr=\"unterminated>",
+        ] {
+            let error = validate_xml_budget("sheet.xml", xml).unwrap_err();
+            assert!(
+                error.contains("malformed") || error.contains("unclosed"),
+                "unexpected error for {xml:?}: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn xml_budget_rejects_malformed_tag_names_and_attributes() {
+        for xml in [
+            "<>",
+            "<worksheet missing_value>",
+            "<worksheet value=unquoted/>",
+            "<worksheet value=\"unterminated/>",
+            "<worksheet value=\"bad<value\"/>",
+        ] {
+            let error = validate_xml_budget("sheet.xml", xml).unwrap_err();
+            assert!(error.contains("malformed") || error.contains("unclosed"));
+        }
+    }
+
+    #[test]
+    fn xml_budget_rejects_unknown_declarations_and_unterminated_processing_instructions() {
+        for xml in [
+            "<!unknown><worksheet/>",
+            "<worksheet><?processing instruction></worksheet>",
+        ] {
+            let error = validate_xml_budget("sheet.xml", xml).unwrap_err();
+            assert!(error.contains("malformed") || error.contains("multiple root"));
+        }
+        validate_xml_budget("sheet.xml", "<?xml version=\"1.0\"?><worksheet/>")
+            .expect("well-formed processing instructions should remain accepted");
+    }
+
+    #[test]
+    fn xml_budget_rejects_forbidden_control_characters() {
+        for control in ['\0', '\u{1}', '\u{b}', '\u{1f}'] {
+            let xml = format!("<worksheet>value{control}</worksheet>");
+            let error = validate_xml_budget("sheet.xml", &xml).unwrap_err();
+            assert!(error.contains("control character"));
+        }
+        validate_xml_budget("sheet.xml", "<worksheet>\t\n\r</worksheet>")
+            .expect("XML whitespace controls should remain accepted");
+    }
+
+    #[test]
+    fn xml_budget_accepts_a_normal_document_and_xsd_boolean_literals() {
+        let xml =
+            r#"<?xml version="1.0"?><worksheet><row hidden="true"><c r="A1"/></row></worksheet>"#;
+        validate_xml_budget("sheet.xml", xml).expect("normal XML should stay within the budget");
+    }
+
+    #[test]
+    fn workbook_model_limits_reject_excessive_shape_counts() {
+        let error = validate_workbook_model_count(WORKBOOK_MAX_SHEETS + 1).unwrap_err();
+        assert!(error.contains("too many sheets"));
+
+        let error = validate_sheet_model("Sheet1", SHEET_MAX_CELLS + 1, 0).unwrap_err();
+        assert!(error.contains("too many cells"));
+
+        let error = validate_sheet_model("Sheet1", 0, SHEET_MAX_MERGES + 1).unwrap_err();
+        assert!(error.contains("too many merged ranges"));
+    }
+
+    #[test]
+    fn shared_string_limit_rejects_excessive_count() {
+        let strings = vec![String::new(); SHARED_STRINGS_MAX_COUNT + 1];
+        let error = validate_shared_strings(&strings).unwrap_err();
+        assert!(error.contains("shared strings table is too large"));
+    }
+
+    #[test]
+    fn shared_string_refs_reject_missing_indices() {
+        let valid = r#"<worksheet><sheetData><row r="1"><c r="A1" t="s"><v>0</v></c></row></sheetData></worksheet>"#;
+        validate_shared_string_refs(valid, &["ok".to_string()]).unwrap();
+
+        let invalid = r#"<worksheet><sheetData><row r="1"><c r="A1" t="s"><v>1</v></c></row></sheetData></worksheet>"#;
+        let error = validate_shared_string_refs(invalid, &["ok".to_string()]).unwrap_err();
+        assert!(error.contains("invalid index"));
     }
 }

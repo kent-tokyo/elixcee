@@ -3,6 +3,7 @@ name: Release CLI binaries
 on:
   push:
     tags:
+      - 'v*'
       - 'bin-v*'
 
 permissions:

@@ -75,10 +75,14 @@ function main() {
   // asset (a .cjs adapter module or the vendored WASM artifacts) -- not a
   // hard allowlist of exact filenames (those legitimately change as the
   // bridge evolves), but a shape check: anything under src/internal/ that
-  // isn't .cjs or under src/internal/wasm/ is unexpected.
+  // isn't a runtime module or under src/internal/wasm/ is unexpected. ESM
+  // wrappers are allowed because browser/ESM exports may need to share the
+  // same internal adapter without relying on Node's CommonJS loader.
   for (const p of paths) {
     if (!p.startsWith('src/internal/')) continue;
-    const isAdapterModule = p.endsWith('.cjs') && !p.startsWith('src/internal/wasm/');
+    const isAdapterModule =
+      (p.endsWith('.cjs') || p.endsWith('.mjs')) &&
+      !p.startsWith('src/internal/wasm/');
     const isWasmArtifact = p.startsWith('src/internal/wasm/');
     if (!isAdapterModule && !isWasmArtifact) {
       problems.push(`unexpected file under src/internal/: ${p}`);

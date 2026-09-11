@@ -107,6 +107,112 @@ pub enum Variant {
     Record(std::collections::HashMap<String, Variant>), // UDT instance (p.x, p.y, …)
 }
 
+/// The worksheet footprint of a formula array result.
+///
+/// `Variant::Array` remains a flat compatibility representation. Until the
+/// evaluator produces explicit two-dimensional metadata, non-empty flat
+/// arrays are treated as one row. An empty result has no spill footprint.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ArrayShape {
+    pub rows: usize,
+    pub cols: usize,
+}
+
+impl ArrayShape {
+    pub const fn new(rows: usize, cols: usize) -> Self {
+        Self { rows, cols }
+    }
+
+    pub const fn cell_count(self) -> usize {
+        self.rows.saturating_mul(self.cols)
+    }
+
+    pub const fn is_empty(self) -> bool {
+        self.rows == 0 || self.cols == 0
+    }
+}
+
+/// A 1-based worksheet rectangle occupied by a dynamic-array result.
+///
+/// The rectangle is deliberately independent from cell storage so collision
+/// checks can happen before a future spill writer mutates the worksheet.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SpillRect {
+    pub origin_row: u32,
+    pub origin_col: u32,
+    pub shape: ArrayShape,
+}
+
+impl SpillRect {
+    /// Builds a rectangle using Excel's 1-based worksheet coordinates.
+    /// Rejects zero coordinates and rectangles whose end would overflow the
+    /// coordinate type. Empty shapes are valid and occupy no cells.
+    pub fn new(origin_row: u32, origin_col: u32, shape: ArrayShape) -> Result<Self, String> {
+        if origin_row == 0 || origin_col == 0 {
+            return Err("worksheet coordinates are 1-based".to_string());
+        }
+        if !shape.is_empty()
+            && (origin_row as u64 + shape.rows as u64 - 1 > u32::MAX as u64
+                || origin_col as u64 + shape.cols as u64 - 1 > u32::MAX as u64)
+        {
+            return Err("spill rectangle exceeds worksheet coordinate bounds".to_string());
+        }
+        Ok(Self {
+            origin_row,
+            origin_col,
+            shape,
+        })
+    }
+
+    pub fn cell_at(&self, row_offset: usize, col_offset: usize) -> Option<(u32, u32)> {
+        if self.shape.is_empty() || row_offset >= self.shape.rows || col_offset >= self.shape.cols {
+            return None;
+        }
+        Some((
+            self.origin_row + row_offset as u32,
+            self.origin_col + col_offset as u32,
+        ))
+    }
+
+    pub fn contains(&self, position: (u32, u32)) -> bool {
+        if self.shape.is_empty() {
+            return false;
+        }
+        let (row, col) = position;
+        row >= self.origin_row
+            && col >= self.origin_col
+            && (row - self.origin_row) < self.shape.rows as u32
+            && (col - self.origin_col) < self.shape.cols as u32
+    }
+
+    pub fn intersects(&self, other: &Self) -> bool {
+        if self.shape.is_empty() || other.shape.is_empty() {
+            return false;
+        }
+        let self_end_row = self.origin_row as u64 + self.shape.rows as u64 - 1;
+        let self_end_col = self.origin_col as u64 + self.shape.cols as u64 - 1;
+        let other_end_row = other.origin_row as u64 + other.shape.rows as u64 - 1;
+        let other_end_col = other.origin_col as u64 + other.shape.cols as u64 - 1;
+        self.origin_row as u64 <= other_end_row
+            && other.origin_row as u64 <= self_end_row
+            && self.origin_col as u64 <= other_end_col
+            && other.origin_col as u64 <= self_end_col
+    }
+}
+
+impl Variant {
+    /// Returns the current formula-array spill shape without changing the
+    /// legacy flat `Array` storage. VBA-declared arrays intentionally return
+    /// `None`; they are not worksheet spill results.
+    pub fn array_shape(&self) -> Option<ArrayShape> {
+        match self {
+            Variant::Array(values) if values.is_empty() => Some(ArrayShape::new(0, 0)),
+            Variant::Array(values) => Some(ArrayShape::new(1, values.len())),
+            _ => None,
+        }
+    }
+}
+
 /// The bounds of one dimension of a VBA-declared array: an explicit `lo To
 /// hi`, or the implicit `Option Base .. To <upper>` form collapsed to the
 /// same shape. `upper < lower` is legal VBA (as when `Option Base 1` meets a
@@ -446,6 +552,49 @@ mod tests {
     fn variant_display_formats_a_date_via_serial_to_display() {
         assert_eq!(Variant::Date(45000).to_string(), serial_to_display(45000));
         assert_eq!(Variant::Date(1).to_string(), "1900-01-01");
+    }
+
+    #[test]
+    fn flat_formula_arrays_expose_a_row_shape_and_empty_arrays_have_no_footprint() {
+        assert_eq!(
+            Variant::Array(vec![Variant::Integer(1), Variant::Integer(2)]).array_shape(),
+            Some(ArrayShape::new(1, 2))
+        );
+        assert_eq!(
+            Variant::Array(Vec::new()).array_shape(),
+            Some(ArrayShape::new(0, 0))
+        );
+        assert_eq!(ArrayShape::new(2, 3).cell_count(), 6);
+        assert!(!ArrayShape::new(2, 3).is_empty());
+        assert!(ArrayShape::new(0, 3).is_empty());
+    }
+
+    #[test]
+    fn spill_rect_uses_one_based_coordinates_and_checks_collisions() {
+        let left = SpillRect::new(2, 3, ArrayShape::new(2, 3)).unwrap();
+        let right = SpillRect::new(3, 5, ArrayShape::new(2, 2)).unwrap();
+        let separate = SpillRect::new(4, 7, ArrayShape::new(1, 1)).unwrap();
+        assert_eq!(left.cell_at(0, 0), Some((2, 3)));
+        assert_eq!(left.cell_at(1, 2), Some((3, 5)));
+        assert_eq!(left.cell_at(2, 0), None);
+        assert!(left.intersects(&right));
+        assert!(!left.intersects(&separate));
+    }
+
+    #[test]
+    fn spill_rect_rejects_zero_and_overflowing_coordinates_but_allows_empty_shapes() {
+        assert!(SpillRect::new(0, 1, ArrayShape::new(1, 1)).is_err());
+        assert!(SpillRect::new(u32::MAX, 1, ArrayShape::new(2, 1)).is_err());
+        let empty = SpillRect::new(u32::MAX, u32::MAX, ArrayShape::new(0, 0)).unwrap();
+        assert_eq!(empty.cell_at(0, 0), None);
+        assert!(!empty.intersects(&empty));
+    }
+
+    #[test]
+    fn non_formula_values_and_vba_arrays_do_not_claim_a_spill_shape() {
+        assert_eq!(Variant::Integer(1).array_shape(), None);
+        let vba = VbaArray::from_vec(vec![Variant::Integer(1)]);
+        assert_eq!(Variant::VbaArray(vba).array_shape(), None);
     }
 
     #[test]

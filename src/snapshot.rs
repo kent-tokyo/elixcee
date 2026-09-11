@@ -198,6 +198,8 @@ mod tests {
             column_styles: Vec::new(),
             tables: Vec::new(),
             data_validations: Vec::new(),
+            conditional_format_ranges: Vec::new(),
+            comment_cells: Vec::new(),
             autofilter: None,
         }
     }

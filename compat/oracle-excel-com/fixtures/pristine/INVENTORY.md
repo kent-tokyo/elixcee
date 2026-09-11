@@ -65,7 +65,7 @@ the fixtures, so it can go stale like any other manifest.
   range. Both belong to 0.10.0-C ("print area・print titles" / "defined names" are the
   same XML container, `<definedNames>`, but a builtin `_xlnm.*` name has spreadsheet-app
   semantics an ordinary name doesn't — worth keeping distinct in any future structured
-  handling, even though the opaque-fragment-passthrough design in the main doc's §7 treats
+  handling, even though the historical opaque-fragment design treated
   both the same way at the XML level).
 - One cell carries `t="e" vm="1"` — a rich-value-linked error cell (the `richData` feature,
   already declared out of scope in the main design doc's §3).

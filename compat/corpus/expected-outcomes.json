@@ -48,18 +48,6 @@
     "expectedErrorMessage": "Division by zero",
     "reason": "3.5 / 0 — a literal division by zero."
   },
-  "unsupported_functions_0001": {
-    "classification": "EXPECTED_UNSUPPORTED",
-    "expectedErrorKind": "runtime_error",
-    "expectedErrorMessage": "WorksheetFunction.textjoin is not implemented",
-    "reason": "Application.WorksheetFunction.TextJoin — deliberately unimplemented worksheet function (this scenario's own category name is 'unsupported_functions'; it exists specifically to exercise the not-implemented path, not to pass)."
-  },
-  "unsupported_functions_0002": {
-    "classification": "EXPECTED_UNSUPPORTED",
-    "expectedErrorKind": "runtime_error",
-    "expectedErrorMessage": "WorksheetFunction.xlookup is not implemented",
-    "reason": "Application.WorksheetFunction.Xlookup — deliberately unimplemented worksheet function, same reasoning as unsupported_functions_0001."
-  },
   "nondeterministic_0002": {
     "classification": "NONDETERMINISTIC",
     "expectedErrorKind": "undefined_sub_or_function",

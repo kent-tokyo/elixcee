@@ -1,0 +1,73 @@
+# Writer streaming measurement — 2026-09-07
+
+Scope: local macOS arm64, CPython 3.13, release wheel built from the current
+1.0.4 tree, isolated child processes, three columns, plain text profile, two
+repetitions. ZIP integrity, worksheet shape, and final-row checks passed for
+every completed case.
+
+| mode | rows | RSS p50 / p95 | wall p50 / p95 | output |
+|---|---:|---:|---:|---:|
+| append | 100,000 | 19.39 / 19.83 MiB | 353 / 367 ms | 1.36 MiB |
+| append | 250,000 | 19.38 / 19.46 MiB | 717 / 756 ms | 3.51 MiB |
+
+The corrected normal-VM run uses 4,096-row `set_range` batches to avoid
+measuring one undo snapshot per input row. It is a storage/save observation,
+not an append API throughput comparison:
+
+| mode | rows | RSS p50 / p95 | wall p50 / p95 | output |
+|---|---:|---:|---:|---:|
+| normal-fresh | 100,000 | 612.58 / 623.22 MiB | 340 / 393 ms | 1.24 MiB |
+| normal-fresh | 250,000 | 924.62 / 1,920.73 MiB | 1,068 / 1,178 ms | 3.11 MiB |
+
+Both repetitions for both row counts passed ZIP, worksheet-shape, final-row,
+and output validation. The 250,000-row RSS samples were 924.62 MiB and
+1,920.73 MiB, so the high p95 is retained rather than normalized away. This
+run does not support a constant-memory claim; 1,000,000 rows, three-OS
+coverage, and Excel-oracle comparison remain open.
+
+After changing transaction history to retain one pre-transaction snapshot and
+making the normal-VM harness wrap all batches in one transaction, the same
+measurement was rerun with the rebuilt 1.0.4 release wheel:
+
+| mode | rows | RSS p50 / p95 | wall p50 / p95 | output |
+|---|---:|---:|---:|---:|
+| normal-fresh, one transaction | 100,000 | 116.92 / 118.30 MiB | 173 / 202 ms | 1.24 MiB |
+| normal-fresh, one transaction | 250,000 | 203.56 / 203.61 MiB | 418 / 420 ms | 3.11 MiB |
+
+All four samples passed the same output checks. This is a large-workbook
+undo-history improvement, not proof that the normal VM is constant-memory;
+the full 1,000,000-row and three-OS matrix remains open.
+
+The transaction-enabled harness was then extended to 1,000,000 rows under the
+same conditions. Both repetitions passed ZIP, worksheet-shape, final-row, and
+output validation:
+
+| mode | rows | RSS p50 / p95 | wall p50 / p95 | temp / output |
+|---|---:|---:|---:|---:|
+| append | 1,000,000 | 19.38 / 19.44 MiB | 2,750 / 2,789 ms | 14.24 / 14.24 MiB |
+| normal-fresh, one transaction | 1,000,000 | 751.56 / 753.20 MiB | 2,185 / 3,829 ms | 12.43 / 12.43 MiB |
+
+The normal-fresh p95 is the slower of the two samples; both RSS samples were
+close. This confirms the current bounded-transaction path at 1M rows but does
+not make the normal VM constant-memory or establish Linux/Windows behavior.
+
+The initial normal-VM 100,000-row case, using one `append_row` call per row,
+was stopped after more than two minutes at 100% child CPU. It is intentionally
+recorded as unmeasured, not as a failure. The append data is one macOS run and
+does not establish three-OS support or constant memory for the normal VM.
+The harness now uses 4,096-row `set_range` batches for a separate normal-VM
+storage/save measurement; its results must not be compared directly with
+append API timings.
+
+The measurement harness now also compares every emitted cell against the
+generated input using a streaming semantic digest. The comparison ignores ZIP
+layout, shared-string choice, styles, and workbook metadata; it is an output
+value check, not an Excel compatibility check.
+
+As a follow-up on 2026-09-09, the same macOS arm64 release-wheel harness ran
+the one-million-row point once per mode with this digest enabled. `append`
+reported 19.64 MiB peak RSS, 2,822 ms wall time, and a 14.24 MiB output;
+`normal-fresh` reported 751.61 MiB peak RSS, 1,961 ms wall time, and a 12.43
+MiB output. Both samples passed ZIP, worksheet-shape, final-row, and
+`semantic_equal: true` validation. The single repetition is a confirmation
+sample, not a p95 estimate.

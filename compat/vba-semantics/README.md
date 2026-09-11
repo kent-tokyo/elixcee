@@ -63,58 +63,19 @@ into looking like "the spec". A mismatch either gets a `knownLimitation` reason 
 by a human who looked at the actual divergence) or it's `BUG`. Nothing silently downgrades
 a real bug into a passing case by weakening what's expected.
 
-## Current state
+## Recorded coverage and current limitations
 
-386 cases across 25 categories: the original 12 (numeric conversion/rounding, negative
-`\`/`Mod`, logical/bitwise, `Str`/`CStr`/`Val`, `IsNumeric`, `TypeName`/`VarType`,
-`Date`/`Time`/`Now`, `Empty`/`Null`/error values, string boundaries, array indices, Range
-values, error kind), plus division by zero, invalid procedure arguments, overflow,
-single-line-If control transfer, `Exit` Sub/Function/For/Do, object-Nothing access,
-`+`-vs-`&` operator coercion, comparison-operator coercion, `Select Case` matching, `With`
-block resolution, and array bounds — and, added for the VBA-structural-semantics round,
-**`null_propagation`** (38), **`colon_statement_separator`** (19), plus large expansions of
-`with_block_resolution` (6 → 23) and `object_nothing_access` (2 → 12).
-Not padded to hit a round number — coverage depth varies by category based on how much
-real semantic subtlety each one has (numeric rounding has the most tie-breaking/edge-case
-richness; `Select Case` matching, being unambiguous control flow with no type-coercion
-question, has none of its 9 cases end up as a disclosed gap).
+The checked-in [report](results/report.json) contains 386 cases:
+347 MATCH_DOCUMENTED_SEMANTICS, 23 EXPECTED_ERROR, 2 NONDETERMINISTIC,
+14 KNOWN_LIMITATION, and zero BUG/UNCLASSIFIED.
+Rechecked locally on macOS on 2026-09-06 with the **1.0.3 release CLI**.
+This is a documented-semantics reference suite, not live Microsoft Excel execution.
 
-0 `BUG`, 0 `UNCLASSIFIED`. **14 `KNOWN_LIMITATION`, down from 28** — fifteen were genuinely
-fixed across three rounds (a fixed divergence isn't `KNOWN_LIMITATION` by definition — it
-becomes `MATCH_DOCUMENTED_SEMANTICS`/`EXPECTED_ERROR`, and its `knownLimitation` annotation
-is *removed*, not weakened): the three Null-propagation ones, the two object-variable
-unset/Nothing ones, the two `With`-target ones, the `Type mismatch` error-message one, and
-the missing `Array()` builtin (structural-semantics round); `Dim arr(lo To hi)`, `Dim arr()`
-(empty parens), `Option Base 1`, and `Erase` on a fixed-size array (a later round, adding
-array lower-bound tracking); and the last two, real multi-dimensional array support (a round
-after that) — `two_dimensional_array_second_index_is_silently_dropped` and
-`ubound_second_dimension_argument_ignored`, fixed together by giving `Variant::VbaArray` (a
-distinct type from the pre-existing `Variant::Array`, which stays exactly what it was for
-Range-value reads/formula-array results/record arrays) real per-dimension bounds and
-row-major element storage. See CHANGELOG.md for what each fix actually changed. The
-remaining 14, grouped by root cause rather than by count:
-
-- **No declared/runtime type-width tracking** (12): `CInt`/`CLng` silently truncate instead
-  of raising `Overflow` on out-of-range values (5); a `Left`/`Right`/`Mid`/`Chr`/`InStr`
-  call with an out-of-domain argument (negative length, zero start, out-of-range char code)
-  silently clamps instead of raising `Invalid procedure call or argument` (7).
-- **No per-Variant stored-type tag distinguishing "string that looks numeric" from
-  "genuine number"** (1): `+` between two Variants that both hold strings numeric-adds
-  instead of concatenating, even though real VBA's own documented rule concatenates
-  whenever *both* sides are string-typed, independent of content.
-- **A numeric Variant compared to a string Variant isn't unconditionally "less than"** (1):
-  real VBA's documented rule for `<`/`>` between a numeric-typed and string-typed Variant
-  ignores magnitude entirely; elixcee still numeric-compares when the string looks numeric.
-  Deliberately not "fixed" — the current behavior is far more useful for the overwhelmingly
-  more common real-world case (numeric-string-vs-number threshold checks), and the fix
-  would need to invert it for every caller, not just this one case.
-
-Two divergences found alongside the structural-semantics work are *not* in this suite,
-because the shapes this suite can express don't distinguish them; both are recorded in
-`ROADMAP.md`'s known-defects list instead: `Range.Range(...)`/`Range.Cells(...)` inside a
-`With <range>` body resolve absolutely rather than relative to the base range, and a line
-skipped wholesale as an unrecognized *block header* still swallows its trailing
-`:`-separated statements.
+Current expected answers and disclosed limitations are in
+[expected-results.json](expected-results.json). Re-run the suite after implementation
+changes; remove a knownLimitation only when the documented expected answer genuinely
+matches. Do not preserve an old count by weakening expected values.
+The [coverage reference](../../FUNCTIONS.md) supersedes historical parser/Range gap lists.
 
 One deliberate non-coverage decision: **`Select Case` with a `Null` test expression.**
 Microsoft's `Select Case` reference documents only that `testexpression` is "matched"

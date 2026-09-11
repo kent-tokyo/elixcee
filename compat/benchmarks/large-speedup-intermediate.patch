@@ -1,0 +1,372 @@
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -5520,13 +5520,13 @@
+     out.xml_str("<sheetData>\n")?;
+ 
+     if let Some(cells) = vm.get_sheet_cells(sheet_name) {
+-        // Group by row first to avoid O(max_row × total_cells) scanning. `None` content
+-        // marks a value-less cell carried only by `style_indices` (see below).
+-        let mut by_row: std::collections::BTreeMap<u32, Vec<(u32, Option<&vm::CellContent>)>> =
+-            std::collections::BTreeMap::new();
++        // One flat coordinate sort avoids a tree lookup per cell and a separate
++        // allocation per row. `None` is style-only; column zero is an empty-row
++        // marker, never a cell (including for sparse hidden/height/style rows).
++        let mut ordered_cells = Vec::with_capacity(cells.len());
+         for (&(r, c), v) in cells.iter() {
+             if r > 0 && c > 0 {
+-                by_row.entry(r).or_default().push((c, Some(v)));
++                ordered_cells.push(((r, c), Some(v)));
+             }
+         }
+         // A value-less, pre-formatted cell (e.g. a merged-cell anchor styled but never
+@@ -5543,7 +5543,7 @@
+         if let Some(styles) = style_indices {
+             for &(r, c) in styles.keys() {
+                 if r > 0 && c > 0 && !cells.contains_key(&(r, c)) {
+-                    by_row.entry(r).or_default().push((c, None));
++                    ordered_cells.push(((r, c), None));
+                 }
+             }
+         }
+@@ -5555,21 +5555,23 @@
+         // that's what a real <row>-element-per-row source already looks like.
+         for iv in hidden_rows {
+             for r in iv.start..=iv.end {
+-                by_row.entry(r).or_default();
++                ordered_cells.push(((r, 0), None));
+             }
+         }
+         if let Some(heights) = row_heights {
+             for &r in heights.keys() {
+-                by_row.entry(r).or_default();
++                ordered_cells.push(((r, 0), None));
+             }
+         }
+         if let Some(styles) = row_styles {
+             for &r in styles.keys() {
+-                by_row.entry(r).or_default();
++                ordered_cells.push(((r, 0), None));
+             }
+         }
+-        for (row, mut row_cells) in by_row {
+-            row_cells.sort_by_key(|&(c, _)| c);
++        ordered_cells.sort_unstable_by_key(|&(position, _)| position);
++        let mut cell_ref_buffer = [0u8; 17];
++        for row_cells in ordered_cells.chunk_by(|a, b| a.0.0 == b.0.0) {
++            let row = row_cells[0].0.0;
+             let row_hidden = hidden_rows
+                 .iter()
+                 .any(|iv| iv.start <= row && row <= iv.end);
+@@ -5586,14 +5588,17 @@
+             out.xml_fmt(format_args!(
+                 "<row r=\"{row}\"{height_attr}{style_attr}{hidden_attr}>\n"
+             ))?;
+-            for (c, content) in row_cells {
+-                let cell_ref = format!("{}{}", xlsx_col_letters(c), row);
++            for &((_, c), content) in row_cells {
++                if c == 0 {
++                    continue;
++                }
++                let cell_ref = xlsx_cell_ref(row, c, &mut cell_ref_buffer);
+                 let style_idx = style_indices.and_then(|m| m.get(&(row, c)).copied());
+                 match content {
+                     Some(content) => {
+                         if xlsx_cell_xml(
+                             out,
+-                            &cell_ref,
++                            cell_ref,
+                             &content.value,
+                             str_index,
+                             style_idx,
+@@ -5921,7 +5926,108 @@
+         assert!(xml.contains("<si><t>plain</t></si>"));
+         assert!(xml.contains("<si><t xml:space=\"preserve\"> leading and trailing </t></si>"));
+         assert!(xml.contains("<si><t xml:space=\"preserve\">trailing </t></si>"));
++    }
++}
++
++/// Allocation-free A1 address: a u32 column takes at most seven letters and a
++/// u32 row ten decimal digits. Keep the full u32 range of the existing writer.
++fn xlsx_cell_ref(mut row: u32, mut col: u32, buffer: &mut [u8; 17]) -> &str {
++    let mut start = buffer.len();
++    loop {
++        start -= 1;
++        buffer[start] = b'0' + (row % 10) as u8;
++        row /= 10;
++        if row == 0 {
++            break;
++        }
++    }
++    while col > 0 {
++        col -= 1;
++        start -= 1;
++        buffer[start] = b'A' + (col % 26) as u8;
++        col /= 26;
++    }
++    std::str::from_utf8(&buffer[start..]).expect("A1 addresses contain only ASCII")
++}
++
++#[cfg(test)]
++mod cell_ref_tests {
++    use super::{OpaqueWorksheetFragments, Vm, write_xlsx_sheet, xlsx_cell_ref, xlsx_col_letters};
++    use crate::{
++        types::Variant,
++        vm::{Interval, SheetVisibility},
++    };
++    use std::collections::HashMap;
++
++    #[test]
++    fn flat_coordinate_sort_preserves_sparse_and_overlapping_row_metadata() {
++        let mut vm = Vm::new();
++        let name = vm.sheet_names()[0].clone();
++        let key = name.to_lowercase();
++        // Reverse insertion order, a column-name boundary, and Excel's far edge.
++        for (r, c, value) in [(1_048_576, 16_384, 9), (3, 27, 27), (3, 1, 1)] {
++            vm.write_rect(&name, (r, c), &[vec![Variant::Integer(value)]]);
++        }
++        vm.cell_style_indices
++            .insert(key.clone(), HashMap::from([((3, 2), 0), ((19, 26), 0)]));
++        vm.row_heights
++            .insert(key.clone(), HashMap::from([(9, 20.0), (17, 30.5)]));
++        vm.row_styles
++            .insert(key.clone(), HashMap::from([(9, 0), (15, 0)]));
++        vm.sheet_visibility.insert(
++            key,
++            SheetVisibility {
++                hidden_rows: vec![Interval { start: 9, end: 11 }],
++                hidden_columns: vec![],
++            },
++        );
++        let mut xml = String::new();
++        write_xlsx_sheet(
++            &vm,
++            &name,
++            &HashMap::new(),
++            &OpaqueWorksheetFragments::default(),
++            None,
++            None,
++            None,
++            &mut xml,
++        )
++        .unwrap();
++        let data = xml
++            .split_once("<sheetData>\n")
++            .unwrap()
++            .1
++            .split_once("</sheetData>")
++            .unwrap()
++            .0;
++        assert_eq!(
++            data,
++            concat!(
++                "<row r=\"3\">\n<c r=\"A3\"><v>1</v></c>\n<c r=\"B3\" s=\"0\"/>\n<c r=\"AA3\"><v>27</v></c>\n</row>\n",
++                "<row r=\"9\" customHeight=\"1\" ht=\"20\" s=\"0\" customFormat=\"1\" hidden=\"1\">\n</row>\n",
++                "<row r=\"10\" hidden=\"1\">\n</row>\n<row r=\"11\" hidden=\"1\">\n</row>\n",
++                "<row r=\"15\" s=\"0\" customFormat=\"1\">\n</row>\n",
++                "<row r=\"17\" customHeight=\"1\" ht=\"30.5\">\n</row>\n",
++                "<row r=\"19\">\n<c r=\"Z19\" s=\"0\"/>\n</row>\n",
++                "<row r=\"1048576\">\n<c r=\"XFD1048576\"><v>9</v></c>\n</row>\n"
++            )
++        );
+     }
++
++    #[test]
++    fn stack_cell_reference_matches_existing_format_across_column_boundaries() {
++        let mut buffer = [0; 17];
++        for row in [0, 1, 9, 10, 99, 100, 1_048_576, u32::MAX] {
++            for col in (0..=16_384).chain([u32::MAX]) {
++                assert_eq!(
++                    xlsx_cell_ref(row, col, &mut buffer),
++                    format!("{}{row}", xlsx_col_letters(col))
++                );
++            }
++        }
++        // Reuse after a maximal address must not leak the previous tail.
++        assert_eq!(xlsx_cell_ref(1, 1, &mut buffer), "A1");
++    }
+ }
+ 
+ fn xlsx_col_letters(mut col: u32) -> String {
+--- a/src/reader.rs
++++ b/src/reader.rs
+@@ -1236,19 +1236,21 @@
+ /// Find the byte position of the unquoted `>` that closes the current tag body.
+ fn find_tag_close(s: &str) -> Option<usize> {
+     let mut in_quote = false;
+-    let mut qchar = '"';
+-    for (i, c) in s.char_indices() {
++    let mut qchar = b'"';
++    // XML delimiters are ASCII; byte scanning preserves UTF-8 boundaries while
++    // avoiding decoding every character in a quoted attribute value.
++    for (i, &c) in s.as_bytes().iter().enumerate() {
+         if in_quote {
+             if c == qchar {
+                 in_quote = false;
+             }
+         } else {
+             match c {
+-                '"' | '\'' => {
++                b'"' | b'\'' => {
+                     in_quote = true;
+                     qchar = c;
+                 }
+-                '>' => return Some(i),
++                b'>' => return Some(i),
+                 _ => {}
+             }
+         }
+@@ -1611,15 +1613,6 @@
+         )?;
+     }
+     Ok(())
+-}
+-
+-fn contains_ascii_case_insensitive(haystack: &[u8], needle: &[u8]) -> bool {
+-    haystack.windows(needle.len()).any(|window| {
+-        window
+-            .iter()
+-            .zip(needle)
+-            .all(|(actual, expected)| actual.to_ascii_lowercase() == *expected)
+-    })
+ }
+ 
+ struct XmlBudgetValidator<'xml> {
+@@ -1722,9 +1715,22 @@
+             self.open_tags.push(tag);
+         }
+ 
+-        self.attribute_names.clear();
+-        for attr in attrs {
+-            if !self.attribute_names.insert(attr.name) {
++        // Cell/row tags usually have at most a handful of attributes. Compare
++        // those directly, keeping the hash set for larger lists so adversarial
++        // input cannot turn duplicate detection into unbounded quadratic work.
++        let small_attributes = attrs.len() <= 8;
++        if !small_attributes {
++            self.attribute_names.clear();
++        }
++        for (index, attr) in attrs.iter().enumerate() {
++            let duplicate = if small_attributes {
++                attrs[..index]
++                    .iter()
++                    .any(|previous| previous.name == attr.name)
++            } else {
++                !self.attribute_names.insert(attr.name)
++            };
++            if duplicate {
+                 return Err(format!(
+                     "XML element has a duplicate attribute: {} ({tag})",
+                     self.name
+@@ -1765,7 +1771,6 @@
+ }
+ 
+ fn validate_xml_preamble(name: &str, xml: &str) -> Result<(), String> {
+-    let raw = xml.as_bytes();
+     if xml
+         .chars()
+         .any(|c| c.is_control() && !matches!(c, '\t' | '\n' | '\r'))
+@@ -1774,9 +1779,19 @@
+             "XML document contains a forbidden control character: {name}"
+         ));
+     }
+-    if contains_ascii_case_insensitive(raw, b"<!doctype")
+-        || contains_ascii_case_insensitive(raw, b"<!entity")
+-    {
++    // Both forbidden literals have the same case-independent ASCII prefix.
++    // Search that prefix once instead of lowercasing windows at every byte in
++    // two whole-document passes. Still inspect EVERY occurrence, even inside
++    // comments/CDATA/attributes, preserving the conservative rejection policy.
++    if xml.match_indices("<!").any(|(index, _)| {
++        let tail = &xml.as_bytes()[index..];
++        [b"<!doctype".as_slice(), b"<!entity".as_slice()]
++            .iter()
++            .any(|needle| {
++                tail.get(..needle.len())
++                    .is_some_and(|value| value.eq_ignore_ascii_case(needle))
++            })
++    }) {
+         return Err(format!(
+             "XML document uses a forbidden DTD or entity declaration: {name}"
+         ));
+@@ -4442,7 +4457,8 @@
+                         }
+                     }
+                     "c" => {
+-                        cur_type = attr_get(attrs, "t").unwrap_or("").to_string();
++                        cur_type.clear();
++                        cur_type.push_str(attr_get(attrs, "t").unwrap_or(""));
+                         in_v = false;
+                         if let Some(r) = attr_get(attrs, "r")
+                             && let Some((row, col)) = parse_cell_ref(r)
+@@ -6941,6 +6957,71 @@
+     }
+ 
+     #[test]
++    fn xml_attribute_duplicate_checks_cover_both_sides_of_small_list_threshold() {
++        for count in [0, 1, 7, 8, 9, 32] {
++            let attrs: String = (0..count).map(|i| format!(" a{i}='日本語>{i}'")).collect();
++            let valid = format!("<root><c{attrs}/><c a0='again'/><c{attrs}/></root>");
++            validate_xml_budget("sheet.xml", &valid).unwrap();
++            if count > 0 {
++                for duplicate in [0, count - 1] {
++                    let invalid = format!("<root><c{attrs} a{duplicate}='duplicate'/></root>");
++                    assert!(
++                        validate_xml_budget("sheet.xml", &invalid)
++                            .unwrap_err()
++                            .contains("duplicate attribute")
++                    );
++                }
++            }
++        }
++    }
++
++    #[test]
++    fn byte_tag_close_scan_preserves_unicode_quotes_and_unterminated_errors() {
++        for body in ["x 日本語='a>b'", "x a=\"日本語>🙂\" b='\"'", "x/", "x"] {
++            let xml = format!("{body}>tail");
++            assert_eq!(find_tag_close(&xml), Some(body.len()));
++        }
++        for body in ["x a='日本語>", "x a=\"🙂>", "x", ""] {
++            assert_eq!(find_tag_close(body), None);
++        }
++    }
++
++    #[test]
++    fn declaration_prefilter_matches_the_previous_byte_window_policy() {
++        for declaration in [
++            "<!doctype",
++            "<!ENTITY",
++            "<!DoCtYpE",
++            "<!eNtItY",
++            "<!entityX",
++            "<!enti",
++            "<!",
++            "🙂",
++        ] {
++            for (prefix, suffix) in [
++                ("", ""),
++                ("日本語<!-- ", " -->"),
++                ("<![CDATA[", "]]>"),
++                ("<root a='", "'/>"),
++            ] {
++                let xml = format!("{prefix}{declaration}{suffix}");
++                let expected = [b"<!doctype".as_slice(), b"<!entity".as_slice()]
++                    .iter()
++                    .any(|needle| {
++                        xml.as_bytes()
++                            .windows(needle.len())
++                            .any(|window| window.eq_ignore_ascii_case(needle))
++                    });
++                assert_eq!(
++                    validate_xml_preamble("test.xml", &xml).is_err(),
++                    expected,
++                    "{xml}"
++                );
++            }
++        }
++    }
++
++    #[test]
+     fn xml_budget_rejects_mismatched_closing_tags() {
+         let error =
+             validate_xml_budget("sheet.xml", "<worksheet><sheetData></worksheet>").unwrap_err();

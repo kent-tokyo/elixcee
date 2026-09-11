@@ -14,6 +14,12 @@
       "browser": "./src/index.browser.mjs",
       "import": "./src/index.mjs",
       "require": "./src/index.cjs"
+    },
+    "./runtime": {
+      "types": "./src/runtime.d.ts",
+      "browser": "./src/runtime.browser.mjs",
+      "import": "./src/runtime.mjs",
+      "require": "./src/runtime.cjs"
     }
   },
   "browser": {

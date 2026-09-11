@@ -1,0 +1,1154 @@
+{
+  "oracle": "libreoffice",
+  "comparable_cases": 85,
+  "matches": 85,
+  "skipped": [
+    {
+      "case": "sum_sequence",
+      "reason": "oracle_unsupported"
+    },
+    {
+      "case": "maxifs",
+      "reason": "oracle_unsupported"
+    },
+    {
+      "case": "minifs",
+      "reason": "oracle_unsupported"
+    },
+    {
+      "case": "ifna",
+      "reason": "oracle_unsupported"
+    },
+    {
+      "case": "type_boolean",
+      "reason": "oracle_unsupported"
+    },
+    {
+      "case": "days",
+      "reason": "oracle_unsupported"
+    },
+    {
+      "case": "isoweeknum",
+      "reason": "oracle_unsupported"
+    },
+    {
+      "case": "xmatch",
+      "reason": "oracle_unsupported"
+    },
+    {
+      "case": "textjoin",
+      "reason": "oracle_unsupported"
+    }
+  ],
+  "records": [
+    {
+      "case": "sum",
+      "formula": "=SUM(A1:A3)",
+      "expected": 6,
+      "actual": 6,
+      "match": true
+    },
+    {
+      "case": "average",
+      "formula": "=AVERAGE(A1:A3)",
+      "expected": 2,
+      "actual": 2,
+      "match": true
+    },
+    {
+      "case": "min",
+      "formula": "=MIN(A1:A3)",
+      "expected": 1,
+      "actual": 1,
+      "match": true
+    },
+    {
+      "case": "max",
+      "formula": "=MAX(A1:A3)",
+      "expected": 3,
+      "actual": 3,
+      "match": true
+    },
+    {
+      "case": "median",
+      "formula": "=MEDIAN(A1:A3)",
+      "expected": 2,
+      "actual": 2,
+      "match": true
+    },
+    {
+      "case": "product",
+      "formula": "=PRODUCT(A1:A3)",
+      "expected": 6,
+      "actual": 6,
+      "match": true
+    },
+    {
+      "case": "rank",
+      "formula": "=RANK(2,A1:A3,0)",
+      "expected": 2,
+      "actual": 2,
+      "match": true
+    },
+    {
+      "case": "count",
+      "formula": "=COUNT(A1:B3)",
+      "expected": 3,
+      "actual": 3,
+      "match": true
+    },
+    {
+      "case": "counta",
+      "formula": "=COUNTA(B1:B3)",
+      "expected": 3,
+      "actual": 3,
+      "match": true
+    },
+    {
+      "case": "countblank",
+      "formula": "=COUNTBLANK(A4:A4)",
+      "expected": 1,
+      "actual": 1,
+      "match": true
+    },
+    {
+      "case": "isblank",
+      "formula": "=ISBLANK(A4)",
+      "expected": true,
+      "actual": true,
+      "match": true
+    },
+    {
+      "case": "isnumber",
+      "formula": "=ISNUMBER(A1)",
+      "expected": true,
+      "actual": true,
+      "match": true
+    },
+    {
+      "case": "istext",
+      "formula": "=ISTEXT(B1)",
+      "expected": true,
+      "actual": true,
+      "match": true
+    },
+    {
+      "case": "sum_mixed",
+      "formula": "=SUM(A1:B3)",
+      "expected": 6,
+      "actual": 6,
+      "match": true
+    },
+    {
+      "case": "sumproduct",
+      "formula": "=SUMPRODUCT(A1:A3,A1:A3)",
+      "expected": 14,
+      "actual": 14,
+      "match": true
+    },
+    {
+      "case": "sum_transpose",
+      "formula": "=SUM(TRANSPOSE(A1:A3))",
+      "expected": 6,
+      "actual": 6,
+      "match": true
+    },
+    {
+      "case": "averageif",
+      "formula": "=AVERAGEIF(A1:A3,\">1\")",
+      "expected": 2.5,
+      "actual": 2.5,
+      "match": true
+    },
+    {
+      "case": "if",
+      "formula": "=IF(A1>2,\"yes\",\"no\")",
+      "expected": "no",
+      "actual": "no",
+      "match": true
+    },
+    {
+      "case": "iferror",
+      "formula": "=IFERROR(1/0,99)",
+      "expected": 99,
+      "actual": 99,
+      "match": true
+    },
+    {
+      "case": "and",
+      "formula": "=AND(A1=1,A2=2)",
+      "expected": true,
+      "actual": true,
+      "match": true
+    },
+    {
+      "case": "or",
+      "formula": "=OR(A1=9,A2=2)",
+      "expected": true,
+      "actual": true,
+      "match": true
+    },
+    {
+      "case": "not",
+      "formula": "=NOT(A1=1)",
+      "expected": false,
+      "actual": false,
+      "match": true
+    },
+    {
+      "case": "iserror",
+      "formula": "=ISERROR(1/0)",
+      "expected": true,
+      "actual": true,
+      "match": true
+    },
+    {
+      "case": "iserr",
+      "formula": "=ISERR(1/0)",
+      "expected": true,
+      "actual": true,
+      "match": true
+    },
+    {
+      "case": "isna",
+      "formula": "=ISNA(VLOOKUP(9,A1:B3,2,FALSE))",
+      "expected": true,
+      "actual": true,
+      "match": true
+    },
+    {
+      "case": "isnontext",
+      "formula": "=ISNONTEXT(42)",
+      "expected": true,
+      "actual": true,
+      "match": true
+    },
+    {
+      "case": "type_number",
+      "formula": "=TYPE(1)",
+      "expected": 1,
+      "actual": 1,
+      "match": true
+    },
+    {
+      "case": "type_text",
+      "formula": "=TYPE(\"text\")",
+      "expected": 2,
+      "actual": 2,
+      "match": true
+    },
+    {
+      "case": "error_value",
+      "formula": "=1/0",
+      "expected": "#DIV/0!",
+      "actual": "#DIV/0!",
+      "match": true
+    },
+    {
+      "case": "error_type",
+      "formula": "=ERROR.TYPE(1/0)",
+      "expected": 2,
+      "actual": 2,
+      "match": true
+    },
+    {
+      "case": "round",
+      "formula": "=ROUND(1.235,2)",
+      "expected": 1.24,
+      "actual": 1.24,
+      "match": true
+    },
+    {
+      "case": "roundup",
+      "formula": "=ROUNDUP(1.231,2)",
+      "expected": 1.24,
+      "actual": 1.24,
+      "match": true
+    },
+    {
+      "case": "rounddown",
+      "formula": "=ROUNDDOWN(1.239,2)",
+      "expected": 1.23,
+      "actual": 1.23,
+      "match": true
+    },
+    {
+      "case": "abs",
+      "formula": "=ABS(-3.5)",
+      "expected": 3.5,
+      "actual": 3.5,
+      "match": true
+    },
+    {
+      "case": "mod",
+      "formula": "=MOD(10,3)",
+      "expected": 1,
+      "actual": 1,
+      "match": true
+    },
+    {
+      "case": "power",
+      "formula": "=POWER(2,3)",
+      "expected": 8,
+      "actual": 8,
+      "match": true
+    },
+    {
+      "case": "int",
+      "formula": "=INT(3.9)",
+      "expected": 3,
+      "actual": 3,
+      "match": true
+    },
+    {
+      "case": "trunc",
+      "formula": "=TRUNC(-3.9)",
+      "expected": -3,
+      "actual": -3,
+      "match": true
+    },
+    {
+      "case": "sign",
+      "formula": "=SIGN(-3)",
+      "expected": -1,
+      "actual": -1,
+      "match": true
+    },
+    {
+      "case": "sqrt",
+      "formula": "=SQRT(9)",
+      "expected": 3,
+      "actual": 3,
+      "match": true
+    },
+    {
+      "case": "rows",
+      "formula": "=ROWS(A1:B3)",
+      "expected": 3,
+      "actual": 3,
+      "match": true
+    },
+    {
+      "case": "columns",
+      "formula": "=COLUMNS(A1:B3)",
+      "expected": 2,
+      "actual": 2,
+      "match": true
+    },
+    {
+      "case": "islogical",
+      "formula": "=ISLOGICAL(TRUE)",
+      "expected": true,
+      "actual": true,
+      "match": true
+    },
+    {
+      "case": "n_boolean",
+      "formula": "=N(TRUE)",
+      "expected": 1,
+      "actual": 1,
+      "match": true
+    },
+    {
+      "case": "n_text",
+      "formula": "=N(\"elixcee\")",
+      "expected": 0,
+      "actual": 0,
+      "match": true
+    },
+    {
+      "case": "upper",
+      "formula": "=UPPER(\"elixcee\")",
+      "expected": "ELIXCEE",
+      "actual": "ELIXCEE",
+      "match": true
+    },
+    {
+      "case": "lower",
+      "formula": "=LOWER(\"ELIXCEE\")",
+      "expected": "elixcee",
+      "actual": "elixcee",
+      "match": true
+    },
+    {
+      "case": "trim",
+      "formula": "=TRIM(\"  elixcee  runtime \")",
+      "expected": "elixcee runtime",
+      "actual": "elixcee runtime",
+      "match": true
+    },
+    {
+      "case": "find",
+      "formula": "=FIND(\"ix\",\"elixcee\")",
+      "expected": 3,
+      "actual": 3,
+      "match": true
+    },
+    {
+      "case": "replace",
+      "formula": "=REPLACE(\"elixcee\",4,3,\"X\")",
+      "expected": "eliXe",
+      "actual": "eliXe",
+      "match": true
+    },
+    {
+      "case": "substitute",
+      "formula": "=SUBSTITUTE(\"elixcee\",\"e\",\"E\")",
+      "expected": "ElixcEE",
+      "actual": "ElixcEE",
+      "match": true
+    },
+    {
+      "case": "search",
+      "formula": "=SEARCH(\"IX\",\"elixcee\")",
+      "expected": 3,
+      "actual": 3,
+      "match": true
+    },
+    {
+      "case": "exact",
+      "formula": "=EXACT(\"elixcee\",\"ELIXCEE\")",
+      "expected": false,
+      "actual": false,
+      "match": true
+    },
+    {
+      "case": "proper",
+      "formula": "=PROPER(\"elixcee runtime\")",
+      "expected": "Elixcee Runtime",
+      "actual": "Elixcee Runtime",
+      "match": true
+    },
+    {
+      "case": "date",
+      "formula": "=DATE(2024,2,29)",
+      "expected": 45351,
+      "actual": 45351.0,
+      "match": true
+    },
+    {
+      "case": "date1904",
+      "formula": "=DATE(2024,2,29)",
+      "expected": 45351,
+      "actual": 45351.0,
+      "match": true
+    },
+    {
+      "case": "year",
+      "formula": "=YEAR(DATE(2024,2,29))",
+      "expected": 2024,
+      "actual": 2024,
+      "match": true
+    },
+    {
+      "case": "month",
+      "formula": "=MONTH(DATE(2024,2,29))",
+      "expected": 2,
+      "actual": 2,
+      "match": true
+    },
+    {
+      "case": "day",
+      "formula": "=DAY(DATE(2024,2,29))",
+      "expected": 29,
+      "actual": 29,
+      "match": true
+    },
+    {
+      "case": "weekday",
+      "formula": "=WEEKDAY(DATE(2024,2,29))",
+      "expected": 5,
+      "actual": 5,
+      "match": true
+    },
+    {
+      "case": "weeknum_monday",
+      "formula": "=WEEKNUM(DATE(2024,2,29),2)",
+      "expected": 9,
+      "actual": 9,
+      "match": true
+    },
+    {
+      "case": "networkdays",
+      "formula": "=NETWORKDAYS(DATE(2024,2,26),DATE(2024,3,1))",
+      "expected": 5,
+      "actual": 5,
+      "match": true
+    },
+    {
+      "case": "datevalue",
+      "formula": "=DATEVALUE(\"2024-02-29\")",
+      "expected": 45351,
+      "actual": 45351.0,
+      "match": true
+    },
+    {
+      "case": "edate",
+      "formula": "=EDATE(DATE(2024,1,31),1)",
+      "expected": 45351,
+      "actual": 45351.0,
+      "match": true
+    },
+    {
+      "case": "eomonth",
+      "formula": "=EOMONTH(DATE(2024,2,1),0)",
+      "expected": 45351,
+      "actual": 45351.0,
+      "match": true
+    },
+    {
+      "case": "hour",
+      "formula": "=HOUR(TIME(14,30,15))",
+      "expected": 14,
+      "actual": 14,
+      "match": true
+    },
+    {
+      "case": "minute",
+      "formula": "=MINUTE(TIME(14,30,15))",
+      "expected": 30,
+      "actual": 30,
+      "match": true
+    },
+    {
+      "case": "second",
+      "formula": "=SECOND(TIME(14,30,15))",
+      "expected": 15,
+      "actual": 15,
+      "match": true
+    },
+    {
+      "case": "floor",
+      "formula": "=FLOOR(5.7,2)",
+      "expected": 4,
+      "actual": 4,
+      "match": true
+    },
+    {
+      "case": "ceiling",
+      "formula": "=CEILING(5.1,2)",
+      "expected": 6,
+      "actual": 6,
+      "match": true
+    },
+    {
+      "case": "mround",
+      "formula": "=MROUND(10,3)",
+      "expected": 9,
+      "actual": 9,
+      "match": true
+    },
+    {
+      "case": "left",
+      "formula": "=LEFT(\"elixcee\",3)",
+      "expected": "eli",
+      "actual": "eli",
+      "match": true
+    },
+    {
+      "case": "mid",
+      "formula": "=MID(\"hello\",2,3)",
+      "expected": "ell",
+      "actual": "ell",
+      "match": true
+    },
+    {
+      "case": "len",
+      "formula": "=LEN(\"hello\")",
+      "expected": 5,
+      "actual": 5,
+      "match": true
+    },
+    {
+      "case": "concatenate",
+      "formula": "=CONCATENATE(\"A\",\"B\",\"C\")",
+      "expected": "ABC",
+      "actual": "ABC",
+      "match": true
+    },
+    {
+      "case": "match",
+      "formula": "=MATCH(2,A1:A3,0)",
+      "expected": 2,
+      "actual": 2,
+      "match": true
+    },
+    {
+      "case": "index",
+      "formula": "=INDEX(A1:B3,2,2)",
+      "expected": "two",
+      "actual": "two",
+      "match": true
+    },
+    {
+      "case": "countif",
+      "formula": "=COUNTIF(A1:A3,\">1\")",
+      "expected": 2,
+      "actual": 2,
+      "match": true
+    },
+    {
+      "case": "sumif",
+      "formula": "=SUMIF(A1:A3,\">1\",A1:A3)",
+      "expected": 5,
+      "actual": 5,
+      "match": true
+    },
+    {
+      "case": "sumifs",
+      "formula": "=SUMIFS(A1:A3,A1:A3,\">1\")",
+      "expected": 5,
+      "actual": 5,
+      "match": true
+    },
+    {
+      "case": "countifs",
+      "formula": "=COUNTIFS(A1:A3,\">1\")",
+      "expected": 2,
+      "actual": 2,
+      "match": true
+    },
+    {
+      "case": "vlookup",
+      "formula": "=VLOOKUP(2,A1:B3,2,FALSE)",
+      "expected": "two",
+      "actual": "two",
+      "match": true
+    },
+    {
+      "case": "vlookup_missing",
+      "formula": "=VLOOKUP(9,A1:B3,2,FALSE)",
+      "expected": "#N/A",
+      "actual": "#N/A",
+      "match": true
+    },
+    {
+      "case": "value",
+      "formula": "=VALUE(\"12.5\")",
+      "expected": 12.5,
+      "actual": 12.5,
+      "match": true
+    },
+    {
+      "case": "right",
+      "formula": "=RIGHT(\"elixcee\",3)",
+      "expected": "cee",
+      "actual": "cee",
+      "match": true
+    }
+  ],
+  "elixcee_comparable_cases": 85,
+  "elixcee_matches": 85,
+  "elixcee_records": [
+    {
+      "case": "sum",
+      "expected": 6,
+      "actual": 6,
+      "match": true
+    },
+    {
+      "case": "average",
+      "expected": 2,
+      "actual": 2.0,
+      "match": true
+    },
+    {
+      "case": "min",
+      "expected": 1,
+      "actual": 1,
+      "match": true
+    },
+    {
+      "case": "max",
+      "expected": 3,
+      "actual": 3,
+      "match": true
+    },
+    {
+      "case": "median",
+      "expected": 2,
+      "actual": 2,
+      "match": true
+    },
+    {
+      "case": "product",
+      "expected": 6,
+      "actual": 6,
+      "match": true
+    },
+    {
+      "case": "rank",
+      "expected": 2,
+      "actual": 2,
+      "match": true
+    },
+    {
+      "case": "count",
+      "expected": 3,
+      "actual": 3,
+      "match": true
+    },
+    {
+      "case": "counta",
+      "expected": 3,
+      "actual": 3,
+      "match": true
+    },
+    {
+      "case": "countblank",
+      "expected": 1,
+      "actual": 1,
+      "match": true
+    },
+    {
+      "case": "isblank",
+      "expected": true,
+      "actual": true,
+      "match": true
+    },
+    {
+      "case": "isnumber",
+      "expected": true,
+      "actual": true,
+      "match": true
+    },
+    {
+      "case": "istext",
+      "expected": true,
+      "actual": true,
+      "match": true
+    },
+    {
+      "case": "sum_mixed",
+      "expected": 6,
+      "actual": 6,
+      "match": true
+    },
+    {
+      "case": "sumproduct",
+      "expected": 14,
+      "actual": 14,
+      "match": true
+    },
+    {
+      "case": "sum_transpose",
+      "expected": 6,
+      "actual": 6,
+      "match": true
+    },
+    {
+      "case": "averageif",
+      "expected": 2.5,
+      "actual": 2.5,
+      "match": true
+    },
+    {
+      "case": "if",
+      "expected": "no",
+      "actual": "no",
+      "match": true
+    },
+    {
+      "case": "iferror",
+      "expected": 99,
+      "actual": 99,
+      "match": true
+    },
+    {
+      "case": "and",
+      "expected": true,
+      "actual": true,
+      "match": true
+    },
+    {
+      "case": "or",
+      "expected": true,
+      "actual": true,
+      "match": true
+    },
+    {
+      "case": "not",
+      "expected": false,
+      "actual": false,
+      "match": true
+    },
+    {
+      "case": "iserror",
+      "expected": true,
+      "actual": true,
+      "match": true
+    },
+    {
+      "case": "iserr",
+      "expected": true,
+      "actual": true,
+      "match": true
+    },
+    {
+      "case": "isna",
+      "expected": true,
+      "actual": true,
+      "match": true
+    },
+    {
+      "case": "isnontext",
+      "expected": true,
+      "actual": true,
+      "match": true
+    },
+    {
+      "case": "type_number",
+      "expected": 1,
+      "actual": 1,
+      "match": true
+    },
+    {
+      "case": "type_text",
+      "expected": 2,
+      "actual": 2,
+      "match": true
+    },
+    {
+      "case": "error_value",
+      "expected": "#DIV/0!",
+      "actual": "#DIV/0!",
+      "match": true
+    },
+    {
+      "case": "error_type",
+      "expected": 2,
+      "actual": 2,
+      "match": true
+    },
+    {
+      "case": "round",
+      "expected": 1.24,
+      "actual": 1.24,
+      "match": true
+    },
+    {
+      "case": "roundup",
+      "expected": 1.24,
+      "actual": 1.24,
+      "match": true
+    },
+    {
+      "case": "rounddown",
+      "expected": 1.23,
+      "actual": 1.23,
+      "match": true
+    },
+    {
+      "case": "abs",
+      "expected": 3.5,
+      "actual": 3.5,
+      "match": true
+    },
+    {
+      "case": "mod",
+      "expected": 1,
+      "actual": 1,
+      "match": true
+    },
+    {
+      "case": "power",
+      "expected": 8,
+      "actual": 8,
+      "match": true
+    },
+    {
+      "case": "int",
+      "expected": 3,
+      "actual": 3,
+      "match": true
+    },
+    {
+      "case": "trunc",
+      "expected": -3,
+      "actual": -3,
+      "match": true
+    },
+    {
+      "case": "sign",
+      "expected": -1,
+      "actual": -1,
+      "match": true
+    },
+    {
+      "case": "sqrt",
+      "expected": 3,
+      "actual": 3,
+      "match": true
+    },
+    {
+      "case": "rows",
+      "expected": 3,
+      "actual": 3,
+      "match": true
+    },
+    {
+      "case": "columns",
+      "expected": 2,
+      "actual": 2,
+      "match": true
+    },
+    {
+      "case": "islogical",
+      "expected": true,
+      "actual": true,
+      "match": true
+    },
+    {
+      "case": "n_boolean",
+      "expected": 1,
+      "actual": 1,
+      "match": true
+    },
+    {
+      "case": "n_text",
+      "expected": 0,
+      "actual": 0,
+      "match": true
+    },
+    {
+      "case": "upper",
+      "expected": "ELIXCEE",
+      "actual": "ELIXCEE",
+      "match": true
+    },
+    {
+      "case": "lower",
+      "expected": "elixcee",
+      "actual": "elixcee",
+      "match": true
+    },
+    {
+      "case": "trim",
+      "expected": "elixcee runtime",
+      "actual": "elixcee runtime",
+      "match": true
+    },
+    {
+      "case": "find",
+      "expected": 3,
+      "actual": 3,
+      "match": true
+    },
+    {
+      "case": "replace",
+      "expected": "eliXe",
+      "actual": "eliXe",
+      "match": true
+    },
+    {
+      "case": "substitute",
+      "expected": "ElixcEE",
+      "actual": "ElixcEE",
+      "match": true
+    },
+    {
+      "case": "search",
+      "expected": 3,
+      "actual": 3,
+      "match": true
+    },
+    {
+      "case": "exact",
+      "expected": false,
+      "actual": false,
+      "match": true
+    },
+    {
+      "case": "proper",
+      "expected": "Elixcee Runtime",
+      "actual": "Elixcee Runtime",
+      "match": true
+    },
+    {
+      "case": "date",
+      "expected": 45351,
+      "actual": 45351.0,
+      "match": true
+    },
+    {
+      "case": "date1904",
+      "expected": 45351,
+      "actual": 45351.0,
+      "match": true
+    },
+    {
+      "case": "year",
+      "expected": 2024,
+      "actual": 2024,
+      "match": true
+    },
+    {
+      "case": "month",
+      "expected": 2,
+      "actual": 2,
+      "match": true
+    },
+    {
+      "case": "day",
+      "expected": 29,
+      "actual": 29,
+      "match": true
+    },
+    {
+      "case": "weekday",
+      "expected": 5,
+      "actual": 5,
+      "match": true
+    },
+    {
+      "case": "weeknum_monday",
+      "expected": 9,
+      "actual": 9,
+      "match": true
+    },
+    {
+      "case": "networkdays",
+      "expected": 5,
+      "actual": 5,
+      "match": true
+    },
+    {
+      "case": "datevalue",
+      "expected": 45351,
+      "actual": 45351.0,
+      "match": true
+    },
+    {
+      "case": "edate",
+      "expected": 45351,
+      "actual": 45351.0,
+      "match": true
+    },
+    {
+      "case": "eomonth",
+      "expected": 45351,
+      "actual": 45351.0,
+      "match": true
+    },
+    {
+      "case": "hour",
+      "expected": 14,
+      "actual": 14,
+      "match": true
+    },
+    {
+      "case": "minute",
+      "expected": 30,
+      "actual": 30,
+      "match": true
+    },
+    {
+      "case": "second",
+      "expected": 15,
+      "actual": 15,
+      "match": true
+    },
+    {
+      "case": "floor",
+      "expected": 4,
+      "actual": 4,
+      "match": true
+    },
+    {
+      "case": "ceiling",
+      "expected": 6,
+      "actual": 6,
+      "match": true
+    },
+    {
+      "case": "mround",
+      "expected": 9,
+      "actual": 9,
+      "match": true
+    },
+    {
+      "case": "left",
+      "expected": "eli",
+      "actual": "eli",
+      "match": true
+    },
+    {
+      "case": "mid",
+      "expected": "ell",
+      "actual": "ell",
+      "match": true
+    },
+    {
+      "case": "len",
+      "expected": 5,
+      "actual": 5,
+      "match": true
+    },
+    {
+      "case": "concatenate",
+      "expected": "ABC",
+      "actual": "ABC",
+      "match": true
+    },
+    {
+      "case": "match",
+      "expected": 2,
+      "actual": 2,
+      "match": true
+    },
+    {
+      "case": "index",
+      "expected": "two",
+      "actual": "two",
+      "match": true
+    },
+    {
+      "case": "countif",
+      "expected": 2,
+      "actual": 2,
+      "match": true
+    },
+    {
+      "case": "sumif",
+      "expected": 5,
+      "actual": 5,
+      "match": true
+    },
+    {
+      "case": "sumifs",
+      "expected": 5,
+      "actual": 5,
+      "match": true
+    },
+    {
+      "case": "countifs",
+      "expected": 2,
+      "actual": 2,
+      "match": true
+    },
+    {
+      "case": "vlookup",
+      "expected": "two",
+      "actual": "two",
+      "match": true
+    },
+    {
+      "case": "vlookup_missing",
+      "expected": "#N/A",
+      "actual": "#N/A",
+      "match": true
+    },
+    {
+      "case": "value",
+      "expected": 12.5,
+      "actual": 12.5,
+      "match": true
+    },
+    {
+      "case": "right",
+      "expected": "cee",
+      "actual": "cee",
+      "match": true
+    }
+  ]
+}

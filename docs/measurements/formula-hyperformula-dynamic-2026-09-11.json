@@ -1,0 +1,134 @@
+{
+  "schema_version": 1,
+  "oracle": "hyperformula",
+  "oracle_version": "3.4.0",
+  "license_key_mode": "gpl-v3",
+  "comparable_cases": 5,
+  "matches": 5,
+  "records": [
+    {
+      "id": "vstack",
+      "formula": "=VSTACK(A1:A2,C1:C2)",
+      "expected": [
+        [
+          1
+        ],
+        [
+          2
+        ],
+        [
+          2
+        ],
+        [
+          4
+        ]
+      ],
+      "actual": [
+        [
+          1
+        ],
+        [
+          2
+        ],
+        [
+          2
+        ],
+        [
+          4
+        ]
+      ],
+      "match": true
+    },
+    {
+      "id": "hstack",
+      "formula": "=HSTACK(A1:B2,C1:C2)",
+      "expected": [
+        [
+          1,
+          "one",
+          2
+        ],
+        [
+          2,
+          "two",
+          4
+        ]
+      ],
+      "actual": [
+        [
+          1,
+          "one",
+          2
+        ],
+        [
+          2,
+          "two",
+          4
+        ]
+      ],
+      "match": true
+    },
+    {
+      "id": "unique",
+      "formula": "=UNIQUE(A1:A4)",
+      "expected": [
+        [
+          1
+        ],
+        [
+          2
+        ],
+        [
+          3
+        ]
+      ],
+      "actual": [
+        [
+          1
+        ],
+        [
+          2
+        ],
+        [
+          3
+        ]
+      ],
+      "match": true
+    },
+    {
+      "id": "sort",
+      "formula": "=SORT(C1:C3,1,-1)",
+      "expected": [
+        [
+          6
+        ],
+        [
+          4
+        ],
+        [
+          2
+        ]
+      ],
+      "actual": [
+        [
+          6
+        ],
+        [
+          4
+        ],
+        [
+          2
+        ]
+      ],
+      "match": true
+    },
+    {
+      "id": "xirr",
+      "formula": "=XIRR(D1:D3,E1:E3)",
+      "expected": 0.22046382967,
+      "actual": 0.22046382967,
+      "match": true
+    }
+  ],
+  "boundary": "Fixed HyperFormula oracle evidence; not Microsoft Excel compatibility proof."
+}

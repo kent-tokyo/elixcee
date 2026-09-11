@@ -253,6 +253,28 @@ runWriteCase('multi-cell sheet mixing date/custom-numeric/general-numeric/string
   return wb;
 })());
 
+// ---- hyperlinks in XLSX output (0.17.0) ----
+{
+  const wb = U.book_new();
+  const ws = U.aoa_to_sheet([['external', 'internal', 'mailto']]);
+  U.cell_set_hyperlink(ws.A1, 'https://example.com/path', 'Example site');
+  U.cell_set_internal_link(ws.B1, 'Sheet2!A1', 'Jump to Sheet2');
+  U.cell_set_hyperlink(ws.C1, 'mailto:user@example.com');
+  U.book_append_sheet(wb, ws, 'Sheet1');
+  U.book_append_sheet(wb, U.aoa_to_sheet([['destination']]), 'Sheet2');
+
+  const read = XLSX.read(elixcee.write(wb, { type: 'buffer', bookType: 'xlsx' }), {
+    type: 'buffer',
+    cellStyles: true,
+  });
+  assert.equal(read.Sheets.Sheet1.A1.l.Target, 'https://example.com/path');
+  assert.equal(read.Sheets.Sheet1.A1.l.Tooltip, 'Example site');
+  assert.equal(read.Sheets.Sheet1.B1.l.Target, '#Sheet2!A1');
+  assert.equal(read.Sheets.Sheet1.B1.l.Tooltip, 'Jump to Sheet2');
+  assert.equal(read.Sheets.Sheet1.C1.l.Target, 'mailto:user@example.com');
+  console.log('OK  write: external, internal, mailto hyperlinks and tooltips survive an elixcee XLSX write');
+}
+
 // ---- sheet visibility ----
 //
 // read() (packages/xlsx/src/internal/read-shape.cjs) never parses xl/workbook.xml's own
@@ -396,6 +418,36 @@ function crc32(buf) {
   let crc = 0xffffffff;
   for (let i = 0; i < buf.length; i++) crc = CRC_TABLE[(crc ^ buf[i]) & 0xff] ^ (crc >>> 8);
   return (crc ^ 0xffffffff) >>> 0;
+}
+
+// ---- comments / legacy Notes in XLSX output (0.18.0) ----
+{
+  const wb = U.book_new();
+  const ws = U.aoa_to_sheet([['comment', 'plain']]);
+  ws.A1.c = [
+    { t: 'hello & <world>', a: 'Alice' },
+    { t: 'second reply', a: 'Bob' },
+  ];
+  ws.B1.c = [{ t: 'single note', a: 'Alice' }];
+  U.book_append_sheet(wb, ws, 'Sheet1');
+  const bytes = elixcee.write(wb, { type: 'buffer', bookType: 'xlsx' });
+  const read = XLSX.read(bytes, { type: 'buffer' });
+  assert.equal(read.Sheets.Sheet1.A1.c.length, 1);
+  assert.equal(read.Sheets.Sheet1.A1.c[0].a, 'Alice');
+  assert.equal(read.Sheets.Sheet1.A1.c[0].t, 'Comment:\n    hello & <world>\nReply:\n    second reply');
+  assert.equal(read.Sheets.Sheet1.B1.c.length, 1);
+  assert.equal(read.Sheets.Sheet1.B1.c[0].a, 'Alice');
+  assert.equal(read.Sheets.Sheet1.B1.c[0].t, 'single note');
+  const entries = readZipEntries(bytes);
+  const names = new Set(entries.map((e) => e.name));
+  assert.ok(names.has('xl/comments1.xml'));
+  assert.ok(names.has('xl/drawings/vmlDrawing1.vml'));
+  const sheetXml = entries.find((e) => e.name === 'xl/worksheets/sheet1.xml').data.toString('utf8');
+  assert.match(sheetXml, /<legacyDrawing r:id="rId1"\/>/);
+  const rels = entries.find((e) => e.name === 'xl/worksheets/_rels/sheet1.xml.rels').data.toString('utf8');
+  assert.match(rels, /relationships\/vmlDrawing.*Target="\.\.\/drawings\/vmlDrawing1\.vml"/);
+  assert.match(rels, /relationships\/comments.*Target="\.\.\/comments1\.xml"/);
+  console.log('OK  write: cell comments survive as OOXML comments, VML, and relationships');
 }
 
 {

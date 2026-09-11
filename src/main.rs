@@ -1,4 +1,12 @@
-use std::{env, fs, process};
+use std::{
+    env, fs, process,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+    thread,
+    time::Duration,
+};
 
 use elixcee::{
     check, diagnose, diagnoseworkbook,
@@ -6,6 +14,73 @@ use elixcee::{
     parser, reader, save_workbook, snapshot, testworkbook,
     vm::{Variant, Vm, serial_to_display},
 };
+
+static CLI_SIGNAL_CANCELLED: AtomicBool = AtomicBool::new(false);
+
+#[cfg(unix)]
+unsafe extern "C" {
+    fn signal(signal: i32, handler: Option<extern "C" fn(i32)>) -> Option<extern "C" fn(i32)>;
+}
+
+#[cfg(unix)]
+extern "C" fn handle_cli_signal(_: i32) {
+    CLI_SIGNAL_CANCELLED.store(true, Ordering::Relaxed);
+}
+
+#[cfg(windows)]
+unsafe extern "system" {
+    fn SetConsoleCtrlHandler(
+        handler: Option<unsafe extern "system" fn(u32) -> i32>,
+        add: i32,
+    ) -> i32;
+}
+
+#[cfg(windows)]
+unsafe extern "system" fn handle_cli_signal(_: u32) -> i32 {
+    CLI_SIGNAL_CANCELLED.store(true, Ordering::Relaxed);
+    1
+}
+
+fn install_cli_signal_handlers() {
+    #[cfg(unix)]
+    unsafe {
+        signal(2, Some(handle_cli_signal));
+        signal(15, Some(handle_cli_signal));
+    }
+    #[cfg(windows)]
+    unsafe {
+        SetConsoleCtrlHandler(Some(handle_cli_signal), 1);
+    }
+}
+
+fn start_cli_cancellation_watcher(
+    cancel_file: Option<String>,
+    cancellation: Arc<AtomicBool>,
+    stop: Arc<AtomicBool>,
+) -> thread::JoinHandle<()> {
+    // Observe already-present cancellation synchronously. A small workbook
+    // can finish before the watcher thread's first 25 ms poll, which made a
+    // pre-existing cancel file nondeterministically ineffective.
+    let initially_cancelled = CLI_SIGNAL_CANCELLED.load(Ordering::Relaxed)
+        || cancel_file
+            .as_deref()
+            .is_some_and(|path| std::path::Path::new(path).exists());
+    if initially_cancelled {
+        cancellation.store(true, Ordering::Relaxed);
+    }
+    thread::spawn(move || {
+        while !stop.load(Ordering::Relaxed) {
+            let file_cancelled = cancel_file
+                .as_deref()
+                .is_some_and(|path| std::path::Path::new(path).exists());
+            if CLI_SIGNAL_CANCELLED.load(Ordering::Relaxed) || file_cancelled {
+                cancellation.store(true, Ordering::Relaxed);
+                break;
+            }
+            thread::sleep(Duration::from_millis(25));
+        }
+    })
+}
 
 fn usage() -> ! {
     eprintln!(
@@ -21,6 +96,7 @@ fn usage() -> ! {
          Options:\n\
            --file <path>    Load cell data from spreadsheet (.xlsx / .xlsm / .ods)\n\
            --sheet <name>   Active sheet name (default: first sheet in --file)\n\
+           --external-links <preserve|reject>  External-link policy (default: preserve; never fetches URLs)\n\
            --output <path>  Save result cells to spreadsheet (.xlsx / .xlsm / .ods)\n\
            --json           Emit a single JSON object (result or error) instead of plain text\n\
            --version, -V    Print the version number and exit\n\
@@ -30,7 +106,8 @@ fn usage() -> ! {
          \x20   Static analysis — parse + optional entrypoint check + interactive-call\n\
          \x20   detection, without executing the macro. All positional arguments\n\
          \x20   are files; the entrypoint (if any) is always given via --entry.\n\
-           elixcee snapshot <file> [--json]\n\
+           elixcee snapshot <file> [--json] [--external-links <preserve|reject>] [--max-work-units <N>] [--timeout-ms <N>]\n\
+         \x20   [--cancel-file <path>]\n\
          \x20   Reads a .xlsx/.ods file directly (no VBA execution) and prints every\n\
          \x20   sheet's non-empty cells — Markdown by default, JSON with --json.\n\
            elixcee test-workbook <fixture.toml> [--json] [--seed <N>] [--case <N>]\n\
@@ -87,11 +164,18 @@ fn derive_module_name(path: &str) -> String {
 fn load_one_module(path: &str) -> Result<LoadedModule, LoadModuleError> {
     let code = fs::read_to_string(path)
         .map_err(|e| LoadModuleError::Io(format!("cannot read '{}': {}", path, e)))?;
-    let program = parser::parse_with_span(&code).map_err(|e| LoadModuleError::Parse {
+    let mut program = parser::parse_with_span(&code).map_err(|e| LoadModuleError::Parse {
         message: e.message,
         span: e.span,
         source: code.clone(),
     })?;
+    if std::path::Path::new(path)
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("cls"))
+    {
+        program.is_class_module = true;
+    }
     let name = program
         .module_name
         .clone()
@@ -238,6 +322,27 @@ fn run_check_command(args: &[String]) -> ! {
 
     let (modules, mut diags) = check_load_modules(&vba_files);
 
+    for module in &modules {
+        for name in parser::find_type_collisions(&module.program) {
+            let location = module
+                .program
+                .type_defs
+                .iter()
+                .find(|type_def| type_def.name == name)
+                .map(|type_def| diagnostics::locate(&module.source, &module.path, type_def.span));
+            diags.push(check::Diagnostic {
+                severity: "error",
+                code: "E1012",
+                kind: "duplicate_type",
+                message: format!(
+                    "duplicate Type '{}' in module '{}' — UDT declarations must be unique",
+                    name, module.name
+                ),
+                location,
+            });
+        }
+    }
+
     if modules.len() > 1 {
         let project: Vec<(String, parser::Program)> = modules
             .iter()
@@ -270,11 +375,10 @@ fn run_check_command(args: &[String]) -> ! {
                 location: None,
             });
         }
-
         for m in &modules {
             let mut others: std::collections::HashSet<String> = std::collections::HashSet::new();
             for other in &modules {
-                if other.name != m.name {
+                if other.name != m.name && !other.program.is_class_module {
                     others.extend(other.program.subs.iter().map(|s| s.name.clone()));
                     others.extend(other.program.funcs.iter().map(|f| f.name.clone()));
                 }
@@ -329,18 +433,77 @@ fn run_check_command(args: &[String]) -> ! {
 fn run_snapshot_command(args: &[String]) -> ! {
     let mut path: Option<String> = None;
     let mut json = false;
+    let mut max_work_units = None;
+    let mut timeout_ms = None;
+    let mut cancel_file = None;
+    let mut external_links = reader::ExternalLinksPolicy::Preserve;
 
-    for arg in args {
-        match arg.as_str() {
+    let mut index = 0;
+    while index < args.len() {
+        match args[index].as_str() {
             "--json" => json = true,
+            "--max-work-units" => {
+                index += 1;
+                let value = args
+                    .get(index)
+                    .unwrap_or_else(|| die("--max-work-units requires a positive integer"));
+                max_work_units = Some(
+                    value
+                        .parse::<u64>()
+                        .unwrap_or_else(|_| die("--max-work-units requires a positive integer")),
+                );
+            }
+            "--timeout-ms" => {
+                index += 1;
+                let value = args
+                    .get(index)
+                    .unwrap_or_else(|| die("--timeout-ms requires a positive integer"));
+                timeout_ms = Some(
+                    value
+                        .parse::<u64>()
+                        .unwrap_or_else(|_| die("--timeout-ms requires a positive integer")),
+                );
+            }
+            "--cancel-file" => {
+                index += 1;
+                cancel_file = Some(
+                    args.get(index)
+                        .unwrap_or_else(|| die("--cancel-file requires a path"))
+                        .clone(),
+                );
+            }
+            "--external-links" => {
+                index += 1;
+                let value = args
+                    .get(index)
+                    .unwrap_or_else(|| die("--external-links requires preserve or reject"));
+                external_links = parse_external_links_policy(value);
+            }
             a if a.starts_with('-') => die(&format!("unknown option: {}", a)),
-            _ if path.is_none() => path = Some(arg.clone()),
+            _ if path.is_none() => path = Some(args[index].clone()),
             _ => die("snapshot takes exactly one file"),
         }
+        index += 1;
     }
     let Some(path) = path else { usage() };
 
-    match reader::read_workbook(&path) {
+    let cancellation = Arc::new(AtomicBool::new(false));
+    let watcher_stop = Arc::new(AtomicBool::new(false));
+    let watcher = start_cli_cancellation_watcher(
+        cancel_file,
+        Arc::clone(&cancellation),
+        watcher_stop.clone(),
+    );
+    let options = reader::ReadOptions {
+        max_work_units: max_work_units.or(Some(reader::DEFAULT_READ_MAX_WORK_UNITS)),
+        timeout_ms,
+        cancellation: Some(Arc::clone(&cancellation)),
+        external_links,
+    };
+    let read_result = reader::read_workbook_with_options(&path, &options);
+    watcher_stop.store(true, Ordering::Relaxed);
+    let _ = watcher.join();
+    match read_result {
         Ok(sheets) => {
             if json {
                 println!("{}", snapshot::to_json(&path, &sheets));
@@ -725,6 +888,15 @@ fn die(msg: &str) -> ! {
     process::exit(1);
 }
 
+fn parse_external_links_policy(value: &str) -> reader::ExternalLinksPolicy {
+    match value.to_ascii_lowercase().as_str() {
+        "preserve" => reader::ExternalLinksPolicy::Preserve,
+        "reject" => reader::ExternalLinksPolicy::Reject,
+        "drop" => reader::ExternalLinksPolicy::Drop,
+        _ => die("--external-links must be preserve, reject, or drop"),
+    }
+}
+
 /// Print the `--json` error object to stdout and exit(1). Kept separate from
 /// `die()` (which writes to stderr) so a `--json` run always emits exactly
 /// one JSON object on stdout, success or failure. `messages` should be
@@ -807,6 +979,10 @@ fn messages_to_json(messages: &[String]) -> String {
 
 fn main() {
     let args: Vec<String> = env::args().collect();
+    install_cli_signal_handlers();
+    if env::var_os("ELIXCEE_TEST_SIGNAL_READY").is_some() {
+        eprintln!("ELIXCEE_SIGNAL_READY");
+    }
 
     if matches!(
         args.get(1).map(String::as_str),
@@ -836,6 +1012,7 @@ fn main() {
     let mut sheet_name: Option<String> = None;
     let mut output: Option<String> = None;
     let mut json = false;
+    let mut external_links = reader::ExternalLinksPolicy::Preserve;
 
     let mut i = 1;
     while i < args.len() {
@@ -860,6 +1037,13 @@ fn main() {
                     .get(i)
                     .cloned()
                     .or_else(|| die("--output requires a path"));
+            }
+            "--external-links" => {
+                i += 1;
+                let value = args
+                    .get(i)
+                    .unwrap_or_else(|| die("--external-links requires preserve or reject"));
+                external_links = parse_external_links_policy(value);
             }
             "--json" => {
                 json = true;
@@ -889,11 +1073,22 @@ fn main() {
     let mut vm = Vm::new();
     vm.print_msgbox = !json;
 
+    let cancellation = Arc::new(AtomicBool::new(false));
+    let watcher_stop = Arc::new(AtomicBool::new(false));
+    let watcher =
+        start_cli_cancellation_watcher(None, Arc::clone(&cancellation), watcher_stop.clone());
+    let read_options = reader::ReadOptions {
+        max_work_units: Some(reader::DEFAULT_READ_MAX_WORK_UNITS),
+        timeout_ms: None,
+        cancellation: Some(cancellation),
+        external_links,
+    };
+
     // Load spreadsheet data if provided
     if let Some(ref path) = xlsx_file {
         // load_workbook_file already sets the active sheet to the first one
         // loaded; only override it if --sheet was explicitly given.
-        match vm.load_workbook_file(path) {
+        match vm.load_workbook_file_with_options(path, &read_options) {
             Ok(_) => {}
             Err(e) if e == "workbook has no sheets" => {
                 if json {
@@ -928,6 +1123,8 @@ fn main() {
             die(&e)
         }
     }
+    watcher_stop.store(true, Ordering::Relaxed);
+    let _ = watcher.join();
 
     let start = std::time::Instant::now();
     let run_result = if modules.len() == 1 {
@@ -959,7 +1156,8 @@ fn main() {
                 None
             };
             fail_json(
-                ElixceeError::runtime_error(e).with_location(location),
+                ElixceeError::runtime_error_with_kind(e, vm.take_runtime_failure())
+                    .with_location(location),
                 &vm.take_messages(),
             )
         } else {

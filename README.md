@@ -4,14 +4,21 @@
 [![Docs](https://docs.rs/elixcee/badge.svg)](https://docs.rs/elixcee/1.0.11/elixcee/)
 [![Version](https://img.shields.io/badge/version-1.0.11-blue.svg)](https://github.com/kent-tokyo/elixcee/releases/tag/v1.0.11)
 
-Headless Excel workbook automation in Rust and Python. Edit `.xlsx`/`.xlsm`,
-recalculate supported formulas, and run or diagnose data-processing VBA
-without Microsoft Excel. CLI and experimental JavaScript/WASM surfaces are included.
-
-[Quick start](docs/quickstart.md) · [Beginner tutorial](docs/tutorial-beginners.md) ·
-[Browser playground](https://kent-tokyo.github.io/elixcee/playground/)
+Headless Excel workbook automation in Rust and Python. Edit `.xlsx`/`.xlsm`
+files, recalculate supported formulas, and run or diagnose data-processing VBA
+without Microsoft Excel. A CLI and an experimental JavaScript/WASM package are
+also included.
 
 [English](README.md) | [日本語](README_ja.md) | [中文](README_zh.md)
+
+## Start here
+
+1. [Quick start](docs/quickstart.md) — install and run the first operation.
+2. [Beginner tutorial](docs/tutorial-beginners.md) — edit cells, calculate formulas, and run VBA.
+3. [Browser playground](https://kent-tokyo.github.io/elixcee/playground/) — try it without installing anything.
+
+The playground switches between English, Japanese, and Simplified Chinese.
+For local playground work, see [playground/README.md](playground/README.md).
 
 ## Install
 
@@ -19,13 +26,15 @@ without Microsoft Excel. CLI and experimental JavaScript/WASM surfaces are inclu
 pip install elixcee
 ```
 
+CLI binaries are available from [GitHub Releases](https://github.com/kent-tokyo/elixcee/releases).
+
 ## Python
 
 ```python
 import elixcee
 
 vm = elixcee.load_workbook("input.xlsx")
-vm.set_cell(1, 1, 10)              # 1-based (row, column)
+vm.set_cell(1, 1, 10)                 # Excel-style 1-based coordinates
 vm.set_cell_formula(1, 2, "=A1*2")
 vm.recalculate()
 vm.run("""Sub Macro()
@@ -34,21 +43,41 @@ End Sub""", "Macro")
 vm.save_workbook("output.xlsx")
 ```
 
+The Python API also provides ranges, sorting, merges, styles, tables,
+validation, hidden rows/columns, undo/redo, events, streaming row I/O, and
+bounded reader/execution controls. See [elixcee.pyi](elixcee.pyi) for the API.
+
 ## CLI
 
 ```text
 elixcee <file.bas>... <MacroName> --file input.xlsx --output result.xlsx
 elixcee check <file.bas>... [--entry MacroName] [--json]
-elixcee diagnose <file.bas>... <MacroName> --file input.xlsx [--json]
 elixcee snapshot <workbook.xlsx|ods> [--json]
+elixcee diagnose <file.bas>... <MacroName> --file input.xlsx [--json]
+elixcee test-workbook fixture.toml [--json]
 ```
 
-## Scope
+Use `--json` for automation. The stable output contract is documented in
+[docs/agent-contract.md](docs/agent-contract.md).
 
-The supported subset includes workbook editing, formula recalculation, and
-data-processing VBA (`If`, `For`, `Do`, arrays, multiple sheets, `Range`/`Cells`).
-UI effects and unsupported OOXML are bounded, modeled, preserved, rejected, or
-reported depending on the operation. See [support contract](docs/v1-support-contract.md),
-[function list](FUNCTIONS.md), and [limits](docs/limits.md).
+## Supported scope
 
-[Roadmap](ROADMAP.md) · [Changelog](CHANGELOG.md) · [MIT license](docs/licensing.md)
+The runtime covers common data-processing VBA (`If`, `For`, `Do`, `Select Case`,
+`With`, arrays, multiple sheets, `Range`/`Cells`, and selected collections),
+plus arithmetic, lookup, text, logical, date/time, statistical, financial,
+reference, and dynamic-array formulas.
+
+It is not a full Excel desktop replacement. UI operations are skipped,
+modeled, or reported. Chart/Drawing/Pivot editing and formula compatibility
+remain bounded features; unsupported OOXML parts may be preserved, lost, or
+rejected depending on the operation.
+
+See the [v1 support contract](docs/v1-support-contract.md),
+[formula list](FUNCTIONS.md), and [limits](docs/limits.md) before adoption.
+
+## Development
+
+See the [roadmap](ROADMAP.md) for current priorities and release gates.
+Unreleased changes are listed in [CHANGELOG.md](CHANGELOG.md).
+
+License: [MIT](docs/licensing.md). See [third-party notices](THIRD_PARTY_NOTICES.md).

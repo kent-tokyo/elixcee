@@ -1,0 +1,40 @@
+{
+  "schema_version": 1,
+  "corpus_version": "2026-09-11.1",
+  "manifest_sha256": "085a587f4f9b0dd8ff2a18c59490bb0a8f53e54dc224bb8963c8fd19cabbec92",
+  "runtime": "path+file:///Users/k_tanabe/Documents/Documents/security_project/elixcee#1.0.8",
+  "git_revision": "361bb3cfe0d5e504a987909974be24135141c225",
+  "host": {
+    "os": "macOS-26.5.2-arm64-arm-64bit-Mach-O",
+    "machine": "arm64",
+    "processor": "arm",
+    "cpu_count": 10,
+    "python": "3.13.6"
+  },
+  "case_ids": [
+    "paste-shape-mismatch",
+    "hidden-range-observation",
+    "protected-sheet-write",
+    "formula-error-result",
+    "vba-entry-resolution"
+  ],
+  "repetitions": 3,
+  "samples": [
+    {
+      "wall_time_ms": 2608.121,
+      "exit_code": 0
+    },
+    {
+      "wall_time_ms": 2671.604,
+      "exit_code": 0
+    },
+    {
+      "wall_time_ms": 2632.72,
+      "exit_code": 0
+    }
+  ],
+  "peak_rss_bytes": 64815104,
+  "rss_source": "/usr/bin/time -l/-v maximum resident set size for runner and descendants",
+  "success": true,
+  "boundary": "Corpus runner regression timing only; not a cross-library or Excel-oracle benchmark."
+}

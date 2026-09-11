@@ -1,0 +1,287 @@
+{
+  "schema_version": 1,
+  "date": "2026-09-03",
+  "host": "Darwin/aarch64-apple-darwin",
+  "toolchain": "rustc 1.97.0",
+  "binary": "target/debug/measure_reader_inprocess",
+  "api": "elixcee::reader::read_workbook_from_bytes",
+  "iterations_per_fixture": 10,
+  "fixtures": [
+    {
+      "fixture": "/tmp/elixcee-inprocess-fixtures/dense.xlsx",
+      "input_bytes": 16614128,
+      "iterations": 10,
+      "successes": 10,
+      "total_cells": 4000000,
+      "wall_ms": 136473.438,
+      "baseline_allocator_size_in_use_bytes": 16641360,
+      "baseline_allocator_size_allocated_bytes": 29212672,
+      "observations": [
+        {
+          "iteration": 1,
+          "cells": 400000,
+          "wall_ms": 14548.309,
+          "allocator_size_in_use_bytes": 16707056,
+          "allocator_size_allocated_bytes": 33406976,
+          "allocator_blocks_in_use": 2471
+        },
+        {
+          "iteration": 2,
+          "cells": 400000,
+          "wall_ms": 13436.914,
+          "allocator_size_in_use_bytes": 16707440,
+          "allocator_size_allocated_bytes": 33406976,
+          "allocator_blocks_in_use": 2472
+        },
+        {
+          "iteration": 3,
+          "cells": 400000,
+          "wall_ms": 13179.732,
+          "allocator_size_in_use_bytes": 16707824,
+          "allocator_size_allocated_bytes": 33406976,
+          "allocator_blocks_in_use": 2473
+        },
+        {
+          "iteration": 4,
+          "cells": 400000,
+          "wall_ms": 17927.088,
+          "allocator_size_in_use_bytes": 16708208,
+          "allocator_size_allocated_bytes": 33406976,
+          "allocator_blocks_in_use": 2474
+        },
+        {
+          "iteration": 5,
+          "cells": 400000,
+          "wall_ms": 13002.142,
+          "allocator_size_in_use_bytes": 16708592,
+          "allocator_size_allocated_bytes": 33406976,
+          "allocator_blocks_in_use": 2475
+        },
+        {
+          "iteration": 6,
+          "cells": 400000,
+          "wall_ms": 12569.848,
+          "allocator_size_in_use_bytes": 16708976,
+          "allocator_size_allocated_bytes": 33406976,
+          "allocator_blocks_in_use": 2476
+        },
+        {
+          "iteration": 7,
+          "cells": 400000,
+          "wall_ms": 13222.005,
+          "allocator_size_in_use_bytes": 16709360,
+          "allocator_size_allocated_bytes": 33406976,
+          "allocator_blocks_in_use": 2477
+        },
+        {
+          "iteration": 8,
+          "cells": 400000,
+          "wall_ms": 12979.594,
+          "allocator_size_in_use_bytes": 16709744,
+          "allocator_size_allocated_bytes": 33406976,
+          "allocator_blocks_in_use": 2478
+        },
+        {
+          "iteration": 9,
+          "cells": 400000,
+          "wall_ms": 13203.885,
+          "allocator_size_in_use_bytes": 16710128,
+          "allocator_size_allocated_bytes": 33406976,
+          "allocator_blocks_in_use": 2479
+        },
+        {
+          "iteration": 10,
+          "cells": 400000,
+          "wall_ms": 12402.855,
+          "allocator_size_in_use_bytes": 16710512,
+          "allocator_size_allocated_bytes": 33406976,
+          "allocator_blocks_in_use": 2480
+        }
+      ]
+    },
+    {
+      "fixture": "/tmp/elixcee-inprocess-fixtures/mixed.xlsx",
+      "input_bytes": 16928577,
+      "iterations": 10,
+      "successes": 10,
+      "total_cells": 3200000,
+      "wall_ms": 119549.153,
+      "baseline_allocator_size_in_use_bytes": 16952656,
+      "baseline_allocator_size_allocated_bytes": 29523968,
+      "observations": [
+        {
+          "iteration": 1,
+          "cells": 320000,
+          "wall_ms": 11987.594,
+          "allocator_size_in_use_bytes": 17018352,
+          "allocator_size_allocated_bytes": 42106880,
+          "allocator_blocks_in_use": 2471
+        },
+        {
+          "iteration": 2,
+          "cells": 320000,
+          "wall_ms": 11621.657,
+          "allocator_size_in_use_bytes": 17018736,
+          "allocator_size_allocated_bytes": 42106880,
+          "allocator_blocks_in_use": 2472
+        },
+        {
+          "iteration": 3,
+          "cells": 320000,
+          "wall_ms": 12044.986,
+          "allocator_size_in_use_bytes": 17019120,
+          "allocator_size_allocated_bytes": 42106880,
+          "allocator_blocks_in_use": 2473
+        },
+        {
+          "iteration": 4,
+          "cells": 320000,
+          "wall_ms": 12248.255,
+          "allocator_size_in_use_bytes": 17019504,
+          "allocator_size_allocated_bytes": 42106880,
+          "allocator_blocks_in_use": 2474
+        },
+        {
+          "iteration": 5,
+          "cells": 320000,
+          "wall_ms": 12155.313,
+          "allocator_size_in_use_bytes": 17019888,
+          "allocator_size_allocated_bytes": 42106880,
+          "allocator_blocks_in_use": 2475
+        },
+        {
+          "iteration": 6,
+          "cells": 320000,
+          "wall_ms": 12038.064,
+          "allocator_size_in_use_bytes": 17020272,
+          "allocator_size_allocated_bytes": 42106880,
+          "allocator_blocks_in_use": 2476
+        },
+        {
+          "iteration": 7,
+          "cells": 320000,
+          "wall_ms": 11568.987,
+          "allocator_size_in_use_bytes": 17020656,
+          "allocator_size_allocated_bytes": 42106880,
+          "allocator_blocks_in_use": 2477
+        },
+        {
+          "iteration": 8,
+          "cells": 320000,
+          "wall_ms": 11638.951,
+          "allocator_size_in_use_bytes": 17021040,
+          "allocator_size_allocated_bytes": 42106880,
+          "allocator_blocks_in_use": 2478
+        },
+        {
+          "iteration": 9,
+          "cells": 320000,
+          "wall_ms": 12011.991,
+          "allocator_size_in_use_bytes": 17021424,
+          "allocator_size_allocated_bytes": 42106880,
+          "allocator_blocks_in_use": 2479
+        },
+        {
+          "iteration": 10,
+          "cells": 320000,
+          "wall_ms": 12233.291,
+          "allocator_size_in_use_bytes": 17021808,
+          "allocator_size_allocated_bytes": 42106880,
+          "allocator_blocks_in_use": 2480
+        }
+      ]
+    },
+    {
+      "fixture": "/tmp/elixcee-inprocess-fixtures/multi-sheet-4.xlsx",
+      "input_bytes": 16187338,
+      "iterations": 10,
+      "successes": 10,
+      "total_cells": 4000000,
+      "wall_ms": 123546.58,
+      "baseline_allocator_size_in_use_bytes": 16199008,
+      "baseline_allocator_size_allocated_bytes": 28770304,
+      "observations": [
+        {
+          "iteration": 1,
+          "cells": 400000,
+          "wall_ms": 12517.89,
+          "allocator_size_in_use_bytes": 16264704,
+          "allocator_size_allocated_bytes": 41353216,
+          "allocator_blocks_in_use": 2471
+        },
+        {
+          "iteration": 2,
+          "cells": 400000,
+          "wall_ms": 12373.289,
+          "allocator_size_in_use_bytes": 16265088,
+          "allocator_size_allocated_bytes": 41353216,
+          "allocator_blocks_in_use": 2472
+        },
+        {
+          "iteration": 3,
+          "cells": 400000,
+          "wall_ms": 12161.093,
+          "allocator_size_in_use_bytes": 16265472,
+          "allocator_size_allocated_bytes": 41353216,
+          "allocator_blocks_in_use": 2473
+        },
+        {
+          "iteration": 4,
+          "cells": 400000,
+          "wall_ms": 12575.652,
+          "allocator_size_in_use_bytes": 16265856,
+          "allocator_size_allocated_bytes": 41353216,
+          "allocator_blocks_in_use": 2474
+        },
+        {
+          "iteration": 5,
+          "cells": 400000,
+          "wall_ms": 12197.896,
+          "allocator_size_in_use_bytes": 16266240,
+          "allocator_size_allocated_bytes": 41353216,
+          "allocator_blocks_in_use": 2475
+        },
+        {
+          "iteration": 6,
+          "cells": 400000,
+          "wall_ms": 12373.1,
+          "allocator_size_in_use_bytes": 16266624,
+          "allocator_size_allocated_bytes": 41353216,
+          "allocator_blocks_in_use": 2476
+        },
+        {
+          "iteration": 7,
+          "cells": 400000,
+          "wall_ms": 12522.15,
+          "allocator_size_in_use_bytes": 16267008,
+          "allocator_size_allocated_bytes": 41353216,
+          "allocator_blocks_in_use": 2477
+        },
+        {
+          "iteration": 8,
+          "cells": 400000,
+          "wall_ms": 12394.681,
+          "allocator_size_in_use_bytes": 16267392,
+          "allocator_size_allocated_bytes": 41353216,
+          "allocator_blocks_in_use": 2478
+        },
+        {
+          "iteration": 9,
+          "cells": 400000,
+          "wall_ms": 12450.828,
+          "allocator_size_in_use_bytes": 16267776,
+          "allocator_size_allocated_bytes": 41353216,
+          "allocator_blocks_in_use": 2479
+        },
+        {
+          "iteration": 10,
+          "cells": 400000,
+          "wall_ms": 11979.934,
+          "allocator_size_in_use_bytes": 16268160,
+          "allocator_size_allocated_bytes": 41353216,
+          "allocator_blocks_in_use": 2480
+        }
+      ]
+    }
+  ]
+}

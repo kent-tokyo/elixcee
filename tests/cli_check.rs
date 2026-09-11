@@ -289,3 +289,46 @@ fn multi_file_check_reports_a_cross_module_sub_collision() {
         v
     );
 }
+
+#[test]
+fn multi_file_check_accepts_same_named_types_in_separate_modules() {
+    let a = write_vba(
+        "Type Point\n    X As Long\nEnd Type\nSub Main()\n    x = 1\nEnd Sub\n",
+        "type_collide_a",
+    );
+    let b = write_vba("Type point\n    Y As Long\nEnd Type\n", "type_collide_b");
+    let output = Command::new(env!("CARGO_BIN_EXE_elixcee"))
+        .args(["check", a.to_str().unwrap(), b.to_str().unwrap(), "--json"])
+        .output()
+        .expect("run elixcee binary");
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let v: Value = serde_json::from_str(stdout.trim()).expect("valid json");
+    assert!(output.status.success(), "{:?}", v);
+    assert_eq!(v["ok"], true);
+    assert_eq!(v["diagnostics"], serde_json::json!([]));
+}
+
+#[test]
+fn check_reports_a_duplicate_type_in_one_module() {
+    let output = run_check_json(
+        "Type Point\n    X As Long\nEnd Type\nType point\n    Y As Long\nEnd Type\n",
+        None,
+        "type_same_module",
+    );
+    assert!(!output.0, "expected duplicate Type to fail: {:?}", output.1);
+    assert_eq!(output.1["ok"], false);
+    assert!(
+        output.1["diagnostics"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|d| d["code"] == "E1012")
+    );
+    let diagnostic = output.1["diagnostics"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|d| d["code"] == "E1012")
+        .unwrap();
+    assert_eq!(diagnostic["location"]["line"], 1);
+}

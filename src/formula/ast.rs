@@ -34,6 +34,12 @@ pub enum FormulaExpr {
     Number(f64),
     Str(String),
     Bool(bool),
+    /// An empty argument slot, such as the second argument in `F(1,,3)`.
+    /// Excel uses omitted arguments in optional-argument and LAMBDA calls;
+    /// keeping the slot in the AST is necessary for `ISOMITTED` to inspect
+    /// syntax without confusing omission with an explicitly supplied empty
+    /// value.
+    Omitted,
     CellRef {
         col: u32,
         row: u32,
@@ -42,10 +48,9 @@ pub enum FormulaExpr {
         /// (0.14.0-A) treats it as anchored, and how it round-trips to text.
         abs_col: bool,
         abs_row: bool,
-        /// `Some` for `Sheet2!A1` (0.14.0-A2). `evaluate` explicitly refuses to
-        /// evaluate any expression containing a qualified reference — see
-        /// `eval::references_another_sheet` — rather than ever silently reading
-        /// the *active* sheet's cell as if it were the qualified one.
+        /// `Some` for `Sheet2!A1` (0.14.0-A2). The single-sheet evaluator
+        /// rejects this form; the workbook evaluator resolves it against the
+        /// referenced sheet instead of silently reading the host sheet.
         sheet: Option<SheetQualifier>,
     },
     Range {
@@ -71,6 +76,11 @@ pub enum FormulaExpr {
     UnaryMinus(Box<FormulaExpr>),
     FuncCall {
         name: String,
+        args: Vec<FormulaExpr>,
+    },
+    /// Invoke a first-class LAMBDA expression, e.g. `LAMBDA(x,x+1)(2)`.
+    Call {
+        callee: Box<FormulaExpr>,
         args: Vec<FormulaExpr>,
     },
 }

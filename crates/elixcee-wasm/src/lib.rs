@@ -14,7 +14,234 @@
 
 use elixcee::diagnostics::json_string;
 use elixcee::reader::{BufferSheet, BufferWorkbook, SheetCell};
+use elixcee::types::{CellContent, Variant};
+use std::collections::HashMap;
 use wasm_bindgen::prelude::*;
+
+const MAX_EDITOR_HISTORY: usize = 128;
+const MAX_WORKSHEET_ROW: u32 = 1_048_576;
+const MAX_WORKSHEET_COLUMN: u32 = 16_384;
+
+#[derive(Clone)]
+struct EditorState {
+    sheets: HashMap<String, HashMap<(u32, u32), CellContent>>,
+}
+
+#[derive(Clone)]
+struct EditorTransaction {
+    state: EditorState,
+    undo_len: usize,
+    redo: Vec<EditorState>,
+}
+
+/// Stateful JS/WASM workbook editor for calculation-oriented workflows.
+/// OOXML writing remains the responsibility of the package's existing JS writer.
+#[wasm_bindgen]
+pub struct WorkbookEditor {
+    workbook: BufferWorkbook,
+    sheets: HashMap<String, HashMap<(u32, u32), CellContent>>,
+    undo: Vec<EditorState>,
+    redo: Vec<EditorState>,
+    transaction: Option<EditorTransaction>,
+    transaction_dirty: bool,
+}
+
+#[wasm_bindgen]
+impl WorkbookEditor {
+    #[wasm_bindgen(constructor)]
+    pub fn new(bytes: &[u8]) -> Result<WorkbookEditor, JsValue> {
+        let workbook =
+            elixcee::reader::read_workbook_from_bytes(bytes).map_err(|e| JsValue::from_str(&e))?;
+        let sheets = calculation_sheets(&workbook);
+        Ok(Self {
+            workbook,
+            sheets,
+            undo: Vec::new(),
+            redo: Vec::new(),
+            transaction: None,
+            transaction_dirty: false,
+        })
+    }
+
+    #[wasm_bindgen(js_name = setNumber)]
+    pub fn set_number(
+        &mut self,
+        sheet: &str,
+        row: u32,
+        col: u32,
+        value: f64,
+    ) -> Result<(), JsValue> {
+        let key = self.validate_cell_target(sheet, row, col)?;
+        if !value.is_finite() {
+            return Err(JsValue::from_str("cell value must be finite"));
+        }
+        self.record_edit();
+        let value = if value.fract() == 0.0 {
+            Variant::Integer(value as i64)
+        } else {
+            Variant::Float(value)
+        };
+        self.sheets.get_mut(&key).expect("checked above").insert(
+            (row, col),
+            CellContent {
+                formula: None,
+                value,
+            },
+        );
+        Ok(())
+    }
+
+    #[wasm_bindgen(js_name = setString)]
+    pub fn set_string(
+        &mut self,
+        sheet: &str,
+        row: u32,
+        col: u32,
+        value: &str,
+    ) -> Result<(), JsValue> {
+        let key = self.validate_cell_target(sheet, row, col)?;
+        self.record_edit();
+        self.sheets.get_mut(&key).expect("checked above").insert(
+            (row, col),
+            CellContent {
+                formula: None,
+                value: Variant::Str(value.to_string()),
+            },
+        );
+        Ok(())
+    }
+
+    #[wasm_bindgen(js_name = setBoolean)]
+    pub fn set_boolean(
+        &mut self,
+        sheet: &str,
+        row: u32,
+        col: u32,
+        value: bool,
+    ) -> Result<(), JsValue> {
+        let key = self.validate_cell_target(sheet, row, col)?;
+        self.record_edit();
+        self.sheets.get_mut(&key).expect("checked above").insert(
+            (row, col),
+            CellContent {
+                formula: None,
+                value: Variant::Boolean(value),
+            },
+        );
+        Ok(())
+    }
+
+    pub fn recalculate(&mut self) -> Result<String, JsValue> {
+        elixcee::formula::calculate_workbook(&mut self.sheets, &HashMap::new())
+            .map_err(|e| JsValue::from_str(&e))?;
+        Ok(self.json_snapshot())
+    }
+
+    pub fn snapshot(&mut self) -> String {
+        self.json_snapshot()
+    }
+
+    pub fn undo(&mut self) -> bool {
+        let Some(previous) = self.undo.pop() else {
+            return false;
+        };
+        self.redo.push(self.capture_state());
+        self.sheets = previous.sheets;
+        true
+    }
+
+    pub fn redo(&mut self) -> bool {
+        let Some(next) = self.redo.pop() else {
+            return false;
+        };
+        self.undo.push(self.capture_state());
+        self.sheets = next.sheets;
+        true
+    }
+
+    #[wasm_bindgen(js_name = beginTransaction)]
+    pub fn begin_transaction(&mut self) -> Result<(), JsValue> {
+        if self.transaction.is_some() {
+            return Err(JsValue::from_str("an edit transaction is already active"));
+        }
+        self.transaction = Some(EditorTransaction {
+            state: self.capture_state(),
+            undo_len: self.undo.len(),
+            redo: self.redo.clone(),
+        });
+        self.transaction_dirty = false;
+        Ok(())
+    }
+
+    #[wasm_bindgen(js_name = commitTransaction)]
+    pub fn commit_transaction(&mut self) -> bool {
+        let Some(transaction) = self.transaction.take() else {
+            return false;
+        };
+        if self.transaction_dirty {
+            self.undo.push(transaction.state);
+            self.undo.truncate(MAX_EDITOR_HISTORY);
+            self.redo.clear();
+        }
+        self.transaction_dirty = false;
+        true
+    }
+
+    #[wasm_bindgen(js_name = abortTransaction)]
+    pub fn abort_transaction(&mut self) -> bool {
+        let Some(transaction) = self.transaction.take() else {
+            return false;
+        };
+        self.sheets = transaction.state.sheets;
+        self.undo.truncate(transaction.undo_len);
+        self.redo = transaction.redo;
+        self.transaction_dirty = false;
+        true
+    }
+
+    #[wasm_bindgen(js_name = canUndo)]
+    pub fn can_undo(&self) -> bool {
+        !self.undo.is_empty()
+    }
+    #[wasm_bindgen(js_name = canRedo)]
+    pub fn can_redo(&self) -> bool {
+        !self.redo.is_empty()
+    }
+
+    fn capture_state(&self) -> EditorState {
+        EditorState {
+            sheets: self.sheets.clone(),
+        }
+    }
+
+    fn validate_cell_target(&self, sheet: &str, row: u32, col: u32) -> Result<String, JsValue> {
+        let key = sheet.to_ascii_lowercase();
+        if !self.sheets.contains_key(&key) {
+            return Err(JsValue::from_str("unknown worksheet"));
+        }
+        if row == 0 || row > MAX_WORKSHEET_ROW || col == 0 || col > MAX_WORKSHEET_COLUMN {
+            return Err(JsValue::from_str(
+                "cell coordinates are outside the worksheet bounds",
+            ));
+        }
+        Ok(key)
+    }
+
+    fn record_edit(&mut self) {
+        if self.transaction.is_some() {
+            self.transaction_dirty = true;
+            return;
+        }
+        self.undo.push(self.capture_state());
+        self.undo.truncate(MAX_EDITOR_HISTORY);
+        self.redo.clear();
+    }
+
+    fn json_snapshot(&mut self) -> String {
+        sync_workbook_values(&mut self.workbook, &self.sheets);
+        workbook_json(&self.workbook)
+    }
+}
 
 /// Read an in-memory XLSX/XLSM buffer, returning a JSON string shaped like xlsx@0.18.5's
 /// `WorkBook` (`{SheetNames, Sheets}`; each `WorkSheet` a sparse `{"A1": {t,v,f,fmtId}, ...,
@@ -26,7 +253,7 @@ use wasm_bindgen::prelude::*;
 /// `elixcee::diagnostics::json_string`'s existing hand-rolled escaper (src/diagnostics.rs)
 /// rather than duplicating a JSON writer or adding a dependency.
 ///
-/// `!hiddenRows`/`!hiddenCols`/per-cell `fmtId`/`!numFmts`/`!date1904` are NOT the oracle's
+/// `!hiddenRows`/`!hiddenCols`/per-cell `fmtId`/`!numFmts`/`!date1904`/`!dataValidations` are NOT the oracle's
 /// own `read()` shapes — they're `reader.rs`'s raw parsed data (1-based `[start,end]`
 /// intervals; a numFmtId integer; the workbook's custom numFmt table; a bool), passed
 /// through as-is. The JS layer resolves all of this into the oracle's real shapes —
@@ -44,6 +271,191 @@ use wasm_bindgen::prelude::*;
 pub fn read_workbook(bytes: &[u8]) -> Result<String, JsValue> {
     let wb = elixcee::reader::read_workbook_from_bytes(bytes).map_err(|e| JsValue::from_str(&e))?;
     Ok(workbook_json(&wb))
+}
+
+/// Recalculate formula cells in an in-memory XLSX/XLSM buffer using the same
+/// Rust workbook runtime as the VM, then return the normal raw workbook JSON.
+///
+/// This deliberately keeps writing in JavaScript: the export is a calculation
+/// bridge, not an OOXML writer. Files without qualified formulas are also
+/// accepted and returned unchanged because the current shared workbook path is
+/// only needed when at least one formula requires workbook context.
+#[wasm_bindgen(js_name = calculateWorkbook)]
+pub fn calculate_workbook(bytes: &[u8]) -> Result<String, JsValue> {
+    let mut wb =
+        elixcee::reader::read_workbook_from_bytes(bytes).map_err(|e| JsValue::from_str(&e))?;
+    let mut sheets = HashMap::new();
+    for bs in &wb.sheets {
+        let mut cells = HashMap::with_capacity(bs.sheet.cells.len().max(bs.formulas.len()));
+        for (&position, cell) in &bs.sheet.cells {
+            cells.insert(
+                position,
+                CellContent {
+                    formula: bs.formulas.get(&position).map(|f| format!("={f}")),
+                    value: sheet_cell_to_variant(cell),
+                },
+            );
+        }
+        for (&position, formula) in &bs.formulas {
+            cells.entry(position).or_insert_with(|| CellContent {
+                formula: Some(format!("={formula}")),
+                value: Variant::Empty,
+            });
+        }
+        sheets.insert(bs.sheet.name.to_ascii_lowercase(), cells);
+    }
+    elixcee::formula::calculate_workbook(&mut sheets, &HashMap::new())
+        .map_err(|e| JsValue::from_str(&e))?;
+    for bs in &mut wb.sheets {
+        let Some(cells) = sheets.get(&bs.sheet.name.to_ascii_lowercase()) else {
+            continue;
+        };
+        for &position in bs.formulas.keys() {
+            if let Some(cell) = cells.get(&position) {
+                bs.sheet
+                    .cells
+                    .insert(position, variant_to_sheet_cell(&cell.value));
+            }
+        }
+    }
+    Ok(workbook_json(&wb))
+}
+
+/// Return a small, deterministic diagnostic summary without materializing a
+/// calculated workbook. This gives Node/browser callers a structured preflight
+/// signal while keeping read/calculation failures as ordinary `Result` errors.
+#[wasm_bindgen(js_name = diagnoseWorkbook)]
+pub fn diagnose_workbook(bytes: &[u8]) -> String {
+    let wb = match elixcee::reader::read_workbook_from_bytes(bytes) {
+        Ok(wb) => wb,
+        Err(error) => {
+            return format!("{{\"ok\":false,\"error\":{}}}", json_string(&error));
+        }
+    };
+    let mut formula_count = 0usize;
+    let mut qualified_formula_count = 0usize;
+    let mut formula_parse_errors = 0usize;
+    let calculation_sheets = calculation_sheets(&wb);
+    for bs in &wb.sheets {
+        for formula in bs.formulas.values() {
+            formula_count += 1;
+            match elixcee::formula::parse(formula) {
+                Ok(expr) => {
+                    if contains_qualified_reference(&expr) {
+                        qualified_formula_count += 1;
+                    }
+                }
+                Err(_) => formula_parse_errors += 1,
+            }
+        }
+    }
+    format!(
+        "{{\"ok\":true,\"sheetCount\":{},\"formulaCount\":{},\"qualifiedFormulaCount\":{},\"formulaParseErrors\":{},\"hasFormulaCycle\":{}}}",
+        wb.sheets.len(),
+        formula_count,
+        qualified_formula_count,
+        formula_parse_errors,
+        if elixcee::formula::workbook_has_formula_cycle(&calculation_sheets) {
+            "true"
+        } else {
+            "false"
+        }
+    )
+}
+
+fn contains_qualified_reference(expr: &elixcee::formula::FormulaExpr) -> bool {
+    use elixcee::formula::FormulaExpr;
+    match expr {
+        FormulaExpr::CellRef { sheet, .. } | FormulaExpr::Range { sheet, .. } => sheet.is_some(),
+        FormulaExpr::BinOp { lhs, rhs, .. } => {
+            contains_qualified_reference(lhs) || contains_qualified_reference(rhs)
+        }
+        FormulaExpr::UnaryMinus(inner) => contains_qualified_reference(inner),
+        FormulaExpr::FuncCall { args, .. } => args.iter().any(contains_qualified_reference),
+        FormulaExpr::Call { callee, args } => {
+            contains_qualified_reference(callee) || args.iter().any(contains_qualified_reference)
+        }
+        FormulaExpr::Number(_)
+        | FormulaExpr::Str(_)
+        | FormulaExpr::Bool(_)
+        | FormulaExpr::Omitted => false,
+    }
+}
+
+fn sheet_cell_to_variant(cell: &SheetCell) -> Variant {
+    match cell {
+        SheetCell::Integer(value) => Variant::Integer(*value),
+        SheetCell::Float(value) => Variant::Float(*value),
+        SheetCell::Str(value) => Variant::Str(value.clone()),
+        SheetCell::Bool(value) => Variant::Boolean(*value),
+        SheetCell::Error(value) => Variant::Error(value.clone()),
+    }
+}
+
+fn calculation_sheets(
+    workbook: &BufferWorkbook,
+) -> HashMap<String, HashMap<(u32, u32), CellContent>> {
+    let mut sheets = HashMap::new();
+    for bs in &workbook.sheets {
+        let mut cells = HashMap::with_capacity(bs.sheet.cells.len().max(bs.formulas.len()));
+        for (&position, cell) in &bs.sheet.cells {
+            cells.insert(
+                position,
+                CellContent {
+                    formula: bs.formulas.get(&position).map(|f| format!("={f}")),
+                    value: sheet_cell_to_variant(cell),
+                },
+            );
+        }
+        for (&position, formula) in &bs.formulas {
+            cells.entry(position).or_insert_with(|| CellContent {
+                formula: Some(format!("={formula}")),
+                value: Variant::Empty,
+            });
+        }
+        sheets.insert(bs.sheet.name.to_ascii_lowercase(), cells);
+    }
+    sheets
+}
+
+fn sync_workbook_values(
+    workbook: &mut BufferWorkbook,
+    sheets: &HashMap<String, HashMap<(u32, u32), CellContent>>,
+) {
+    for bs in &mut workbook.sheets {
+        let Some(cells) = sheets.get(&bs.sheet.name.to_ascii_lowercase()) else {
+            continue;
+        };
+        for &position in bs.formulas.keys() {
+            if let Some(cell) = cells.get(&position) {
+                bs.sheet
+                    .cells
+                    .insert(position, variant_to_sheet_cell(&cell.value));
+            }
+        }
+        for (&position, cell) in cells {
+            if cell.formula.is_none() {
+                bs.sheet
+                    .cells
+                    .insert(position, variant_to_sheet_cell(&cell.value));
+            }
+        }
+    }
+}
+
+fn variant_to_sheet_cell(value: &Variant) -> SheetCell {
+    match value {
+        Variant::Integer(value) => SheetCell::Integer(*value),
+        Variant::Float(value) => SheetCell::Float(*value),
+        Variant::Str(value) => SheetCell::Str(value.clone()),
+        Variant::Boolean(value) => SheetCell::Bool(*value),
+        Variant::Date(value) => SheetCell::Integer(*value),
+        Variant::Error(value) => SheetCell::Error(value.clone()),
+        Variant::Empty | Variant::Null => SheetCell::Str(String::new()),
+        Variant::Array(_) | Variant::VbaArray(_) | Variant::Record(_) => {
+            SheetCell::Str(value.to_string())
+        }
+    }
 }
 
 fn workbook_json(wb: &BufferWorkbook) -> String {
@@ -165,6 +577,26 @@ fn worksheet_json(bs: &BufferSheet) -> String {
     write_hidden_intervals(&mut out, "!hiddenRows", &sheet.hidden_rows);
     write_hidden_intervals(&mut out, "!hiddenCols", &sheet.hidden_columns);
 
+    if !sheet.data_validations.is_empty() {
+        out.push_str(",\"!dataValidations\":[");
+        for (index, validation) in sheet.data_validations.iter().enumerate() {
+            if index > 0 {
+                out.push(',');
+            }
+            out.push_str("{\"type\":");
+            out.push_str(&json_string(&validation.validation_type));
+            out.push_str(",\"sqref\":[");
+            for (range_index, range) in validation.sqref.iter().enumerate() {
+                if range_index > 0 {
+                    out.push(',');
+                }
+                out.push_str(&json_string(&format_rect(range)));
+            }
+            out.push_str("]}");
+        }
+        out.push(']');
+    }
+
     out.push('}');
     out
 }
@@ -247,6 +679,16 @@ fn cell_ref(row: u32, col: u32) -> String {
     format!("{}{}", col_letters(col), row)
 }
 
+fn format_rect(rect: &((u32, u32), (u32, u32))) -> String {
+    let ((r1, c1), (r2, c2)) = *rect;
+    let start = format!("{}{}", col_letters(c1), r1);
+    if r1 == r2 && c1 == c2 {
+        start
+    } else {
+        format!("{}:{}{}", start, col_letters(c2), r2)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -273,6 +715,8 @@ mod tests {
                 column_styles: Vec::new(),
                 tables: Vec::new(),
                 data_validations: Vec::new(),
+                conditional_format_ranges: Vec::new(),
+                comment_cells: Vec::new(),
                 autofilter: None,
             },
             formulas: HashMap::new(),
@@ -289,6 +733,7 @@ mod tests {
             sheets: vec![s],
             number_formats: HashMap::new(),
             date1904: false,
+            defined_names: Vec::new(),
         }
     }
 
@@ -425,6 +870,32 @@ mod tests {
         assert!(!json.contains("!hiddenCols"));
     }
 
+    #[test]
+    fn worksheet_json_projects_data_validation_type_and_ranges() {
+        let mut s = sheet("Sheet1", vec![]);
+        s.sheet
+            .data_validations
+            .push(elixcee::reader::DataValidationRule {
+                validation_type: "list".to_string(),
+                operator: None,
+                formula1: Some("Yes,No".to_string()),
+                formula2: None,
+                allow_blank: true,
+                show_input_message: false,
+                prompt_title: None,
+                prompt: None,
+                show_error_message: true,
+                error_style: None,
+                error_title: None,
+                error: None,
+                sqref: vec![((1, 5), (1, 5)), ((2, 5), (4, 5))],
+                dirty: false,
+                raw_span: String::new(),
+            });
+        let json = workbook_json(&wb1(s));
+        assert!(json.contains(r#""!dataValidations":[{"type":"list","sqref":["E1","E2:E4"]}]"#));
+    }
+
     // ── read() item 6: per-cell fmtId, workbook !numFmts/!date1904 ──────────
 
     #[test]
@@ -449,6 +920,7 @@ mod tests {
             sheets: vec![sheet("Sheet1", vec![])],
             number_formats,
             date1904: false,
+            defined_names: Vec::new(),
         };
         let json = workbook_json(&wb);
         assert!(json.contains(r#""!numFmts":{"164":"0.00\"kg\""}"#));
@@ -466,5 +938,34 @@ mod tests {
         wb.date1904 = true;
         let json = workbook_json(&wb);
         assert!(json.contains(r#""!date1904":true"#));
+    }
+
+    #[test]
+    fn editor_transaction_coalesces_multiple_typed_writes_into_one_undo() {
+        let workbook = wb1(sheet("Sheet1", vec![]));
+        let sheets = calculation_sheets(&workbook);
+        let mut editor = WorkbookEditor {
+            workbook,
+            sheets,
+            undo: Vec::new(),
+            redo: Vec::new(),
+            transaction: None,
+            transaction_dirty: false,
+        };
+
+        editor.begin_transaction().unwrap();
+        editor.set_string("Sheet1", 1, 1, "planned").unwrap();
+        editor.set_boolean("Sheet1", 1, 2, true).unwrap();
+        assert!(editor.commit_transaction());
+        assert!(editor.can_undo());
+        assert!(editor.undo());
+        let snapshot = editor.snapshot();
+        assert!(!snapshot.contains("planned"));
+        assert!(!snapshot.contains("\"B1\""));
+        assert!(!editor.can_undo());
+        assert!(editor.redo());
+        let snapshot = editor.snapshot();
+        assert!(snapshot.contains("planned"));
+        assert!(snapshot.contains("\"B1\""));
     }
 }

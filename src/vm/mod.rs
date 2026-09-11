@@ -1,24 +1,60 @@
-use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 
 use crate::check;
 use crate::formula;
 use crate::parser::ast::{
-    ArrayDim, Axis, CalcModeValue, CaseMatch, Expr, FuncDef, ObjectExpr, Program, SourceSpan,
-    SpannedStmt, Stmt, SubDef, VbaBinOp, WithMember, WithTarget, XlDir, XlEndProp,
+    AccessModifier, ArrayDim, Axis, CalcModeValue, CaseMatch, ClassFieldDef, CollectionTarget,
+    Expr, ForEachSource, FuncDef, ObjectExpr, ObjectTarget, Program, PropertyDef, PropertyKind,
+    SourceSpan, SpannedStmt, Stmt, SubDef, VbaBinOp, WithMember, WithTarget, XlDir, XlEndProp,
 };
 use crate::parser::{self, EntrypointResolution};
 use crate::reader::{
-    self, AutoFilterDef, DataValidationRule, DataValidationSpec, DateGroupItem, FilterColumn,
-    FilterCriteria, SheetCell, TableColumn, TableDef, TableEditOp, WorkbookSheet,
+    self, AutoFilterDef, DataValidationRule, DataValidationSpec, DateGroupItem,
+    ExternalLinksPolicy, FilterColumn, FilterCriteria, SheetCell, TableColumn, TableDef,
+    TableEditOp, WorkbookSheet,
 };
+
+/// Default deterministic budget for one VBA entrypoint run. Rust callers can
+/// opt out with `Vm::max_instructions = None` when the source is trusted.
+pub const DEFAULT_MAX_VBA_INSTRUCTIONS: u64 = 10_000_000;
+/// Default maximum number of nested VBA Sub/Function frames.
+pub const DEFAULT_MAX_VBA_CALL_DEPTH: usize = 256;
+/// Default maximum UTF-8 bytes retained in one VBA string value.
+pub const DEFAULT_MAX_VBA_STRING_BYTES: usize = 16 * 1024 * 1024;
+/// Default maximum number of elements in a VBA/runtime array value.
+pub const DEFAULT_MAX_VBA_ARRAY_ELEMENTS: usize = MAX_ARRAY_ELEMENTS;
+/// Default maximum number of materialized cells retained across VBA sheets.
+pub const DEFAULT_MAX_VBA_CELLS: usize = 5_000_000;
+const MAX_AUTOMATIC_WORKSHEET_CHANGES: usize = 64;
+
+fn is_blocked_external_effect(reason: &str) -> bool {
+    let lower = reason.to_ascii_lowercase();
+    [
+        "shell",
+        "createobject",
+        "getobject",
+        "wscript",
+        "filesystemobject",
+        "save",
+        "close",
+        "open ",
+        "'open'",
+        "kill ",
+        "'kill'",
+    ]
+    .iter()
+    .any(|needle| lower.contains(needle))
+}
 
 /// `ExcelError`/`Variant`/`CellContent`/`serial_to_display` and the range
 /// address helpers below are physically defined in `elixcee-types` (Phase
 /// 2A) — re-exported here so every existing `vm::X` / `crate::vm::X`
 /// reference across the codebase keeps resolving unchanged.
 pub use crate::types::{
-    ArrayBound, CellContent, ExcelError, MAX_ARRAY_ELEMENTS, Variant, VbaArray, parse_cell_addr,
-    parse_range_addr, serial_to_display,
+    ArrayBound, ArrayShape, CellContent, ExcelError, MAX_ARRAY_ELEMENTS, SpillRect, Variant,
+    VbaArray, parse_cell_addr, parse_range_addr, serial_to_display,
 };
 
 /// A procedure's own `On Error` state — real VBA scopes this per Sub/
@@ -194,6 +230,48 @@ pub enum ResolutionFailureKind {
     },
 }
 
+/// Stable category for a runtime failure produced while executing VBA. The
+/// plain `String` returned by `run_sub` remains the compatibility surface, but
+/// callers that need machine-readable diagnostics can consume this side
+/// channel without re-parsing presentation text.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RuntimeFailureKind {
+    UndefinedVariable,
+    UndefinedSubOrFunction,
+    SheetNotFound,
+    MsgBoxBlocked,
+    ObjectVariableNotSet,
+    SecurityBlockedExternalEffect,
+    Generic,
+}
+
+impl RuntimeFailureKind {
+    fn from_message(message: &str) -> Self {
+        if message.starts_with("Undefined variable: '") {
+            return Self::UndefinedVariable;
+        }
+        if message.starts_with("Sub/Function '")
+            || message.starts_with("Unknown VBA function: '")
+            || (message.starts_with("Sub '") && message.ends_with("' not found"))
+        {
+            return Self::UndefinedSubOrFunction;
+        }
+        if message.starts_with("Sheet '") && message.ends_with("' not found") {
+            return Self::SheetNotFound;
+        }
+        if message.starts_with("MsgBox: ") {
+            return Self::MsgBoxBlocked;
+        }
+        if message == OBJECT_NOT_SET {
+            return Self::ObjectVariableNotSet;
+        }
+        if message.starts_with("SECURITY: blocked external VBA effect:") {
+            return Self::SecurityBlockedExternalEffect;
+        }
+        Self::Generic
+    }
+}
+
 /// The VM's clipboard state, populated by `.Copy` and consumed by
 /// `.Paste`/`.PasteSpecial` (Milestone B6b). Values are snapshotted at copy
 /// time (`cells`), not re-read from the source range at paste time — this
@@ -365,6 +443,103 @@ fn visible_runs(lo: u32, hi: u32, hidden: &[Interval]) -> Vec<Interval> {
         });
     }
     runs
+}
+
+fn rect_has_cell(rect: Rect, row: u32, col: u32) -> bool {
+    row >= rect.start_row && row <= rect.end_row && col >= rect.start_col && col <= rect.end_col
+}
+
+fn merge_rects_have_cell(rects: &[MergeRect], row: u32, col: u32) -> bool {
+    rects
+        .iter()
+        .any(|&((r1, c1), (r2, c2))| row >= r1 && row <= r2 && col >= c1 && col <= c2)
+}
+
+fn special_value_matches(value: &Variant, mask: i64) -> bool {
+    let bit = match value {
+        Variant::Integer(_) | Variant::Float(_) | Variant::Date(_) => 1,
+        Variant::Str(_) => 2,
+        Variant::Boolean(_) => 4,
+        Variant::Error(_) => 16,
+        Variant::Empty
+        | Variant::Null
+        | Variant::Array(_)
+        | Variant::VbaArray(_)
+        | Variant::Record(_) => 0,
+    };
+    mask & bit != 0
+}
+
+fn same_validation_criteria(left: &DataValidationRule, right: &DataValidationRule) -> bool {
+    left.validation_type == right.validation_type
+        && left.operator == right.operator
+        && left.formula1 == right.formula1
+        && left.formula2 == right.formula2
+        && left.allow_blank == right.allow_blank
+        && left.show_input_message == right.show_input_message
+        && left.prompt_title == right.prompt_title
+        && left.prompt == right.prompt
+        && left.show_error_message == right.show_error_message
+        && left.error_style == right.error_style
+        && left.error_title == right.error_title
+        && left.error == right.error
+}
+
+fn format_group_ids(groups: Option<&Vec<Vec<MergeRect>>>, row: u32, col: u32) -> Vec<usize> {
+    groups
+        .into_iter()
+        .flatten()
+        .enumerate()
+        .filter_map(|(index, rects)| merge_rects_have_cell(rects, row, col).then_some(index))
+        .collect()
+}
+
+/// Turns a set of cells into deterministic maximal rectangles. Horizontal
+/// runs are formed first, then identical runs on adjacent rows are merged.
+fn coalesce_cells_to_rects(cells: BTreeSet<(u32, u32)>) -> Vec<Rect> {
+    let mut rows: BTreeMap<u32, Vec<u32>> = BTreeMap::new();
+    for (row, col) in cells {
+        rows.entry(row).or_default().push(col);
+    }
+    let mut out: Vec<Rect> = Vec::new();
+    let mut previous: HashMap<(u32, u32), usize> = HashMap::new();
+    for (row, cols) in rows {
+        let mut spans = Vec::new();
+        let mut iter = cols.into_iter();
+        if let Some(mut start) = iter.next() {
+            let mut end = start;
+            for col in iter {
+                if col == end.saturating_add(1) {
+                    end = col;
+                } else {
+                    spans.push((start, end));
+                    start = col;
+                    end = col;
+                }
+            }
+            spans.push((start, end));
+        }
+        let mut current = HashMap::new();
+        for (start_col, end_col) in spans {
+            let index = previous
+                .get(&(start_col, end_col))
+                .copied()
+                .filter(|&index| out[index].end_row.saturating_add(1) == row)
+                .unwrap_or_else(|| {
+                    out.push(Rect {
+                        start_row: row,
+                        start_col,
+                        end_row: row,
+                        end_col,
+                    });
+                    out.len() - 1
+                });
+            out[index].end_row = row;
+            current.insert((start_col, end_col), index);
+        }
+        previous = current;
+    }
+    out
 }
 
 /// `true` iff `unit` falls inside any interval in `intervals` (not
@@ -550,6 +725,14 @@ pub struct HiddenCellsObservation {
 #[derive(Debug, Clone, PartialEq)]
 pub enum ObjectRef {
     Range(RangeRef),
+    /// A built-in VBA Collection stored in `Vm::collections`. The numeric
+    /// identity makes `Set alias = collection` share mutations while a
+    /// cloned/forked VM still deep-clones the backing map.
+    Collection(u64),
+    /// A VM-local pure in-memory `Scripting.Dictionary` adapter.
+    Dictionary(u64),
+    /// One VM-local instance of an exported VBA class module.
+    Class(u64),
     /// `Set ws = ActiveSheet` — the lowercase sheet key `ws` now refers to
     /// (a snapshot of whichever sheet was active at `Set`-time, same as
     /// real VBA fixing a Worksheet reference's identity at assignment, not
@@ -575,11 +758,210 @@ pub enum ObjectRef {
     Nothing,
 }
 
+fn retarget_sheet_in_object_ref(object: &mut ObjectRef, old_key: &str, new_key: &str) {
+    match object {
+        ObjectRef::Range(range) if range.sheet == old_key => {
+            range.sheet = new_key.to_string();
+        }
+        ObjectRef::Worksheet(sheet) if sheet == old_key => {
+            *sheet = new_key.to_string();
+        }
+        _ => {}
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct CollectionEntry {
+    value: CollectionValue,
+    key: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+enum CollectionValue {
+    Scalar(Variant),
+    Object(ObjectRef),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct DictionaryEntry {
+    key: String,
+    value: CollectionValue,
+}
+
+#[derive(Debug, Clone, Default, PartialEq)]
+struct VbaDictionary {
+    entries: Vec<DictionaryEntry>,
+    compare_mode: i64,
+}
+
+#[derive(Debug, Clone)]
+enum RuntimeArg {
+    Scalar(Variant),
+    Object(ObjectRef),
+}
+
+struct SavedRuntimeBinding {
+    name: String,
+    scalar: Option<Variant>,
+    object: Option<ObjectRef>,
+    object_type: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq)]
+struct VbaCollection {
+    items: Vec<CollectionEntry>,
+}
+
+#[derive(Debug, Clone)]
+struct ClassDefinition {
+    fields: HashMap<String, ClassFieldDef>,
+    methods: HashMap<String, SubDef>,
+    functions: HashMap<String, FuncDef>,
+    properties: HashMap<(String, PropertyKind), PropertyDef>,
+    implements: Vec<String>,
+}
+
+#[derive(Debug, Clone)]
+struct ClassInstance {
+    class_name: String,
+    fields: HashMap<String, Variant>,
+    object_fields: HashMap<String, ObjectRef>,
+}
+
+#[derive(Debug, Clone)]
+struct ObjectArray {
+    bounds: Vec<ArrayBound>,
+    class_name: String,
+    elements: Vec<ObjectRef>,
+}
+
 /// Real VBA's error 91 text, raised for any member access through an object
 /// variable that holds no live reference. One constant rather than the
 /// literal repeated per call site, so the wording can't drift between the
 /// read path, the write path and the `.Copy`/sheet-qualifier paths.
 pub const OBJECT_NOT_SET: &str = "Object variable or With block variable not set";
+const COLLECTION_INVALID_INDEX: &str = "Invalid procedure call or argument";
+const COLLECTION_DUPLICATE_KEY: &str =
+    "This key is already associated with an element of this collection";
+type FormulaAstCache = HashMap<String, HashMap<(u32, u32), (String, Option<formula::FormulaExpr>)>>;
+
+/// A bounded, explicit edit to one existing chart series. Formulas use the
+/// chart XML spelling (for example `Sheet1!$A$1:$A$3`, without a leading `=`).
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct ChartSeriesEdit {
+    pub name: Option<String>,
+    pub categories: Option<String>,
+    pub values: Option<String>,
+    pub marker_symbol: Option<String>,
+    pub marker_size: Option<u32>,
+    pub smooth: Option<bool>,
+    pub invert_if_negative: Option<bool>,
+    pub deleted: Option<bool>,
+    pub category_cache: Option<Vec<String>>,
+    pub value_cache: Option<Vec<String>>,
+}
+
+/// A bounded request to create one chart in an existing Drawing part. The
+/// writer assigns a collision-free chart part name during save.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct ChartCreation {
+    pub drawing_part: String,
+    pub chart_type: String,
+    pub categories: String,
+    pub values: String,
+    pub category_cache: Vec<Variant>,
+    pub value_cache: Vec<Variant>,
+    pub additional_series: Vec<ChartCreationSeries>,
+    pub title: Option<String>,
+    pub from_row: u32,
+    pub from_col: u32,
+    pub to_row: u32,
+    pub to_col: u32,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct ChartCreationSeries {
+    pub categories: String,
+    pub values: String,
+    pub category_cache: Vec<Variant>,
+    pub value_cache: Vec<Variant>,
+    pub title: Option<String>,
+}
+
+/// A bounded edit to the textual title of one existing chart part.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct ChartTitleEdit {
+    pub text: String,
+}
+
+/// A bounded edit to an existing chart legend position (`b`, `tr`, `r`, `l`,
+/// or `t`).
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct ChartLegendPositionEdit {
+    pub position: String,
+}
+
+/// A bounded edit to an existing chart legend overlay flag.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ChartLegendOverlayEdit {
+    pub overlay: bool,
+}
+
+/// A bounded edit to the first chart data-labels `showVal` flag.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ChartDataLabelsEdit {
+    pub show_value: Option<bool>,
+    pub show_category: Option<bool>,
+    pub show_series_name: Option<bool>,
+    pub show_percent: Option<bool>,
+    pub show_leader_lines: Option<bool>,
+    pub show_bubble_size: Option<bool>,
+    pub show_legend_key: Option<bool>,
+    pub position: Option<String>,
+    pub number_format: Option<String>,
+    pub separator: Option<String>,
+}
+
+/// A bounded edit to an existing chart style (`1..=48`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ChartStyleEdit {
+    pub style: u32,
+}
+
+/// A bounded edit to one existing worksheet-backed Pivot cache source.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct PivotWorksheetSourceEdit {
+    pub sheet: Option<String>,
+    pub reference: Option<String>,
+    pub refresh_on_load: Option<bool>,
+    pub field_captions: HashMap<usize, String>,
+}
+
+/// A bounded edit to one existing two-cell drawing anchor. Public API
+/// coordinates are 1-based worksheet cells; OOXML marker coordinates are
+/// written as zero-based offsets by the writer.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct DrawingAnchorEdit {
+    pub from_row: u32,
+    pub from_col: u32,
+    pub to_row: u32,
+    pub to_col: u32,
+}
+
+pub(crate) type DrawingShapeFlipEdit = (Option<bool>, Option<bool>);
+
+const CELL_TILE_SIZE: u32 = 32;
+const MAX_CELL_TILES_PER_SHEET: usize = 256;
+const DENSE_TILE_CELL_THRESHOLD: usize = 128;
+const INCREMENTAL_TILE_UPDATE_MAX_CELLS: usize = 512;
+/// A `None` entry is a known-empty tile. Keeping the negative result avoids
+/// rescanning sparse sheets without allocating 1,024 `Variant::Empty` values.
+#[derive(Clone)]
+enum CellTileValues {
+    Sparse(HashMap<usize, Variant>),
+    Dense(Vec<Variant>),
+}
+type CellTileCache = HashMap<String, HashMap<(u32, u32), (Option<CellTileValues>, u64)>>;
 
 /// Default `Err.Description` text for a well-known VBA error number — what
 /// real VBA fills in automatically when `Err.Raise <number>` is called
@@ -595,6 +977,8 @@ fn default_description_for_vba_error_number(number: i64) -> &'static str {
         13 => "Type mismatch",
         91 => OBJECT_NOT_SET,
         94 => "Invalid use of Null",
+        424 => "Object required",
+        457 => COLLECTION_DUPLICATE_KEY,
         _ => "Application-defined or object-defined error",
     }
 }
@@ -625,6 +1009,10 @@ fn classify_vba_error_number(msg: &str) -> (i64, String) {
         Some(94)
     } else if msg == OBJECT_NOT_SET {
         Some(91)
+    } else if msg == "Object required" {
+        Some(424)
+    } else if msg == COLLECTION_DUPLICATE_KEY {
+        Some(457)
     } else if msg == "Integer division overflow" {
         // elixcee's own wording (i64-based overflow, not real VBA's native
         // 32-bit Long overflow) — the *number* still matches VBA's own
@@ -654,6 +1042,11 @@ enum WithValue {
     /// `With Range("A1")`, `With Cells(r, c)`, or a `Set`-assigned Range
     /// object variable.
     Range(RangeRef),
+    /// A built-in Collection identity. Member reads/method statements use
+    /// the same CollectionTarget::CurrentWith path as a named variable.
+    Collection(u64),
+    /// A VBA class-module instance.
+    Class(u64, Option<String>),
     /// `With Worksheets("X")`, or a `Set`-assigned Worksheet object
     /// variable. Holds the lowercase sheet key.
     Sheet(String),
@@ -676,6 +1069,18 @@ enum WithValue {
 fn expect_range_ref(obj: ObjectRef, context: &str) -> Result<RangeRef, String> {
     match obj {
         ObjectRef::Range(r) => Ok(r),
+        ObjectRef::Collection(_) => Err(format!(
+            "{}: expected a Range object, got a Collection reference",
+            context
+        )),
+        ObjectRef::Dictionary(_) => Err(format!(
+            "{}: expected a Range object, got a Dictionary reference",
+            context
+        )),
+        ObjectRef::Class(_) => Err(format!(
+            "{}: expected a Range object, got a class-module reference",
+            context
+        )),
         ObjectRef::Worksheet(_) => Err(format!(
             "{}: expected a Range object, got a Worksheet reference",
             context
@@ -767,6 +1172,39 @@ fn merge_style_attr_edit(existing: &mut StyleAttrEdit, edit: &StyleAttrEdit) {
     }
 }
 
+#[derive(Clone)]
+struct FormulaPlan {
+    cells: Vec<(u32, u32, formula::FormulaExpr)>,
+    order: Vec<usize>,
+    position_to_index: HashMap<(u32, u32), usize>,
+    reverse: HashMap<(u32, u32), Vec<usize>>,
+    range_dependents: Vec<((u32, u32, u32, u32), usize)>,
+}
+
+const MAX_EDIT_HISTORY: usize = 128;
+
+#[derive(Clone)]
+struct EditHistoryState {
+    sheets: HashMap<String, HashMap<(u32, u32), CellContent>>,
+    active_sheet: String,
+    next_append_rows: HashMap<String, u32>,
+    formula_ast_cache: FormulaAstCache,
+    formula_plan: HashMap<String, FormulaPlan>,
+    formula_dirty_cells: HashMap<String, HashSet<(u32, u32)>>,
+    workbook_formula_dirty: HashMap<String, HashSet<(u32, u32)>>,
+    workbook_formula_tracking_valid: bool,
+    workbook_formula_structure_dirty: bool,
+    ooxml_structural_edit_dirty: bool,
+    spill_rects: HashMap<String, HashMap<(u32, u32), SpillRect>>,
+}
+
+#[derive(Clone)]
+struct EditTransaction {
+    state: EditHistoryState,
+    undo_len: usize,
+}
+
+#[derive(Clone)]
 pub struct Vm {
     /// Per-sheet cell storage. Key is sheet name (lowercase for lookup).
     sheets: HashMap<String, HashMap<(u32, u32), CellContent>>,
@@ -794,8 +1232,21 @@ pub struct Vm {
     pub(crate) sheet_order: Vec<String>,
     /// Currently active sheet name (lowercase).
     pub active_sheet: String,
+    /// Excel worksheet `sheetPr@codeName` values, keyed by the lowercase
+    /// display name. These names are VBA module identities and may differ
+    /// from the visible tab name; they are used only for deterministic
+    /// Worksheet_Change owner selection.
+    sheet_code_names: HashMap<String, String>,
     pub variables: HashMap<String, Variant>,
+    /// Module scope of the currently executing standard/class procedure.
+    /// Bare UDT names resolve against this module before the compatibility
+    /// fallback to the flat type namespace.
+    current_module_scope: Option<String>,
     pub calc_mode: CalculationMode,
+    /// Whether explicit event dispatch is enabled. This mirrors
+    /// `Application.EnableEvents`; events are never inferred from ordinary
+    /// cell writes, so callers must opt into `run_event` explicitly.
+    pub enable_events: bool,
     pub error_on_msgbox: bool,
     pub print_msgbox: bool,
     /// Every MsgBox message shown during the current `run_sub` call, in
@@ -811,6 +1262,21 @@ pub struct Vm {
     /// `None` until the first statement actually starts executing (e.g. a
     /// "Sub not found" failure happens before this is ever set).
     current_span: Option<SourceSpan>,
+    /// Structured category for the most recent uncaught execution failure.
+    /// The string returned by `run_sub` remains the human-facing contract;
+    /// machine-readable consumers can use this side channel instead.
+    last_runtime_failure: Option<RuntimeFailureKind>,
+    /// Non-zero while an explicit event is being dispatched. A nested event
+    /// is suppressed rather than recursively re-entering VBA.
+    event_dispatch_depth: usize,
+    /// Program used for opt-in automatic Worksheet_Change dispatch while
+    /// `run_sub_with_events` executes. Kept separate from the ordinary
+    /// cached program so `run_sub` remains event-free for compatibility.
+    auto_event_program: Option<Program>,
+    auto_event_suppression_depth: usize,
+    pending_worksheet_changes: VecDeque<Rect>,
+    automatic_event_chain_active: bool,
+    automatic_event_chain_count: usize,
     pub exit_flag: Option<ExitKind>,
     /// Pending unconditional jump target (`GoTo <label>`).
     pending_goto: Option<String>,
@@ -823,10 +1289,22 @@ pub struct Vm {
     /// label against — see `exec_body`'s doc comment for the bug this
     /// replaced.
     call_stack: Vec<CallFrame>,
-    user_funcs: HashMap<String, FuncDef>,
-    user_subs: HashMap<String, SubDef>,
+    /// Immutable standard-module procedures are shared across calls and VM forks.
+    /// The AST remains owned by the VM, but a call only clones an `Arc` handle.
+    user_funcs: HashMap<String, Arc<FuncDef>>,
+    user_subs: HashMap<String, Arc<SubDef>>,
+    /// Exported VBA class modules, kept outside the flat standard-module
+    /// procedure namespace.
+    class_defs: HashMap<String, ClassDefinition>,
+    /// Active receiver stack for nested class method/function calls.
+    current_class_instances: Vec<u64>,
     /// Workbook-level named ranges: lowercase name → address string (e.g. "A1:B5").
     pub named_ranges: HashMap<String, String>,
+    /// Simple workbook-defined names loaded from `xl/workbook.xml`. Kept
+    /// separate from `named_ranges`, which is the VBA runtime table.
+    loaded_named_ranges: HashMap<String, String>,
+    /// Sheet-local named ranges: lowercase sheet key -> lowercase name -> A1 range.
+    pub(crate) scoped_named_ranges: HashMap<String, HashMap<String, String>>,
     /// User-defined types: lowercase type name → vec of (field_name, vba_type).
     type_defs: HashMap<String, Vec<(String, String)>>,
     /// Lazy index for Cells.End queries: col → sorted set of non-empty rows.
@@ -835,6 +1313,110 @@ pub struct Vm {
     row_cols: HashMap<u32, BTreeSet<u32>>,
     /// Set to true whenever cells change; triggers index rebuild on next End query.
     cell_index_dirty: bool,
+    /// Lazily materialized 32x32 value tiles for repeated large rectangle reads.
+    /// Thread-safe interior mutability keeps the established `read_rect(&self, ...)` API
+    /// and preserves the `Send + Sync` contract of the Python wrapper.
+    cell_tile_cache: Arc<Mutex<CellTileCache>>,
+    cell_tile_cache_clock: Arc<AtomicU64>,
+    /// Cached 1-based destination row for the Python `append_row` API.
+    /// Any general cell mutation invalidates the affected sheet entry; a
+    /// successful append immediately advances it, making repeated appends
+    /// O(1) after the first used-range scan instead of rescanning every cell.
+    next_append_rows: HashMap<String, u32>,
+    /// Parsed formula text cached by sheet and coordinate. The source string
+    /// is retained beside the AST so direct/native cell-map edits remain
+    /// correct: a changed string is reparsed on the next recalculation.
+    formula_ast_cache: FormulaAstCache,
+    /// Persistent evaluation plan for the active-sheet formula graph. The plan is
+    /// rebuilt only when formula structure changes; ordinary value writes use its
+    /// reverse dependencies to recalculate the affected closure.
+    formula_plan: HashMap<String, FormulaPlan>,
+    /// Formula cells whose cached values are invalidated by ordinary cell writes.
+    formula_dirty_cells: HashMap<String, HashSet<(u32, u32)>>,
+    /// Cross-sheet formula inputs changed since the last workbook recalculation.
+    workbook_formula_dirty: HashMap<String, HashSet<(u32, u32)>>,
+    /// Direct `cells_mut()` callers can bypass change tracking; force a safe
+    /// workbook rebuild after that escape hatch is used.
+    workbook_formula_tracking_valid: bool,
+    workbook_formula_structure_dirty: bool,
+    /// True after a sheet/name/row/column structural edit whose chart/pivot
+    /// references are not yet rewritten by the OOXML writer.
+    pub(crate) ooxml_structural_edit_dirty: bool,
+    /// True only while structural edits are limited to sheet renames.
+    pub(crate) sheet_rename_only: bool,
+    /// Explicit chart series edits keyed by chart part and zero-based series index.
+    pub(crate) chart_series_edits: HashMap<String, HashMap<usize, ChartSeriesEdit>>,
+    /// New charts queued for insertion into existing worksheet drawings.
+    pub(crate) chart_creations: Vec<ChartCreation>,
+    /// Explicit chart series solid-line color edits keyed by chart part and
+    /// zero-based series index. Values are normalized six-digit RGB strings.
+    pub(crate) chart_series_line_color_edits: HashMap<String, HashMap<usize, String>>,
+    /// Explicit chart series solid-fill color edits keyed by chart part and
+    /// zero-based series index. Values are normalized six-digit RGB strings.
+    pub(crate) chart_series_fill_color_edits: HashMap<String, HashMap<usize, String>>,
+    /// Explicit chart title edits keyed by chart part.
+    pub(crate) chart_title_edits: HashMap<String, ChartTitleEdit>,
+    /// Explicit chart legend-position edits keyed by chart part.
+    pub(crate) chart_legend_position_edits: HashMap<String, ChartLegendPositionEdit>,
+    /// Explicit chart-style edits keyed by chart part.
+    pub(crate) chart_style_edits: HashMap<String, ChartStyleEdit>,
+    /// Explicit chart legend-overlay edits keyed by chart part.
+    pub(crate) chart_legend_overlay_edits: HashMap<String, ChartLegendOverlayEdit>,
+    /// Explicit chart data-label edits keyed by chart part.
+    pub(crate) chart_data_labels_edits: HashMap<String, ChartDataLabelsEdit>,
+    /// Explicit chart-axis title edits keyed by chart part and axis index.
+    pub(crate) chart_axis_title_edits: HashMap<String, HashMap<usize, String>>,
+    /// Explicit Pivot worksheet source edits keyed by cache definition part.
+    pub(crate) pivot_source_edits: HashMap<String, PivotWorksheetSourceEdit>,
+    /// Explicit drawing anchor edits keyed by drawing part and zero-based
+    /// twoCellAnchor index.
+    pub(crate) drawing_anchor_edits: HashMap<String, HashMap<usize, DrawingAnchorEdit>>,
+    /// Explicit drawing shape-name edits keyed by drawing part and zero-based
+    /// twoCellAnchor index.
+    pub(crate) drawing_shape_name_edits: HashMap<String, HashMap<usize, String>>,
+    /// Explicit drawing shape-description edits keyed by drawing part and
+    /// document-order anchor index.
+    pub(crate) drawing_shape_description_edits: HashMap<String, HashMap<usize, String>>,
+    /// Explicit drawing shape-title edits keyed by drawing part and
+    /// document-order anchor index.
+    pub(crate) drawing_shape_title_edits: HashMap<String, HashMap<usize, String>>,
+    /// Explicit drawing shape text edits keyed by drawing part and
+    /// document-order anchor index.
+    pub(crate) drawing_shape_text_edits: HashMap<String, HashMap<usize, String>>,
+    pub(crate) drawing_shape_text_run_edits: HashMap<String, HashMap<(usize, usize), String>>,
+    /// Explicit drawing shape hidden-state edits keyed by drawing part and
+    /// document-order anchor index.
+    pub(crate) drawing_shape_hidden_edits: HashMap<String, HashMap<usize, bool>>,
+    /// Explicit drawing shape rotation edits keyed by drawing part and
+    /// document-order anchor index. Values are integer degrees.
+    pub(crate) drawing_shape_rotation_edits: HashMap<String, HashMap<usize, i32>>,
+    /// Explicit DrawingML horizontal/vertical flip edits keyed by drawing
+    /// part and document-order anchor index.
+    pub(crate) drawing_shape_flip_edits: HashMap<String, HashMap<usize, DrawingShapeFlipEdit>>,
+    /// Explicit DrawingML solid-fill edits keyed by drawing part and
+    /// document-order anchor index. Values are normalized ARGB hex strings.
+    pub(crate) drawing_shape_fill_edits: HashMap<String, HashMap<usize, String>>,
+    /// Explicit DrawingML line-color edits keyed by drawing part and
+    /// document-order anchor index. Values are normalized ARGB hex strings.
+    pub(crate) drawing_shape_line_edits: HashMap<String, HashMap<usize, String>>,
+    /// Explicit DrawingML line-width edits keyed by drawing part and
+    /// document-order anchor index. Values are EMU units.
+    pub(crate) drawing_shape_line_width_edits: HashMap<String, HashMap<usize, u32>>,
+    /// Explicit DrawingML preset-dash edits keyed by drawing part and
+    /// document-order anchor index.
+    pub(crate) drawing_shape_line_dash_edits: HashMap<String, HashMap<usize, String>>,
+    /// Explicit DrawingML preset-geometry edits keyed by drawing part and
+    /// document-order anchor index.
+    pub(crate) drawing_shape_geometry_edits: HashMap<String, HashMap<usize, String>>,
+    /// Dynamic-array spill rectangles keyed by sheet and anchor coordinate.
+    /// Included in edit history so undo cannot leave stale spill ownership.
+    spill_rects: HashMap<String, HashMap<(u32, u32), SpillRect>>,
+    /// Bounded snapshots for explicit cell/formula edits. Other VM state is
+    /// deliberately not included: these commands only mutate worksheet data
+    /// and formula caches, while VBA execution state is never rewound.
+    edit_undo: Vec<EditHistoryState>,
+    edit_redo: Vec<EditHistoryState>,
+    edit_transaction: Option<EditTransaction>,
     /// Set to true by `move_sheet` only; once true, `save_xlsx_impl` drops any
     /// `<definedNames>` passthrough even if no sheet was deleted. A
     /// `<definedName localSheetId="N">` is positional, so reordering
@@ -869,6 +1451,26 @@ pub struct Vm {
     /// timeout guard). `None` (the default) means no limit — every existing
     /// caller (run-mode, `check`, `snapshot`, Python bindings) is unaffected.
     pub deadline: Option<std::time::Instant>,
+    /// Deterministic execution budget counted across statements and loop
+    /// iterations. `None` means unlimited; `Vm::new` uses
+    /// `DEFAULT_MAX_VBA_INSTRUCTIONS`, while trusted callers may opt out.
+    pub max_instructions: Option<u64>,
+    instruction_count: u64,
+    /// Maximum nested Sub/Function frames. `Vm::new` sets the safe default;
+    /// trusted Rust callers may set `None` explicitly.
+    pub max_call_depth: Option<usize>,
+    /// Maximum UTF-8 bytes in one retained VBA string. `None` disables the
+    /// guard for trusted Rust callers.
+    pub max_string_bytes: Option<usize>,
+    /// Maximum elements in one retained VBA/runtime array. `None` disables
+    /// the guard for trusted Rust callers.
+    pub max_array_elements: Option<usize>,
+    /// Maximum materialized cells across all sheets. `None` disables the
+    /// guard for trusted Rust callers.
+    pub max_cells: Option<usize>,
+    /// Reject unsupported statements that are known to represent external
+    /// effects. Ordinary unsupported statements remain no-ops.
+    pub reject_blocked_external_effects: bool,
     /// Counts outer-loop iterations across `For`/`ForEach`/`DoLoop` so the
     /// deadline is only actually checked (a real `Instant::now()` call)
     /// every 256th iteration, not every one.
@@ -900,6 +1502,12 @@ pub struct Vm {
     /// original ZIP for unknown-part passthrough at save time — internal
     /// plumbing between `vm` and `lib.rs`, not a public API.
     pub(crate) loaded_workbook_path: Option<String>,
+    /// Workbook-level Excel date system detected at load time. This is
+    /// exposed for callers and diagnostics; serial conversion remains an
+    /// explicit follow-up because it affects formula caches and save output.
+    workbook_date1904: bool,
+    /// External-link handling selected at workbook load. No policy fetches a URL.
+    pub(crate) external_links_policy: ExternalLinksPolicy,
     /// The clipboard populated by `.Copy` and consumed by
     /// `.Paste`/`.PasteSpecial` (Milestone B6b). `None` initially, and
     /// whenever `Application.CutCopyMode` is set to `False`.
@@ -1068,6 +1676,10 @@ pub struct Vm {
     /// (`shift_data_validations_for_structural_edit`) on BOTH axes, like `merged_ranges`/
     /// `tables` -- a `sqref` area is a 2D rect, not a row- or column-only dimension.
     pub(crate) data_validations: HashMap<String, Vec<DataValidationRule>>,
+    /// Read-only conditional-format coverage used by Range.SpecialCells.
+    pub(crate) conditional_format_ranges: HashMap<String, Vec<Vec<MergeRect>>>,
+    /// Read-only legacy comment/note anchors used by Range.SpecialCells.
+    pub(crate) comment_cells: HashMap<String, HashSet<(u32, u32)>>,
     /// Sheets whose `data_validations` have been touched (add/remove/a real
     /// structural-edit shift, or a copy landing on a sheet with no original XML of its
     /// own to fall back to) since load -- gates whether `build_xlsx_sheet` regenerates
@@ -1115,6 +1727,29 @@ pub struct Vm {
     /// variable is a write to the shared cell store, immediately visible
     /// through the other. No `Rc<RefCell<_>>` indirection needed.
     object_variables: HashMap<String, ObjectRef>,
+    /// Declared object type for each object variable. This preserves the
+    /// static receiver type needed for VBA interface dispatch.
+    object_variable_types: HashMap<String, String>,
+    /// Built-in VBA Collection storage, keyed by stable VM-local identity.
+    /// Object variables hold only the identity, so aliases observe the same
+    /// Add/Remove operations. `Vm::clone` deep-clones this map, preserving
+    /// the public fork-isolation contract.
+    collections: HashMap<u64, VbaCollection>,
+    next_collection_id: u64,
+    dictionaries: HashMap<u64, VbaDictionary>,
+    next_dictionary_id: u64,
+    class_instances: HashMap<u64, ClassInstance>,
+    next_class_instance_id: u64,
+    object_arrays: HashMap<String, ObjectArray>,
+    terminating_classes: HashSet<u64>,
+    gc_running: bool,
+    /// Pending object-graph mutations are collected in bounded batches.
+    gc_pending_mutations: u16,
+    deferred_gc_error: Option<String>,
+    /// Temporary GC roots held while a Collection For Each snapshot is
+    /// executing. The loop body may clear the source variable, but object
+    /// entries scheduled for later iterations must remain live.
+    collection_iteration_roots: Vec<u64>,
     /// Runtime `With` stack — the already-evaluated target of each active
     /// `With` block, innermost last. Pushed on block entry, popped on exit
     /// (including on `Exit Sub`/`Exit For` and on a runtime error, so it
@@ -1162,6 +1797,23 @@ pub struct Vm {
 }
 
 impl Vm {
+    /// Resolve a UDT using the active procedure's module scope first. A
+    /// qualified name is already unambiguous; a bare name falls back to the
+    /// legacy flat namespace for hand-built/single-module programs.
+    fn resolve_type_fields(&self, type_name: &str) -> Option<Vec<(String, String)>> {
+        if type_name.contains('.') {
+            return self.type_defs.get(type_name).cloned();
+        }
+        if let Some(module) = self.current_module_scope.as_deref()
+            && let Some(fields) =
+                self.type_defs
+                    .get(&format!("{}.{}", module.to_lowercase(), type_name))
+        {
+            return Some(fields.clone());
+        }
+        self.type_defs.get(type_name).cloned()
+    }
+
     pub fn new() -> Self {
         let mut sheets = HashMap::new();
         sheets.insert("sheet1".into(), HashMap::new());
@@ -1169,30 +1821,93 @@ impl Vm {
             sheets,
             sheet_order: vec!["sheet1".into()],
             active_sheet: "sheet1".into(),
+            sheet_code_names: HashMap::new(),
             variables: HashMap::new(),
+            current_module_scope: None,
             calc_mode: CalculationMode::Automatic,
+            enable_events: true,
             error_on_msgbox: false,
             print_msgbox: false,
             msgbox_log: Vec::new(),
             current_span: None,
+            last_runtime_failure: None,
+            event_dispatch_depth: 0,
+            auto_event_program: None,
+            auto_event_suppression_depth: 0,
+            pending_worksheet_changes: VecDeque::new(),
+            automatic_event_chain_active: false,
+            automatic_event_chain_count: 0,
             exit_flag: None,
             pending_goto: None,
             call_stack: Vec::new(),
             user_funcs: HashMap::new(),
             user_subs: HashMap::new(),
+            class_defs: HashMap::new(),
+            current_class_instances: Vec::new(),
             named_ranges: HashMap::new(),
+            loaded_named_ranges: HashMap::new(),
+            scoped_named_ranges: HashMap::new(),
             type_defs: HashMap::new(),
             col_rows: HashMap::new(),
             row_cols: HashMap::new(),
             cell_index_dirty: true,
+            cell_tile_cache: Arc::new(Mutex::new(HashMap::new())),
+            cell_tile_cache_clock: Arc::new(AtomicU64::new(0)),
+            next_append_rows: HashMap::new(),
+            formula_ast_cache: HashMap::new(),
+            formula_plan: HashMap::new(),
+            formula_dirty_cells: HashMap::new(),
+            workbook_formula_dirty: HashMap::new(),
+            workbook_formula_tracking_valid: false,
+            workbook_formula_structure_dirty: true,
+            ooxml_structural_edit_dirty: false,
+            sheet_rename_only: false,
+            chart_series_edits: HashMap::new(),
+            chart_creations: Vec::new(),
+            chart_series_line_color_edits: HashMap::new(),
+            chart_series_fill_color_edits: HashMap::new(),
+            chart_title_edits: HashMap::new(),
+            chart_legend_position_edits: HashMap::new(),
+            chart_style_edits: HashMap::new(),
+            chart_legend_overlay_edits: HashMap::new(),
+            chart_data_labels_edits: HashMap::new(),
+            chart_axis_title_edits: HashMap::new(),
+            pivot_source_edits: HashMap::new(),
+            drawing_anchor_edits: HashMap::new(),
+            drawing_shape_name_edits: HashMap::new(),
+            drawing_shape_description_edits: HashMap::new(),
+            drawing_shape_title_edits: HashMap::new(),
+            drawing_shape_text_edits: HashMap::new(),
+            drawing_shape_text_run_edits: HashMap::new(),
+            drawing_shape_hidden_edits: HashMap::new(),
+            drawing_shape_rotation_edits: HashMap::new(),
+            drawing_shape_flip_edits: HashMap::new(),
+            drawing_shape_fill_edits: HashMap::new(),
+            drawing_shape_line_edits: HashMap::new(),
+            drawing_shape_line_width_edits: HashMap::new(),
+            drawing_shape_line_dash_edits: HashMap::new(),
+            drawing_shape_geometry_edits: HashMap::new(),
+            spill_rects: HashMap::new(),
+            edit_undo: Vec::new(),
+            edit_redo: Vec::new(),
+            edit_transaction: None,
             defined_names_may_be_stale: false,
             sheet_renames_since_load: HashMap::new(),
             deadline: None,
+            max_instructions: Some(DEFAULT_MAX_VBA_INSTRUCTIONS),
+            instruction_count: 0,
+            max_call_depth: Some(DEFAULT_MAX_VBA_CALL_DEPTH),
+            max_string_bytes: Some(DEFAULT_MAX_VBA_STRING_BYTES),
+            max_array_elements: Some(DEFAULT_MAX_VBA_ARRAY_ELEMENTS),
+            max_cells: Some(DEFAULT_MAX_VBA_CELLS),
+            reject_blocked_external_effects: true,
             loop_iters: 0,
             strict_resolution: false,
             last_resolution_failure: None,
             loaded_workbook_name: None,
             loaded_workbook_path: None,
+            workbook_date1904: false,
+            external_links_policy: ExternalLinksPolicy::Preserve,
             clipboard: None,
             protected_sheets: HashSet::new(),
             merged_ranges: HashMap::new(),
@@ -1211,11 +1926,26 @@ impl Vm {
             column_styles: HashMap::new(),
             tables: HashMap::new(),
             data_validations: HashMap::new(),
+            conditional_format_ranges: HashMap::new(),
+            comment_cells: HashMap::new(),
             data_validations_touched: HashSet::new(),
             autofilters: HashMap::new(),
             autofilters_touched: HashSet::new(),
             worksheet_origins: HashMap::new(),
             object_variables: HashMap::new(),
+            object_variable_types: HashMap::new(),
+            collections: HashMap::new(),
+            next_collection_id: 1,
+            dictionaries: HashMap::new(),
+            next_dictionary_id: 1,
+            class_instances: HashMap::new(),
+            next_class_instance_id: 1,
+            object_arrays: HashMap::new(),
+            terminating_classes: HashSet::new(),
+            gc_running: false,
+            gc_pending_mutations: 0,
+            deferred_gc_error: None,
+            collection_iteration_roots: Vec::new(),
             with_stack: Vec::new(),
             err_number: 0,
             err_description: String::new(),
@@ -1225,6 +1955,16 @@ impl Vm {
             pending_raised_error: None,
             option_base: 0,
         }
+    }
+
+    /// Return an independent copy of this VM for isolated batch execution.
+    ///
+    /// The copy includes workbook data and VBA runtime state, but subsequent
+    /// mutations of either VM do not affect the other. External execution
+    /// deadlines are copied as-is so callers should set a fresh deadline when
+    /// scheduling the fork for later execution.
+    pub fn fork(&self) -> Self {
+        self.clone()
     }
 
     /// Records a caught runtime error into every `Err` property — called at
@@ -1272,12 +2012,110 @@ impl Vm {
     /// single slow iteration can overshoot the deadline by at most ~256
     /// iterations' worth of time, not indefinitely.
     fn check_deadline(&mut self) -> Result<(), String> {
+        self.charge_instruction()?;
         self.loop_iters = self.loop_iters.wrapping_add(1);
         if self.loop_iters.is_multiple_of(256)
             && let Some(deadline) = self.deadline
             && std::time::Instant::now() >= deadline
         {
             return Err("TIMEOUT: loop execution exceeded the configured deadline".to_string());
+        }
+        Ok(())
+    }
+
+    fn charge_instruction(&mut self) -> Result<(), String> {
+        self.instruction_count = self.instruction_count.saturating_add(1);
+        if let Some(limit) = self.max_instructions
+            && self.instruction_count > limit
+        {
+            return Err(format!(
+                "BUDGET: VBA instruction limit exceeded ({}; maximum is {})",
+                self.instruction_count, limit
+            ));
+        }
+        Ok(())
+    }
+
+    fn check_call_depth(&self) -> Result<(), String> {
+        if let Some(limit) = self.max_call_depth
+            && self.call_stack.len() >= limit
+        {
+            return Err(format!(
+                "BUDGET: VBA call depth limit exceeded ({}; maximum is {})",
+                self.call_stack.len() + 1,
+                limit
+            ));
+        }
+        Ok(())
+    }
+
+    pub(crate) fn check_variant_budget(&self, value: &Variant) -> Result<(), String> {
+        match value {
+            Variant::Str(s) => {
+                if let Some(limit) = self.max_string_bytes
+                    && s.len() > limit
+                {
+                    return Err(format!(
+                        "BUDGET: VBA string size limit exceeded ({} bytes; maximum is {})",
+                        s.len(),
+                        limit
+                    ));
+                }
+            }
+            Variant::Array(values) => {
+                if let Some(limit) = self.max_array_elements
+                    && values.len() > limit
+                {
+                    return Err(format!(
+                        "BUDGET: VBA array element limit exceeded ({}; maximum is {})",
+                        values.len(),
+                        limit
+                    ));
+                }
+                for value in values {
+                    self.check_variant_budget(value)?;
+                }
+            }
+            Variant::VbaArray(array) => {
+                if let Some(limit) = self.max_array_elements
+                    && array.elements.len() > limit
+                {
+                    return Err(format!(
+                        "BUDGET: VBA array element limit exceeded ({}; maximum is {})",
+                        array.elements.len(),
+                        limit
+                    ));
+                }
+                for value in &array.elements {
+                    self.check_variant_budget(value)?;
+                }
+            }
+            Variant::Record(fields) => {
+                for value in fields.values() {
+                    self.check_variant_budget(value)?;
+                }
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    fn check_variable_budget(&self) -> Result<(), String> {
+        for value in self.variables.values() {
+            self.check_variant_budget(value)?;
+        }
+        Ok(())
+    }
+
+    pub(crate) fn check_cell_budget(&self) -> Result<(), String> {
+        if let Some(limit) = self.max_cells {
+            let count: usize = self.sheets.values().map(HashMap::len).sum();
+            if count > limit {
+                return Err(format!(
+                    "BUDGET: VBA cell count limit exceeded ({}; maximum is {})",
+                    count, limit
+                ));
+            }
         }
         Ok(())
     }
@@ -1315,6 +2153,12 @@ impl Vm {
 
     pub fn cells_mut(&mut self) -> &mut HashMap<(u32, u32), CellContent> {
         self.cell_index_dirty = true;
+        self.workbook_formula_tracking_valid = false;
+        self.cell_tile_cache
+            .lock()
+            .expect("cell tile cache mutex poisoned")
+            .remove(&self.active_sheet);
+        self.next_append_rows.remove(&self.active_sheet);
         self.sheets
             .get_mut(&self.active_sheet)
             .expect("active sheet must exist")
@@ -1388,6 +2232,40 @@ impl Vm {
         self.rewrite_formulas_workbook_wide(|host_key, f| {
             formula::shift_references(f, host_key, &edited_key, axis, edit)
         });
+    }
+
+    /// Keep the address-only subset of loaded defined names aligned with row
+    /// and column edits. Workbook-scoped names are shifted only when their
+    /// target is explicit (`Sheet!A1`); an unqualified workbook name has
+    /// context-dependent Excel semantics and is left untouched. Sheet-local
+    /// names have an unambiguous host sheet, so both qualified and
+    /// unqualified references are shifted there. Unsupported definitions are
+    /// never present in these maps and remain opaque in the source XML.
+    fn rewrite_loaded_named_ranges_for_structural_edit(
+        &mut self,
+        edited_key: &str,
+        axis: formula::RefAxis,
+        edit: formula::StructuralEdit,
+    ) {
+        for address in self.loaded_named_ranges.values_mut() {
+            if !address.contains('!') {
+                continue;
+            }
+            if let Ok(Some(rewritten)) =
+                formula::shift_references(address, edited_key, edited_key, axis, edit)
+            {
+                *address = rewritten;
+            }
+        }
+        for (host_key, names) in &mut self.scoped_named_ranges {
+            for address in names.values_mut() {
+                if let Ok(Some(rewritten)) =
+                    formula::shift_references(address, host_key, edited_key, axis, edit)
+                {
+                    *address = rewritten;
+                }
+            }
+        }
     }
 
     /// Shifts every merge on `key` for a row/col structural edit -- `shift_merge_rect`,
@@ -1572,6 +2450,7 @@ impl Vm {
                 return Err(format!("Column '{col_name}' not found on table '{name}'"));
             }
         }
+        self.workbook_formula_structure_dirty = true;
 
         // Column removals shift cell data -- collected here (needs the table's CURRENT
         // ref/column-position state, computed one removal at a time since each shifts
@@ -1824,6 +2703,49 @@ impl Vm {
             self.data_validations_touched.insert(key.to_string());
         }
         self.data_validations.insert(key.to_string(), shifted);
+    }
+
+    /// Keeps read-only SpecialCells metadata aligned with row/column edits.
+    fn shift_special_cells_metadata_for_structural_edit(
+        &mut self,
+        key: &str,
+        axis: formula::RefAxis,
+        edit: formula::StructuralEdit,
+    ) {
+        if let Some(groups) = self.conditional_format_ranges.get(key) {
+            let shifted: Vec<Vec<MergeRect>> = groups
+                .iter()
+                .filter_map(|group| {
+                    let rects: Vec<_> = group
+                        .iter()
+                        .filter_map(|&rect| shift_table_rect(rect, axis, edit))
+                        .collect();
+                    (!rects.is_empty()).then_some(rects)
+                })
+                .collect();
+            self.conditional_format_ranges
+                .insert(key.to_string(), shifted);
+        }
+        if let Some(comments) = self.comment_cells.get(key) {
+            let shifted = comments
+                .iter()
+                .filter_map(|&(row, col)| {
+                    let coordinate = match axis {
+                        formula::RefAxis::Row => row,
+                        formula::RefAxis::Col => col,
+                    };
+                    match formula::shift_cell_coord(coordinate, edit) {
+                        formula::CellShift::Deleted => None,
+                        formula::CellShift::Unchanged => Some((row, col)),
+                        formula::CellShift::Moved(next) => Some(match axis {
+                            formula::RefAxis::Row => (next, col),
+                            formula::RefAxis::Col => (row, next),
+                        }),
+                    }
+                })
+                .collect();
+            self.comment_cells.insert(key.to_string(), shifted);
+        }
     }
 
     /// Shifts `key`'s standalone autofilter for a row/col structural edit (0.16.0-B) --
@@ -2160,6 +3082,216 @@ impl Vm {
         });
     }
 
+    fn rewrite_loaded_named_ranges_for_rename(&mut self, old_key: &str, new_name: &str) {
+        for address in self.loaded_named_ranges.values_mut() {
+            if let Ok(Some(rewritten)) =
+                formula::rename_sheet_references(address, old_key, new_name)
+            {
+                *address = rewritten;
+            }
+        }
+        if let Some(mut names) = self.scoped_named_ranges.remove(old_key) {
+            for address in names.values_mut() {
+                if let Ok(Some(rewritten)) =
+                    formula::rename_sheet_references(address, old_key, new_name)
+                {
+                    *address = rewritten;
+                }
+            }
+            self.scoped_named_ranges
+                .insert(new_name.to_lowercase(), names);
+        }
+    }
+
+    fn structured_formula_ranges(&self) -> (HashMap<String, String>, HashMap<String, String>) {
+        let mut ranges = HashMap::new();
+        let mut named_ranges = HashMap::new();
+        let mut register = |pattern: String, token: String, address: String| {
+            ranges.insert(pattern.to_ascii_lowercase(), token.clone());
+            named_ranges.insert(token, address);
+        };
+        for (sheet, tables) in &self.tables {
+            for table in tables {
+                let table_start = table.ref_range.0.0;
+                let table_end = table.ref_range.1.0;
+                let table_left = table.ref_range.0.1;
+                let table_right = table.ref_range.1.1;
+                let data_start = table_start + table.header_row_count;
+                let data_end = table_end.saturating_sub(table.totals_row_count);
+                let col_address = |start: u32, end: u32, col: u32| {
+                    let col_letter = crate::formula::eval::col_to_letter(col);
+                    format!("{}!{}{}:{}{}", sheet, col_letter, start, col_letter, end)
+                };
+                let rect_address = |start: u32, end: u32| {
+                    format!(
+                        "{}!{}{}:{}{}",
+                        sheet,
+                        crate::formula::eval::col_to_letter(table_left),
+                        start,
+                        crate::formula::eval::col_to_letter(table_right),
+                        end
+                    )
+                };
+                let rect_columns_address = |start: u32, end: u32, left: u32, right: u32| {
+                    format!(
+                        "{}!{}{}:{}{}",
+                        sheet,
+                        crate::formula::eval::col_to_letter(left),
+                        start,
+                        crate::formula::eval::col_to_letter(right),
+                        end
+                    )
+                };
+                let table_names = [&table.name, &table.display_name];
+                for table_name in table_names {
+                    let base_token = format!("ElixceeTable{}", table_name)
+                        .chars()
+                        .filter(|ch| ch.is_ascii_alphabetic())
+                        .collect::<String>();
+                    register(
+                        format!("{}[#Headers]", table_name),
+                        format!("{}Headers", base_token).to_ascii_lowercase(),
+                        rect_address(table_start, table_start + table.header_row_count - 1),
+                    );
+                    register(
+                        format!("{}[#All]", table_name),
+                        format!("{}All", base_token).to_ascii_lowercase(),
+                        rect_address(table_start, table_end),
+                    );
+                    if table.totals_row_count > 0 {
+                        register(
+                            format!("{}[#Totals]", table_name),
+                            format!("{}Totals", base_token).to_ascii_lowercase(),
+                            rect_address(table_end - table.totals_row_count + 1, table_end),
+                        );
+                    }
+                    if data_start <= data_end {
+                        register(
+                            format!("{}[#Data]", table_name),
+                            format!("{}Data", base_token).to_ascii_lowercase(),
+                            rect_address(data_start, data_end),
+                        );
+                    }
+                    for (index, column) in table.columns.iter().enumerate() {
+                        let col = table.ref_range.0.1 + index as u32;
+                        let col_letter = crate::formula::eval::col_to_letter(col);
+                        let token_base = format!("{}{}", base_token, column.name)
+                            .chars()
+                            .filter(|ch| ch.is_ascii_alphabetic())
+                            .collect::<String>();
+                        register(
+                            format!("{}[{}]", table_name, column.name),
+                            token_base.clone().to_ascii_lowercase(),
+                            col_address(data_start, data_end, col),
+                        );
+                        register(
+                            format!("{}[@{}]", table_name, column.name),
+                            format!(
+                                "@sheet:{};rows:{}-{}|{}!{}{{row}}",
+                                sheet, data_start, data_end, sheet, col_letter
+                            ),
+                            col_address(data_start, data_end, col),
+                        );
+                        register(
+                            format!("{}[[#This Row],[{}]]", table_name, column.name),
+                            format!(
+                                "@sheet:{};rows:{}-{}|{}!{}{{row}}",
+                                sheet, data_start, data_end, sheet, col_letter
+                            ),
+                            col_address(data_start, data_end, col),
+                        );
+                        register(
+                            format!("{}[[#Headers],[{}]]", table_name, column.name),
+                            format!("{}Headers", token_base).to_ascii_lowercase(),
+                            col_address(table_start, table_start + table.header_row_count - 1, col),
+                        );
+                        register(
+                            format!("{}[[#All],[{}]]", table_name, column.name),
+                            format!("{}All", token_base).to_ascii_lowercase(),
+                            col_address(table_start, table_end, col),
+                        );
+                        if data_start <= data_end {
+                            register(
+                                format!("{}[[#Data],[{}]]", table_name, column.name),
+                                format!("{}Data", token_base).to_ascii_lowercase(),
+                                col_address(data_start, data_end, col),
+                            );
+                        }
+                        if table.totals_row_count > 0 {
+                            register(
+                                format!("{}[[#Totals],[{}]]", table_name, column.name),
+                                format!("{}Totals", token_base).to_ascii_lowercase(),
+                                col_address(table_end - table.totals_row_count + 1, table_end, col),
+                            );
+                        }
+                        let _ = col_letter;
+                    }
+                    for left_index in 0..table.columns.len() {
+                        for right_index in (left_index + 1)..table.columns.len() {
+                            let left_col = table.ref_range.0.1 + left_index as u32;
+                            let right_col = table.ref_range.0.1 + right_index as u32;
+                            let left_name = &table.columns[left_index].name;
+                            let right_name = &table.columns[right_index].name;
+                            let token_base = format!("{}{}{}", base_token, left_name, right_name)
+                                .chars()
+                                .filter(|ch| ch.is_ascii_alphanumeric())
+                                .collect::<String>();
+                            register(
+                                format!("{}[[{}]:[{}]]", table_name, left_name, right_name),
+                                format!("{}Range", token_base).to_ascii_lowercase(),
+                                rect_columns_address(data_start, data_end, left_col, right_col),
+                            );
+                            register(
+                                format!(
+                                    "{}[[#Headers],[{}]:[{}]]",
+                                    table_name, left_name, right_name
+                                ),
+                                format!("{}HeadersRange", token_base).to_ascii_lowercase(),
+                                rect_columns_address(
+                                    table_start,
+                                    table_start + table.header_row_count - 1,
+                                    left_col,
+                                    right_col,
+                                ),
+                            );
+                            register(
+                                format!("{}[[#All],[{}]:[{}]]", table_name, left_name, right_name),
+                                format!("{}AllRange", token_base).to_ascii_lowercase(),
+                                rect_columns_address(table_start, table_end, left_col, right_col),
+                            );
+                            if data_start <= data_end {
+                                register(
+                                    format!(
+                                        "{}[[#Data],[{}]:[{}]]",
+                                        table_name, left_name, right_name
+                                    ),
+                                    format!("{}DataRange", token_base).to_ascii_lowercase(),
+                                    rect_columns_address(data_start, data_end, left_col, right_col),
+                                );
+                            }
+                            if table.totals_row_count > 0 {
+                                register(
+                                    format!(
+                                        "{}[[#Totals],[{}]:[{}]]",
+                                        table_name, left_name, right_name
+                                    ),
+                                    format!("{}TotalsRange", token_base).to_ascii_lowercase(),
+                                    rect_columns_address(
+                                        table_end - table.totals_row_count + 1,
+                                        table_end,
+                                        left_col,
+                                        right_col,
+                                    ),
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        (ranges, named_ranges)
+    }
+
     /// Moves the rectangular range `(r1,c1)..(r2,c2)` on `key` so its
     /// top-left corner lands at `(dest_r1, dest_c1)` -- 0.14.0-A4 Stage 3
     /// (cell-move API), same-sheet only. See
@@ -2228,6 +3360,7 @@ impl Vm {
         if d_row == 0 && d_col == 0 {
             return Ok(());
         }
+        self.next_append_rows.remove(key);
 
         let Some(cells) = self.sheets.get(key) else {
             return Err(format!("unknown sheet: {key}"));
@@ -2270,6 +3403,10 @@ impl Vm {
         };
 
         if let Some(cells) = self.sheets.get_mut(key) {
+            self.cell_tile_cache
+                .lock()
+                .expect("cell tile cache mutex poisoned")
+                .remove(key);
             for (pos, new_f) in formula_updates {
                 if let Some(cell) = cells.get_mut(&pos) {
                     cell.formula = Some(new_f);
@@ -2340,11 +3477,15 @@ impl Vm {
     /// left stale, same as any other edit -- callers that need fresh values already call
     /// `recalculate_all()` themselves.
     pub fn insert_rows_on_sheet(&mut self, key: &str, first: u32, count: u32) {
+        self.ooxml_structural_edit_dirty = true;
+        self.sheet_rename_only = false;
         let edit = formula::StructuralEdit::Insert { at: first, count };
+        self.rewrite_loaded_named_ranges_for_structural_edit(key, formula::RefAxis::Row, edit);
         self.rewrite_formulas_for_structural_edit(key, formula::RefAxis::Row, edit);
         self.shift_merged_ranges_for_structural_edit(key, formula::RefAxis::Row, edit);
         self.shift_tables_for_structural_edit(key, formula::RefAxis::Row, edit);
         self.shift_data_validations_for_structural_edit(key, formula::RefAxis::Row, edit);
+        self.shift_special_cells_metadata_for_structural_edit(key, formula::RefAxis::Row, edit);
         self.shift_autofilters_for_structural_edit(key, formula::RefAxis::Row, edit);
         self.shift_hidden_intervals_for_structural_edit(key, formula::RefAxis::Row, edit);
         self.shift_cell_metadata_for_structural_edit(key, formula::RefAxis::Row, edit);
@@ -2387,11 +3528,15 @@ impl Vm {
     /// cell-references first (0.14.0-A -- see `rewrite_formulas_for_structural_edit`);
     /// a reference landing inside the deleted band becomes `#REF!`.
     pub fn delete_rows_on_sheet(&mut self, key: &str, first: u32, count: u32) {
+        self.ooxml_structural_edit_dirty = true;
+        self.sheet_rename_only = false;
         let edit = formula::StructuralEdit::Delete { at: first, count };
+        self.rewrite_loaded_named_ranges_for_structural_edit(key, formula::RefAxis::Row, edit);
         self.rewrite_formulas_for_structural_edit(key, formula::RefAxis::Row, edit);
         self.shift_merged_ranges_for_structural_edit(key, formula::RefAxis::Row, edit);
         self.shift_tables_for_structural_edit(key, formula::RefAxis::Row, edit);
         self.shift_data_validations_for_structural_edit(key, formula::RefAxis::Row, edit);
+        self.shift_special_cells_metadata_for_structural_edit(key, formula::RefAxis::Row, edit);
         self.shift_autofilters_for_structural_edit(key, formula::RefAxis::Row, edit);
         self.shift_hidden_intervals_for_structural_edit(key, formula::RefAxis::Row, edit);
         self.shift_cell_metadata_for_structural_edit(key, formula::RefAxis::Row, edit);
@@ -2431,11 +3576,15 @@ impl Vm {
     /// cell-references first (0.14.0-A -- see `rewrite_formulas_for_structural_edit`);
     /// a reference landing inside the deleted band becomes `#REF!`.
     pub fn delete_cols_on_sheet(&mut self, key: &str, first: u32, count: u32) {
+        self.ooxml_structural_edit_dirty = true;
+        self.sheet_rename_only = false;
         let edit = formula::StructuralEdit::Delete { at: first, count };
+        self.rewrite_loaded_named_ranges_for_structural_edit(key, formula::RefAxis::Col, edit);
         self.rewrite_formulas_for_structural_edit(key, formula::RefAxis::Col, edit);
         self.shift_merged_ranges_for_structural_edit(key, formula::RefAxis::Col, edit);
         self.shift_tables_for_structural_edit(key, formula::RefAxis::Col, edit);
         self.shift_data_validations_for_structural_edit(key, formula::RefAxis::Col, edit);
+        self.shift_special_cells_metadata_for_structural_edit(key, formula::RefAxis::Col, edit);
         self.shift_autofilters_for_structural_edit(key, formula::RefAxis::Col, edit);
         self.shift_hidden_intervals_for_structural_edit(key, formula::RefAxis::Col, edit);
         self.shift_cell_metadata_for_structural_edit(key, formula::RefAxis::Col, edit);
@@ -2468,11 +3617,15 @@ impl Vm {
     /// `insert_rows_on_sheet`'s column-axis mirror. Shifts same-sheet formula
     /// cell-references first (0.14.0-A -- see `rewrite_formulas_for_structural_edit`).
     pub fn insert_cols_on_sheet(&mut self, key: &str, first: u32, count: u32) {
+        self.ooxml_structural_edit_dirty = true;
+        self.sheet_rename_only = false;
         let edit = formula::StructuralEdit::Insert { at: first, count };
+        self.rewrite_loaded_named_ranges_for_structural_edit(key, formula::RefAxis::Col, edit);
         self.rewrite_formulas_for_structural_edit(key, formula::RefAxis::Col, edit);
         self.shift_merged_ranges_for_structural_edit(key, formula::RefAxis::Col, edit);
         self.shift_tables_for_structural_edit(key, formula::RefAxis::Col, edit);
         self.shift_data_validations_for_structural_edit(key, formula::RefAxis::Col, edit);
+        self.shift_special_cells_metadata_for_structural_edit(key, formula::RefAxis::Col, edit);
         self.shift_autofilters_for_structural_edit(key, formula::RefAxis::Col, edit);
         self.shift_hidden_intervals_for_structural_edit(key, formula::RefAxis::Col, edit);
         self.shift_cell_metadata_for_structural_edit(key, formula::RefAxis::Col, edit);
@@ -2539,6 +3692,7 @@ impl Vm {
     pub fn ensure_sheet_at(&mut self, name: &str, index: Option<usize>) {
         let key = name.to_lowercase();
         if !self.sheets.contains_key(&key) {
+            self.next_append_rows.remove(&key);
             match index {
                 Some(i) => self
                     .sheet_order
@@ -2574,8 +3728,79 @@ impl Vm {
         Ok(())
     }
 
+    /// Load worksheet code names from the source OOXML package. The reader's
+    /// cell model intentionally does not expose this VBA-facing metadata, so
+    /// keep it as a small VM-side projection and leave the source XML opaque
+    /// for round-trip preservation.
+    pub(crate) fn load_sheet_code_names(&mut self, path: &str) -> Result<(), String> {
+        self.sheet_code_names.clear();
+        let is_ooxml = std::path::Path::new(path)
+            .extension()
+            .and_then(|value| value.to_str())
+            .is_some_and(|value| {
+                value.eq_ignore_ascii_case("xlsx") || value.eq_ignore_ascii_case("xlsm")
+            });
+        if !is_ooxml {
+            return Ok(());
+        }
+        for (sheet, origin) in &self.worksheet_origins {
+            let Some(part) = origin.original_part_name.as_deref() else {
+                continue;
+            };
+            let Some(bytes) = reader::read_raw_zip_entry_if_present(path, part)? else {
+                continue;
+            };
+            let Ok(xml) = std::str::from_utf8(&bytes) else {
+                continue;
+            };
+            let Some(sheet_pr) = reader::extract_raw_element(xml, "sheetPr") else {
+                continue;
+            };
+            let code_name = xml_attr_value(&sheet_pr, "codeName").or_else(|| {
+                reader::extract_raw_element(&sheet_pr, "codeName")
+                    .and_then(|element| xml_attr_value(&element, "val"))
+            });
+            if let Some(code_name) = code_name.filter(|value| !value.is_empty()) {
+                self.sheet_code_names.insert(sheet.clone(), code_name);
+            }
+        }
+        Ok(())
+    }
+
     pub fn get_sheet_cells(&self, name: &str) -> Option<&HashMap<(u32, u32), CellContent>> {
         self.sheets.get(&name.to_lowercase())
+    }
+
+    /// Resolve a simple chart formula into cached source values. Named and
+    /// external references intentionally remain uncached; Excel can resolve
+    /// those formulas after opening the workbook.
+    pub(crate) fn chart_cache_values(&self, formula: &str) -> Vec<Variant> {
+        let Some((sheet, address)) = formula.rsplit_once('!') else {
+            return Vec::new();
+        };
+        let sheet = sheet.trim_matches('\'').replace("''", "'");
+        let address = address.replace('$', "");
+        let Some(((row1, col1), (row2, col2))) = parse_range_addr(&address) else {
+            return Vec::new();
+        };
+        let Some(cells) = self.get_sheet_cells(&sheet) else {
+            return Vec::new();
+        };
+        (row1.min(row2)..=row1.max(row2))
+            .flat_map(|row| {
+                (col1.min(col2)..=col1.max(col2)).map(move |col| {
+                    cells
+                        .get(&(row, col))
+                        .map(|content| content.value.clone())
+                        .unwrap_or(Variant::Empty)
+                })
+            })
+            .collect()
+    }
+
+    #[cfg(feature = "python")]
+    pub(crate) fn sheets(&self) -> &HashMap<String, HashMap<(u32, u32), CellContent>> {
+        &self.sheets
     }
 
     /// Resolves `sheet` (`None` = active sheet) to its internal lowercase key,
@@ -2637,9 +3862,15 @@ impl Vm {
     /// current max used row, or row 1 if the sheet is empty/all-empty. Uses
     /// `sheet_used_range`'s real max, not a populated-row count -- correct on
     /// a sparse sheet (data only at row 50 appends at row 51).
-    pub fn next_append_row(&self, key: &str) -> u32 {
-        self.sheet_used_range(key)
-            .map_or(1, |(_, (max_r, _))| max_r + 1)
+    pub fn next_append_row(&mut self, key: &str) -> u32 {
+        if let Some(&row) = self.next_append_rows.get(key) {
+            return row;
+        }
+        let row = self
+            .sheet_used_range(key)
+            .map_or(1, |(_, (max_r, _))| max_r + 1);
+        self.next_append_rows.insert(key.to_string(), row);
+        row
     }
 
     /// Reads a rectangular region (1-based inclusive `r1..=r2`, `c1..=c2`) of
@@ -2651,6 +3882,133 @@ impl Vm {
     /// file and `src/formula/eval.rs` rather than a new range-iteration
     /// abstraction.
     pub fn read_rect(&self, key: &str, r1: u32, c1: u32, r2: u32, c2: u32) -> Vec<Vec<Variant>> {
+        let height = r2.saturating_sub(r1).saturating_add(1);
+        let width = c2.saturating_sub(c1).saturating_add(1);
+        let sheet_key = key.to_lowercase();
+        if height.saturating_mul(width) >= CELL_TILE_SIZE * CELL_TILE_SIZE {
+            let first_tile_row = (r1 - 1) / CELL_TILE_SIZE;
+            let last_tile_row = (r2 - 1) / CELL_TILE_SIZE;
+            let first_tile_col = (c1 - 1) / CELL_TILE_SIZE;
+            let last_tile_col = (c2 - 1) / CELL_TILE_SIZE;
+            let tile_count = (last_tile_row - first_tile_row + 1)
+                .saturating_mul(last_tile_col - first_tile_col + 1);
+            if tile_count > MAX_CELL_TILES_PER_SHEET as u32 {
+                // A one-off very large read would churn the bounded cache and
+                // evict useful hot tiles; use the canonical sparse lookup path.
+                return self.read_rect_uncached(key, r1, c1, r2, c2);
+            }
+            let mut missing = Vec::new();
+            {
+                let cache = self
+                    .cell_tile_cache
+                    .lock()
+                    .expect("cell tile cache mutex poisoned");
+                let sheet_cache = cache.get(&sheet_key);
+                for tile_row in first_tile_row..=last_tile_row {
+                    for tile_col in first_tile_col..=last_tile_col {
+                        if sheet_cache
+                            .is_none_or(|tiles| !tiles.contains_key(&(tile_row, tile_col)))
+                        {
+                            missing.push((tile_row, tile_col));
+                        }
+                    }
+                }
+            }
+            if !missing.is_empty() {
+                let empty = HashMap::new();
+                let cells = self.get_sheet_cells(&sheet_key).unwrap_or(&empty);
+                let mut cache = self
+                    .cell_tile_cache
+                    .lock()
+                    .expect("cell tile cache mutex poisoned");
+                let sheet_cache = cache.entry(sheet_key.clone()).or_default();
+                for (tile_row, tile_col) in missing {
+                    let mut populated = Vec::new();
+                    let row_start = tile_row * CELL_TILE_SIZE + 1;
+                    let col_start = tile_col * CELL_TILE_SIZE + 1;
+                    for row in 0..CELL_TILE_SIZE {
+                        for col in 0..CELL_TILE_SIZE {
+                            if let Some(content) = cells.get(&(row_start + row, col_start + col)) {
+                                populated.push((
+                                    (row * CELL_TILE_SIZE + col) as usize,
+                                    content.value.clone(),
+                                ));
+                            }
+                        }
+                    }
+                    let tile = if populated.is_empty() {
+                        None
+                    } else if populated.len() > DENSE_TILE_CELL_THRESHOLD {
+                        let mut values =
+                            vec![Variant::Empty; (CELL_TILE_SIZE * CELL_TILE_SIZE) as usize];
+                        for (position, value) in populated {
+                            values[position] = value;
+                        }
+                        Some(CellTileValues::Dense(values))
+                    } else {
+                        Some(CellTileValues::Sparse(populated.into_iter().collect()))
+                    };
+                    let stamp = self.cell_tile_cache_clock.fetch_add(1, Ordering::Relaxed);
+                    sheet_cache.insert((tile_row, tile_col), (tile, stamp));
+                    if sheet_cache.len() > MAX_CELL_TILES_PER_SHEET
+                        && let Some(oldest) = sheet_cache
+                            .iter()
+                            .min_by_key(|(_, (_, used))| *used)
+                            .map(|(position, _)| *position)
+                    {
+                        sheet_cache.remove(&oldest);
+                    }
+                }
+            }
+            let mut cache = self
+                .cell_tile_cache
+                .lock()
+                .expect("cell tile cache mutex poisoned");
+            let stamp = self.cell_tile_cache_clock.fetch_add(1, Ordering::Relaxed);
+            if let Some(sheet_cache) = cache.get_mut(&sheet_key) {
+                for tile_row in first_tile_row..=last_tile_row {
+                    for tile_col in first_tile_col..=last_tile_col {
+                        if let Some((_, used)) = sheet_cache.get_mut(&(tile_row, tile_col)) {
+                            *used = stamp;
+                        }
+                    }
+                }
+            }
+            let sheet_cache = cache
+                .get(&sheet_key)
+                .expect("large read populated its cell tiles");
+            return (r1..=r2)
+                .map(|row| {
+                    (c1..=c2)
+                        .map(|col| {
+                            let tile = sheet_cache
+                                .get(&((row - 1) / CELL_TILE_SIZE, (col - 1) / CELL_TILE_SIZE));
+                            let position = ((row - 1) % CELL_TILE_SIZE * CELL_TILE_SIZE
+                                + (col - 1) % CELL_TILE_SIZE)
+                                as usize;
+                            match tile.and_then(|(values, _)| values.as_ref()) {
+                                Some(CellTileValues::Dense(values)) => values[position].clone(),
+                                Some(CellTileValues::Sparse(values)) => {
+                                    values.get(&position).cloned().unwrap_or(Variant::Empty)
+                                }
+                                None => Variant::Empty,
+                            }
+                        })
+                        .collect()
+                })
+                .collect();
+        }
+        self.read_rect_uncached(key, r1, c1, r2, c2)
+    }
+
+    fn read_rect_uncached(
+        &self,
+        key: &str,
+        r1: u32,
+        c1: u32,
+        r2: u32,
+        c2: u32,
+    ) -> Vec<Vec<Variant>> {
         let empty = HashMap::new();
         let cells = self.get_sheet_cells(key).unwrap_or(&empty);
         (r1..=r2)
@@ -2690,20 +4048,292 @@ impl Vm {
     /// Never touches `self.active_sheet`.
     pub fn write_rect(&mut self, key: &str, top_left: (u32, u32), values: &[Vec<Variant>]) {
         let (r1, c1) = top_left;
-        let Some(cells) = self.sheet_cells_mut(key) else {
-            return;
-        };
-        for (i, row) in values.iter().enumerate() {
-            for (j, v) in row.iter().enumerate() {
-                cells.insert(
-                    (r1 + i as u32, c1 + j as u32),
-                    CellContent {
-                        formula: None,
-                        value: v.clone(),
-                    },
-                );
+        let sheet_key = key.to_lowercase();
+        self.record_edit_history();
+        let mut changed = values
+            .iter()
+            .enumerate()
+            .flat_map(|(row_offset, row)| {
+                row.iter()
+                    .enumerate()
+                    .map(move |(col_offset, _)| (r1 + row_offset as u32, c1 + col_offset as u32))
+            })
+            .collect::<Vec<_>>();
+        self.clear_spills_overlapping_changes(&sheet_key, &mut changed);
+        let formula_structure_changed =
+            self.sheets.get(&sheet_key).is_some_and(|cells| {
+                changed.iter().any(|position| {
+                    cells
+                        .get(position)
+                        .is_some_and(|content| content.formula.is_some())
+                })
+            }) || self.formula_plan.get(&sheet_key).is_some_and(|plan| {
+                changed
+                    .iter()
+                    .any(|cell| plan.cells.iter().any(|(row, col, _)| (*row, *col) == *cell))
+            });
+        self.cell_index_dirty = true;
+        self.next_append_rows.remove(&sheet_key);
+        {
+            let Some(cells) = self.sheets.get_mut(&sheet_key) else {
+                return;
+            };
+            let incoming = values.iter().map(Vec::len).sum::<usize>();
+            cells.reserve(incoming);
+            for (i, row) in values.iter().enumerate() {
+                for (j, v) in row.iter().enumerate() {
+                    cells.insert(
+                        (r1 + i as u32, c1 + j as u32),
+                        CellContent {
+                            formula: None,
+                            value: v.clone(),
+                        },
+                    );
+                }
             }
         }
+        self.workbook_formula_dirty
+            .entry(sheet_key.clone())
+            .or_default()
+            .extend(changed.iter().copied());
+        self.workbook_formula_tracking_valid = true;
+        self.workbook_formula_structure_dirty |= formula_structure_changed;
+        self.update_cached_tiles_for_rect(&sheet_key, (r1, c1), values);
+        if formula_structure_changed {
+            self.formula_plan.remove(&sheet_key);
+            self.formula_dirty_cells.remove(&sheet_key);
+        } else {
+            self.mark_formula_dependents(&sheet_key, &changed);
+        }
+    }
+
+    fn clear_spills_overlapping_changes(&mut self, sheet_key: &str, changed: &mut Vec<(u32, u32)>) {
+        let anchors = self
+            .spill_rects
+            .get(sheet_key)
+            .map(|rects| {
+                rects
+                    .iter()
+                    .filter(|(_, rect)| changed.iter().any(|position| rect.contains(*position)))
+                    .map(|(anchor, _)| *anchor)
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        for anchor in anchors {
+            self.clear_spill_for_anchor(sheet_key, anchor, changed);
+        }
+    }
+
+    fn clear_spill_for_anchor(
+        &mut self,
+        sheet_key: &str,
+        anchor: (u32, u32),
+        changed: &mut Vec<(u32, u32)>,
+    ) {
+        let Some(rect) = self
+            .spill_rects
+            .get_mut(sheet_key)
+            .and_then(|rects| rects.remove(&anchor))
+        else {
+            return;
+        };
+        if let Some(cells) = self.sheets.get_mut(sheet_key) {
+            for row_offset in 0..rect.shape.rows {
+                for col_offset in 0..rect.shape.cols {
+                    let Some(position) = rect.cell_at(row_offset, col_offset) else {
+                        continue;
+                    };
+                    if position != anchor && cells.remove(&position).is_some() {
+                        changed.push(position);
+                    }
+                }
+            }
+        }
+        self.cell_tile_cache
+            .lock()
+            .expect("cell tile cache mutex poisoned")
+            .remove(sheet_key);
+    }
+
+    fn mark_formula_dependents(&mut self, sheet_key: &str, changed: &[(u32, u32)]) {
+        let Some(plan) = self.formula_plan.get(sheet_key) else {
+            return;
+        };
+        let mut dirty = self
+            .formula_dirty_cells
+            .remove(sheet_key)
+            .unwrap_or_default();
+        enum DirtyWork {
+            Input((u32, u32)),
+            Formula(usize),
+        }
+        let mut queue = changed
+            .iter()
+            .copied()
+            .map(DirtyWork::Input)
+            .collect::<Vec<_>>();
+        let mut seen_inputs = HashSet::with_capacity(changed.len());
+        let mut seen_formula = vec![false; plan.cells.len()];
+        while let Some(work) = queue.pop() {
+            let cell = match work {
+                DirtyWork::Input(cell) => {
+                    if !seen_inputs.insert(cell) {
+                        continue;
+                    }
+                    cell
+                }
+                DirtyWork::Formula(index) => {
+                    if seen_formula[index] {
+                        continue;
+                    }
+                    seen_formula[index] = true;
+                    (plan.cells[index].0, plan.cells[index].1)
+                }
+            };
+            if let Some(indices) = plan.reverse.get(&cell) {
+                for &index in indices {
+                    let position = (plan.cells[index].0, plan.cells[index].1);
+                    if dirty.insert(position) {
+                        queue.push(DirtyWork::Formula(index));
+                    }
+                }
+            }
+            // Keep ranges compact instead of expanding every covered cell into
+            // the reverse index. A changed cell only dirties ranges containing
+            // that coordinate.
+            for &((r1, c1, r2, c2), index) in &plan.range_dependents {
+                if r1 <= cell.0 && cell.0 <= r2 && c1 <= cell.1 && cell.1 <= c2 {
+                    let position = (plan.cells[index].0, plan.cells[index].1);
+                    if dirty.insert(position) {
+                        queue.push(DirtyWork::Formula(index));
+                    }
+                }
+            }
+        }
+        self.formula_dirty_cells
+            .insert(sheet_key.to_string(), dirty);
+    }
+
+    fn update_cached_tiles_for_rect(
+        &self,
+        sheet_key: &str,
+        (r1, c1): (u32, u32),
+        values: &[Vec<Variant>],
+    ) {
+        let written_cells = values.iter().map(Vec::len).sum::<usize>();
+        if written_cells > INCREMENTAL_TILE_UPDATE_MAX_CELLS {
+            self.invalidate_cached_tiles_for_rect(sheet_key, (r1, c1), values);
+            return;
+        }
+        let mut cache = self
+            .cell_tile_cache
+            .lock()
+            .expect("cell tile cache mutex poisoned");
+        let Some(sheet_cache) = cache.get_mut(sheet_key) else {
+            return;
+        };
+        for (row_offset, row) in values.iter().enumerate() {
+            for (col_offset, value) in row.iter().enumerate() {
+                let row = r1 + row_offset as u32;
+                let col = c1 + col_offset as u32;
+                let tile_key = ((row - 1) / CELL_TILE_SIZE, (col - 1) / CELL_TILE_SIZE);
+                let Some((tile, used)) = sheet_cache.get_mut(&tile_key) else {
+                    continue;
+                };
+                let position = (((row - 1) % CELL_TILE_SIZE) * CELL_TILE_SIZE
+                    + (col - 1) % CELL_TILE_SIZE) as usize;
+                if matches!(value, Variant::Empty) {
+                    match tile {
+                        Some(CellTileValues::Dense(values)) => values[position] = Variant::Empty,
+                        Some(CellTileValues::Sparse(values)) => {
+                            values.remove(&position);
+                            if values.is_empty() {
+                                *tile = None;
+                            }
+                        }
+                        None => {}
+                    }
+                } else {
+                    match tile {
+                        Some(CellTileValues::Dense(values)) => values[position] = value.clone(),
+                        Some(CellTileValues::Sparse(values)) => {
+                            values.insert(position, value.clone());
+                            if values.len() > DENSE_TILE_CELL_THRESHOLD {
+                                let mut dense = vec![
+                                    Variant::Empty;
+                                    (CELL_TILE_SIZE * CELL_TILE_SIZE) as usize
+                                ];
+                                for (position, value) in values.drain() {
+                                    dense[position] = value;
+                                }
+                                *tile = Some(CellTileValues::Dense(dense));
+                            }
+                        }
+                        None => {
+                            let mut sparse = HashMap::new();
+                            sparse.insert(position, value.clone());
+                            *tile = Some(CellTileValues::Sparse(sparse));
+                        }
+                    }
+                }
+                *used = self.cell_tile_cache_clock.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+    }
+
+    fn invalidate_cached_tiles_for_rect(
+        &self,
+        sheet_key: &str,
+        (r1, c1): (u32, u32),
+        values: &[Vec<Variant>],
+    ) {
+        let Some(last_row) = values.len().checked_sub(1).map(|offset| r1 + offset as u32) else {
+            return;
+        };
+        let last_col = values
+            .iter()
+            .map(Vec::len)
+            .max()
+            .and_then(|width| width.checked_sub(1))
+            .map(|offset| c1 + offset as u32);
+        let Some(last_col) = last_col else {
+            return;
+        };
+        let first_tile_row = (r1 - 1) / CELL_TILE_SIZE;
+        let last_tile_row = (last_row - 1) / CELL_TILE_SIZE;
+        let first_tile_col = (c1 - 1) / CELL_TILE_SIZE;
+        let last_tile_col = (last_col - 1) / CELL_TILE_SIZE;
+        let mut cache = self
+            .cell_tile_cache
+            .lock()
+            .expect("cell tile cache mutex poisoned");
+        let Some(sheet_cache) = cache.get_mut(sheet_key) else {
+            return;
+        };
+        for tile_row in first_tile_row..=last_tile_row {
+            for tile_col in first_tile_col..=last_tile_col {
+                let tile_key = (tile_row, tile_col);
+                sheet_cache.remove(&tile_key);
+            }
+        }
+    }
+
+    /// Append one already-converted row while preserving `sheet_used_range`'s
+    /// Empty-exclusion semantics. The first call after an arbitrary mutation
+    /// scans the sheet; subsequent calls reuse and advance the cached row.
+    pub fn append_row_values(&mut self, key: &str, values: Vec<Variant>) -> u32 {
+        let target_row = self.next_append_row(key);
+        let advances_used_range = values.iter().any(|value| !matches!(value, Variant::Empty));
+        self.write_rect(key, (target_row, 1), &[values]);
+        self.next_append_rows.insert(
+            key.to_string(),
+            if advances_used_range {
+                target_row + 1
+            } else {
+                target_row
+            },
+        );
+        target_row
     }
 
     /// Core of the Python `iter_rows` API: `max_row`/`max_col` of `None` mean
@@ -3384,8 +5014,18 @@ impl Vm {
         Ok(match target {
             WithTarget::Object(obj) => match self.eval_object_expr(obj)? {
                 ObjectRef::Range(r) => WithValue::Range(r),
+                ObjectRef::Collection(id) => WithValue::Collection(id),
+                ObjectRef::Class(id) => WithValue::Class(
+                    id,
+                    match obj {
+                        ObjectExpr::Var(name) => self.object_variable_types.get(name).cloned(),
+                        _ => None,
+                    },
+                ),
                 ObjectRef::Worksheet(key) => WithValue::Sheet(key),
-                ObjectRef::Workbook | ObjectRef::Nothing => WithValue::Unmodeled,
+                ObjectRef::Workbook | ObjectRef::Nothing | ObjectRef::Dictionary(_) => {
+                    WithValue::Unmodeled
+                }
             },
             WithTarget::Cells(row, col) => {
                 let r = to_cell_index(self.eval_expr(row)?, "row")?;
@@ -3408,9 +5048,14 @@ impl Vm {
             // `With <unknown>` target.
             WithTarget::Var(name) => match self.object_variables.get(name) {
                 Some(ObjectRef::Range(r)) => WithValue::Range(r.clone()),
+                Some(ObjectRef::Collection(id)) => WithValue::Collection(*id),
+                Some(ObjectRef::Class(id)) => {
+                    WithValue::Class(*id, self.object_variable_types.get(name).cloned())
+                }
                 Some(ObjectRef::Worksheet(key)) => WithValue::Sheet(key.clone()),
                 Some(ObjectRef::Nothing) => return Err(OBJECT_NOT_SET.to_string()),
                 Some(ObjectRef::Workbook) => WithValue::Unmodeled,
+                Some(ObjectRef::Dictionary(_)) => WithValue::Unmodeled,
                 None => WithValue::Record(name.clone()),
             },
             WithTarget::Unmodeled => WithValue::Unmodeled,
@@ -3434,6 +5079,7 @@ impl Vm {
             }
         }
         self.with_stack.pop();
+        self.reclaim_unreachable_collections();
         result
     }
 
@@ -3461,12 +5107,13 @@ impl Vm {
     /// VBA's `Range.Range`/`Range.Cells` are relative to the base range's
     /// top-left, which elixcee does not model — see this project's
     /// disclosure list.
-    fn resolve_with_qualified_cell(
+    fn resolve_with_qualified_range(
         &mut self,
         member: &WithMember,
-    ) -> Result<Option<(String, u32, u32)>, String> {
-        let sheet = match self.current_with()? {
-            WithValue::Sheet(key) => key,
+    ) -> Result<Option<RangeRef>, String> {
+        let with_value = self.current_with()?;
+        let sheet = match &with_value {
+            WithValue::Sheet(key) => key.clone(),
             // Every non-Worksheet target keeps the pre-existing behavior: a
             // `.Cells(...)`/`.Range(...)` qualifier inside a With body was
             // always an independent, absolute reference on the active sheet
@@ -3474,20 +5121,46 @@ impl Vm {
             // the target was). Notably that includes `With Sheet1`, where
             // `Sheet1` is a worksheet *code name* elixcee doesn't model —
             // the active sheet is the closest available reading.
-            WithValue::Range(_) | WithValue::Record(_) | WithValue::Unmodeled => {
-                self.active_sheet.clone()
-            }
+            WithValue::Range(_)
+            | WithValue::Collection(_)
+            | WithValue::Class(_, _)
+            | WithValue::Record(_)
+            | WithValue::Unmodeled => self.active_sheet.clone(),
         };
         Ok(match member {
             WithMember::Cells { row, col, .. } => {
-                let r = to_cell_index(self.eval_expr(row)?, "row")?;
-                let c = to_cell_index(self.eval_expr(col)?, "col")?;
-                Some((sheet, r, c))
+                if let WithValue::Range(base) = &with_value {
+                    Some(self.relative_cell_ref(base, row, col)?)
+                } else {
+                    let r = to_cell_index(self.eval_expr(row)?, "row")?;
+                    let c = to_cell_index(self.eval_expr(col)?, "col")?;
+                    Some(RangeRef::single(
+                        sheet,
+                        Rect {
+                            start_row: r,
+                            start_col: c,
+                            end_row: r,
+                            end_col: c,
+                        },
+                    ))
+                }
             }
             WithMember::Range { addr, .. } => {
-                let ((r, c), _) = parse_range_addr(addr)
-                    .ok_or_else(|| format!("Invalid range address '{}'", addr))?;
-                Some((sheet, r, c))
+                if let WithValue::Range(base) = &with_value {
+                    Some(self.relative_address_ref(base, addr)?)
+                } else {
+                    let ((start_row, start_col), (end_row, end_col)) = parse_range_addr(addr)
+                        .ok_or_else(|| format!("Invalid range address '{}'", addr))?;
+                    Some(RangeRef::single(
+                        sheet,
+                        Rect {
+                            start_row,
+                            start_col,
+                            end_row,
+                            end_col,
+                        },
+                    ))
+                }
             }
             WithMember::Fields(_) => None,
         })
@@ -3495,20 +5168,12 @@ impl Vm {
 
     /// `.member = value` inside a With body.
     fn write_with_member(&mut self, member: &WithMember, v: Variant) -> Result<(), String> {
+        self.check_variant_budget(&v)?;
         if !matches!(member, WithMember::Fields(_)) {
             let is_formula = matches!(member,
                 WithMember::Cells { fields, .. } | WithMember::Range { fields, .. }
                     if fields.last().map(String::as_str) == Some("formula"));
-            if let Some((sheet, r, c)) = self.resolve_with_qualified_cell(member)? {
-                let target = RangeRef::single(
-                    sheet,
-                    Rect {
-                        start_row: r,
-                        start_col: c,
-                        end_row: r,
-                        end_col: c,
-                    },
-                );
+            if let Some(target) = self.resolve_with_qualified_range(member)? {
                 self.write_range_ref_value(&target, is_formula, &v)?;
             }
             return Ok(());
@@ -3526,7 +5191,39 @@ impl Vm {
                 // same leniency `Stmt::RecordSet`'s object-variable path has.
             }
             // A worksheet property write (`.Name = "x"`, …) isn't modeled.
-            WithValue::Sheet(_) | WithValue::Unmodeled => {}
+            WithValue::Class(id, static_type) => {
+                let field = fields
+                    .first()
+                    .ok_or_else(|| "Class member name is empty".to_string())?;
+                if self
+                    .class_property_for(id, field, PropertyKind::Let, static_type.as_deref())
+                    .is_ok()
+                {
+                    self.call_property_let(id, field, &[], v, static_type.as_deref())?;
+                } else {
+                    self.set_class_field(id, field, v)?;
+                }
+            }
+            WithValue::Sheet(key) => {
+                let property = fields
+                    .first()
+                    .ok_or_else(|| "Worksheet member name is empty".to_string())?;
+                let value = match v {
+                    Variant::Integer(value) => Expr::Integer(value),
+                    Variant::Float(value) => Expr::Float(value),
+                    Variant::Str(value) => Expr::Str(value),
+                    Variant::Boolean(value) => Expr::Bool(value),
+                    other => {
+                        return Err(format!(
+                            "Worksheet property '{}' cannot accept {}",
+                            property,
+                            vba_to_str(&other)
+                        ));
+                    }
+                };
+                self.set_worksheet_property(&Expr::Str(key), property, &value)?;
+            }
+            WithValue::Collection(_) | WithValue::Unmodeled => {}
             WithValue::Record(var) => {
                 // `.a = 1` / `.a.b = 1` on a UDT target — the same
                 // `nested_set` path `Stmt::RecordSetNested` uses, which also
@@ -3556,6 +5253,1618 @@ impl Vm {
             return Err(OBJECT_NOT_SET.to_string());
         }
         Ok(())
+    }
+
+    fn collection_id(&self, var: &str) -> Result<u64, String> {
+        self.require_live_object(var)?;
+        match self.object_variables.get(var) {
+            Some(ObjectRef::Collection(id)) => Ok(*id),
+            Some(_) => Err(format!("'{}' is not a Collection object variable", var)),
+            None => Err(format!("'{}' is Nothing — Set was never called", var)),
+        }
+    }
+
+    fn object_target_ref(&self, target: &ObjectTarget) -> Result<Option<ObjectRef>, String> {
+        match target {
+            ObjectTarget::Variable(var) => {
+                if var == "activesheet" {
+                    return Ok(Some(ObjectRef::Worksheet(self.active_sheet.clone())));
+                }
+                if matches!(var.as_str(), "thisworkbook" | "activeworkbook") {
+                    return Ok(Some(ObjectRef::Workbook));
+                }
+                let value = self.resolve_object_name(var)?;
+                if value == ObjectRef::Nothing {
+                    return Err(OBJECT_NOT_SET.to_string());
+                }
+                Ok(Some(value))
+            }
+            ObjectTarget::CurrentWith => Ok(match self.current_with()? {
+                WithValue::Range(value) => Some(ObjectRef::Range(value)),
+                WithValue::Collection(id) => Some(ObjectRef::Collection(id)),
+                WithValue::Class(id, _) => Some(ObjectRef::Class(id)),
+                WithValue::Sheet(value) => Some(ObjectRef::Worksheet(value)),
+                WithValue::Record(_) | WithValue::Unmodeled => None,
+            }),
+        }
+    }
+
+    fn collection_target_range_ref(
+        &self,
+        target: &CollectionTarget,
+    ) -> Result<Option<RangeRef>, String> {
+        Ok(match target {
+            CollectionTarget::Variable(name) => match self.resolve_object_name(name)? {
+                ObjectRef::Range(value) => Some(value),
+                _ => None,
+            },
+            CollectionTarget::CurrentWith => match self.current_with()? {
+                WithValue::Range(value) => Some(value),
+                _ => None,
+            },
+        })
+    }
+
+    fn relative_cell_ref(
+        &mut self,
+        base: &RangeRef,
+        row: &Expr,
+        col: &Expr,
+    ) -> Result<RangeRef, String> {
+        let row = to_cell_index(self.eval_expr(row)?, "row")?;
+        let col = to_cell_index(self.eval_expr(col)?, "col")?;
+        let anchor = base
+            .areas
+            .first()
+            .ok_or_else(|| "Range has no areas".to_string())?;
+        let absolute_row = anchor
+            .start_row
+            .checked_add(row - 1)
+            .ok_or_else(|| "Range.Cells row is out of bounds".to_string())?;
+        let absolute_col = anchor
+            .start_col
+            .checked_add(col - 1)
+            .ok_or_else(|| "Range.Cells column is out of bounds".to_string())?;
+        Ok(RangeRef::single(
+            base.sheet.clone(),
+            Rect {
+                start_row: absolute_row,
+                start_col: absolute_col,
+                end_row: absolute_row,
+                end_col: absolute_col,
+            },
+        ))
+    }
+
+    fn relative_address_ref(&self, base: &RangeRef, addr: &str) -> Result<RangeRef, String> {
+        let ((start_row, start_col), (end_row, end_col)) = parse_range_addr(addr)
+            .ok_or_else(|| format!("Range.Range: invalid relative address '{}'", addr))?;
+        let anchor = base
+            .areas
+            .first()
+            .ok_or_else(|| "Range has no areas".to_string())?;
+        let translate = |origin: u32, offset: u32, axis: &str| {
+            origin
+                .checked_add(offset - 1)
+                .ok_or_else(|| format!("Range.Range {} is out of bounds", axis))
+        };
+        Ok(RangeRef::single(
+            base.sheet.clone(),
+            Rect {
+                start_row: translate(anchor.start_row, start_row, "row")?,
+                start_col: translate(anchor.start_col, start_col, "column")?,
+                end_row: translate(anchor.start_row, end_row, "row")?,
+                end_col: translate(anchor.start_col, end_col, "column")?,
+            },
+        ))
+    }
+
+    fn range_default_item(&mut self, base: &RangeRef, args: &[Expr]) -> Result<RangeRef, String> {
+        match args {
+            [row, col] => self.relative_cell_ref(base, row, col),
+            [index] => {
+                let one_based = to_cell_index(self.eval_expr(index)?, "Range.Item index")?;
+                let area = base
+                    .areas
+                    .first()
+                    .ok_or_else(|| "Range has no areas".to_string())?;
+                let width = area.end_col - area.start_col + 1;
+                let height = area.end_row - area.start_row + 1;
+                if one_based > width.saturating_mul(height) {
+                    return Err("Range.Item index is out of bounds".to_string());
+                }
+                let zero_based = one_based - 1;
+                let row = Expr::Integer((zero_based / width + 1) as i64);
+                let col = Expr::Integer((zero_based % width + 1) as i64);
+                self.relative_cell_ref(base, &row, &col)
+            }
+            _ => Err(format!(
+                "Range default member expects one or two arguments, got {}",
+                args.len()
+            )),
+        }
+    }
+
+    fn current_class_instance_id(&self) -> Option<u64> {
+        self.current_class_instances.last().copied()
+    }
+
+    fn class_field(&self, id: u64, name: &str) -> Option<Variant> {
+        self.class_instances
+            .get(&id)
+            .and_then(|instance| instance.fields.get(name))
+            .cloned()
+    }
+
+    fn class_declares_field(&self, id: u64, name: &str) -> bool {
+        self.class_instances
+            .get(&id)
+            .and_then(|instance| self.class_defs.get(&instance.class_name))
+            .is_some_and(|definition| definition.fields.contains_key(name))
+    }
+
+    fn class_field_def(&self, id: u64, name: &str) -> Option<&ClassFieldDef> {
+        self.class_instances
+            .get(&id)
+            .and_then(|instance| self.class_defs.get(&instance.class_name))
+            .and_then(|definition| definition.fields.get(name))
+    }
+
+    fn is_object_type_name(&self, type_name: Option<&str>) -> bool {
+        type_name.is_some_and(|name| {
+            matches!(
+                name,
+                "object" | "range" | "worksheet" | "workbook" | "collection"
+            ) || self.class_defs.contains_key(name)
+        })
+    }
+
+    fn object_ref_matches_type(&self, value: &ObjectRef, type_name: &str) -> bool {
+        match (type_name, value) {
+            (_, ObjectRef::Nothing) | ("object", _) => true,
+            ("range", ObjectRef::Range(_))
+            | ("worksheet", ObjectRef::Worksheet(_))
+            | ("workbook", ObjectRef::Workbook)
+            | ("collection", ObjectRef::Collection(_))
+            | ("scripting.dictionary", ObjectRef::Dictionary(_))
+            | ("dictionary", ObjectRef::Dictionary(_)) => true,
+            (expected, ObjectRef::Class(id)) => {
+                self.class_instances.get(id).is_some_and(|instance| {
+                    instance.class_name == expected
+                        || self
+                            .class_defs
+                            .get(&instance.class_name)
+                            .is_some_and(|definition| {
+                                definition.implements.iter().any(|name| name == expected)
+                            })
+                })
+            }
+            _ => false,
+        }
+    }
+
+    fn private_access_allowed(&self, id: u64) -> bool {
+        let Some(caller) = self.current_class_instance_id() else {
+            return false;
+        };
+        let caller_name = self.class_instances.get(&caller).map(|v| &v.class_name);
+        let target_name = self.class_instances.get(&id).map(|v| &v.class_name);
+        caller_name.is_some() && caller_name == target_name
+    }
+
+    fn enforce_access(&self, id: u64, member: &str, access: AccessModifier) -> Result<(), String> {
+        if access == AccessModifier::Private && !self.private_access_allowed(id) {
+            return Err(format!("Class member '{}' is Private", member));
+        }
+        Ok(())
+    }
+
+    fn set_class_field(&mut self, id: u64, name: &str, value: Variant) -> Result<(), String> {
+        self.check_variant_budget(&value)?;
+        let field = self
+            .class_field_def(id, name)
+            .cloned()
+            .ok_or_else(|| format!("Class member '{}' not found", name))?;
+        self.enforce_access(id, name, field.access)?;
+        if self.is_object_type_name(field.type_name.as_deref()) {
+            return Err(format!("Object field '{}' requires Set", name));
+        }
+        if !self.class_declares_field(id, name) {
+            return Err(format!("Class member '{}' not found", name));
+        }
+        self.class_instances
+            .get_mut(&id)
+            .ok_or_else(|| OBJECT_NOT_SET.to_string())?
+            .fields
+            .insert(name.to_string(), value);
+        Ok(())
+    }
+
+    fn class_object_field(&self, id: u64, name: &str) -> Option<ObjectRef> {
+        self.class_instances
+            .get(&id)
+            .and_then(|instance| instance.object_fields.get(name))
+            .cloned()
+    }
+
+    fn set_class_object_field(
+        &mut self,
+        id: u64,
+        name: &str,
+        value: ObjectRef,
+    ) -> Result<(), String> {
+        let field = self
+            .class_field_def(id, name)
+            .cloned()
+            .ok_or_else(|| format!("Class member '{}' not found", name))?;
+        self.enforce_access(id, name, field.access)?;
+        if !self.is_object_type_name(field.type_name.as_deref()) {
+            return Err(format!(
+                "Scalar field '{}' cannot be assigned with Set",
+                name
+            ));
+        }
+        if let Some(type_name) = field.type_name.as_deref()
+            && !self.object_ref_matches_type(&value, type_name)
+        {
+            return Err(format!("Object field '{}' requires '{}'", name, type_name));
+        }
+        self.class_instances
+            .get_mut(&id)
+            .ok_or_else(|| OBJECT_NOT_SET.to_string())?
+            .object_fields
+            .insert(name.to_string(), value);
+        Ok(())
+    }
+
+    fn assign_scalar_variable(&mut self, name: &str, value: Variant) -> Result<(), String> {
+        self.check_variant_budget(&value)?;
+        if !self.variables.contains_key(name)
+            && let Some(id) = self.current_class_instance_id()
+            && self.class_declares_field(id, name)
+        {
+            return self.set_class_field(id, name, value);
+        }
+        self.variables.insert(name.to_string(), value);
+        Ok(())
+    }
+
+    fn call_class_sub(&mut self, id: u64, method: &str, args: &[Variant]) -> Result<(), String> {
+        let instance = self
+            .class_instances
+            .get(&id)
+            .ok_or_else(|| OBJECT_NOT_SET.to_string())?;
+        let definition = self
+            .class_defs
+            .get(&instance.class_name)
+            .ok_or_else(|| format!("Class '{}' is not registered", instance.class_name))?;
+        let sub = definition
+            .methods
+            .get(method)
+            .cloned()
+            .ok_or_else(|| format!("Class method '{}' not found", method))?;
+        if !matches!(method, "class_initialize" | "class_terminate") {
+            self.enforce_access(id, method, sub.access)?;
+        }
+        if args.len() != sub.params.len() {
+            return Err(format!(
+                "'{}' expects {} argument(s), got {}",
+                method,
+                sub.params.len(),
+                args.len()
+            ));
+        }
+        self.current_class_instances.push(id);
+        let result = self.call_sub_def(&sub, args);
+        self.current_class_instances.pop();
+        result
+    }
+
+    fn eval_runtime_arg(
+        &mut self,
+        expr: &Expr,
+        type_name: Option<&str>,
+    ) -> Result<RuntimeArg, String> {
+        if self.is_object_type_name(type_name) {
+            let reference = match expr {
+                Expr::Var(name) => self.resolve_object_name(name)?,
+                Expr::CollectionItem { target, index } => {
+                    if let Some(id) = self.collection_target_class_id(target)? {
+                        let static_type = self.collection_target_static_type(target);
+                        return self
+                            .call_property_get_object(
+                                id,
+                                "item",
+                                std::slice::from_ref(index.as_ref()),
+                                static_type.as_deref(),
+                            )
+                            .map(RuntimeArg::Object);
+                    }
+                    let id = self.collection_target_id(target)?;
+                    let index = self.eval_expr(index)?;
+                    self.collection_object_value(id, &index)?
+                }
+                Expr::FuncCall { name, args } if self.object_arrays.contains_key(name) => {
+                    self.object_array_item(name, args)?
+                }
+                _ => {
+                    return Err(
+                        "Object parameter requires an object variable or object item".to_string(),
+                    );
+                }
+            };
+            if let Some(type_name) = type_name
+                && !self.object_ref_matches_type(&reference, type_name)
+            {
+                return Err(format!("Object argument requires '{}'", type_name));
+            }
+            Ok(RuntimeArg::Object(reference))
+        } else {
+            let value = self.eval_expr(expr)?;
+            self.check_variant_budget(&value)?;
+            Ok(RuntimeArg::Scalar(value))
+        }
+    }
+
+    fn bind_runtime_args(
+        &mut self,
+        names: &[String],
+        types: &[Option<String>],
+        values: Vec<RuntimeArg>,
+    ) -> Vec<SavedRuntimeBinding> {
+        names
+            .iter()
+            .zip(values)
+            .enumerate()
+            .map(|(index, (name, value))| {
+                let saved = SavedRuntimeBinding {
+                    name: name.clone(),
+                    scalar: self.variables.remove(name),
+                    object: self.object_variables.remove(name),
+                    object_type: self.object_variable_types.remove(name),
+                };
+                match value {
+                    RuntimeArg::Scalar(value) => {
+                        self.variables.insert(name.clone(), value);
+                    }
+                    RuntimeArg::Object(value) => {
+                        self.object_variables.insert(name.clone(), value);
+                        if let Some(type_name) = types.get(index).and_then(Clone::clone) {
+                            self.object_variable_types.insert(name.clone(), type_name);
+                        }
+                    }
+                }
+                saved
+            })
+            .collect()
+    }
+
+    fn restore_runtime_args(&mut self, saved: Vec<SavedRuntimeBinding>) {
+        for binding in saved {
+            self.variables.remove(&binding.name);
+            self.object_variables.remove(&binding.name);
+            self.object_variable_types.remove(&binding.name);
+            if let Some(value) = binding.scalar {
+                self.variables.insert(binding.name.clone(), value);
+            }
+            if let Some(value) = binding.object {
+                self.object_variables.insert(binding.name.clone(), value);
+            }
+            if let Some(value) = binding.object_type {
+                self.object_variable_types.insert(binding.name, value);
+            }
+        }
+    }
+
+    fn resolve_object_name(&self, name: &str) -> Result<ObjectRef, String> {
+        if name == "me"
+            && let Some(id) = self.current_class_instance_id()
+        {
+            return Ok(ObjectRef::Class(id));
+        }
+        if let Some(value) = self.object_variables.get(name) {
+            return Ok(value.clone());
+        }
+        if let Some(id) = self.current_class_instance_id()
+            && let Some(value) = self.class_object_field(id, name)
+        {
+            return Ok(value);
+        }
+        Err(format!("Object variable '{}' is not set", name))
+    }
+
+    fn object_target_static_type(&self, target: &ObjectTarget) -> Option<String> {
+        match target {
+            ObjectTarget::Variable(name) => {
+                self.object_variable_types.get(name).cloned().or_else(|| {
+                    self.current_class_instance_id()
+                        .and_then(|id| self.class_field_def(id, name))
+                        .and_then(|field| field.type_name.clone())
+                })
+            }
+            ObjectTarget::CurrentWith => match self.with_stack.last() {
+                Some(WithValue::Class(_, static_type)) => static_type.clone(),
+                _ => None,
+            },
+        }
+    }
+
+    fn interface_view(&self, id: u64, static_type: Option<&str>) -> Option<String> {
+        let static_type = static_type?;
+        if static_type == "object" {
+            return None;
+        }
+        let instance = self.class_instances.get(&id)?;
+        if instance.class_name == static_type {
+            return None;
+        }
+        self.class_defs
+            .get(&instance.class_name)?
+            .implements
+            .iter()
+            .find(|name| name.as_str() == static_type)
+            .cloned()
+    }
+
+    fn class_sub_for(
+        &self,
+        id: u64,
+        name: &str,
+        static_type: Option<&str>,
+    ) -> Result<(SubDef, bool), String> {
+        let instance = self
+            .class_instances
+            .get(&id)
+            .ok_or_else(|| OBJECT_NOT_SET.to_string())?;
+        let definition = self
+            .class_defs
+            .get(&instance.class_name)
+            .ok_or_else(|| format!("Class '{}' is not registered", instance.class_name))?;
+        if let Some(interface_name) = self.interface_view(id, static_type) {
+            let interface = self
+                .class_defs
+                .get(&interface_name)
+                .ok_or_else(|| format!("Interface '{}' is not registered", interface_name))?;
+            if !interface.methods.contains_key(name) {
+                return Err(format!(
+                    "Interface '{}' has no Sub '{}'",
+                    interface_name, name
+                ));
+            }
+            let prefixed = format!("{}_{}", interface_name, name);
+            return definition
+                .methods
+                .get(&prefixed)
+                .or_else(|| definition.methods.get(name))
+                .cloned()
+                .map(|member| (member, true))
+                .ok_or_else(|| format!("Class method '{}.{}' not found", interface_name, name));
+        }
+        definition
+            .methods
+            .get(name)
+            .cloned()
+            .map(|member| (member, false))
+            .ok_or_else(|| format!("Class method '{}' not found", name))
+    }
+
+    fn class_func_for(
+        &self,
+        id: u64,
+        name: &str,
+        static_type: Option<&str>,
+    ) -> Result<(FuncDef, bool), String> {
+        let instance = self
+            .class_instances
+            .get(&id)
+            .ok_or_else(|| OBJECT_NOT_SET.to_string())?;
+        let definition = self
+            .class_defs
+            .get(&instance.class_name)
+            .ok_or_else(|| format!("Class '{}' is not registered", instance.class_name))?;
+        if let Some(interface_name) = self.interface_view(id, static_type) {
+            let interface = self
+                .class_defs
+                .get(&interface_name)
+                .ok_or_else(|| format!("Interface '{}' is not registered", interface_name))?;
+            if !interface.functions.contains_key(name) {
+                return Err(format!(
+                    "Interface '{}' has no Function '{}'",
+                    interface_name, name
+                ));
+            }
+            let prefixed = format!("{}_{}", interface_name, name);
+            return definition
+                .functions
+                .get(&prefixed)
+                .or_else(|| definition.functions.get(name))
+                .cloned()
+                .map(|member| (member, true))
+                .ok_or_else(|| format!("Class function '{}.{}' not found", interface_name, name));
+        }
+        definition
+            .functions
+            .get(name)
+            .cloned()
+            .map(|member| (member, false))
+            .ok_or_else(|| format!("Class function '{}' not found", name))
+    }
+
+    fn class_property_for(
+        &self,
+        id: u64,
+        name: &str,
+        kind: PropertyKind,
+        static_type: Option<&str>,
+    ) -> Result<(PropertyDef, bool), String> {
+        let instance = self
+            .class_instances
+            .get(&id)
+            .ok_or_else(|| OBJECT_NOT_SET.to_string())?;
+        let definition = self
+            .class_defs
+            .get(&instance.class_name)
+            .ok_or_else(|| format!("Class '{}' is not registered", instance.class_name))?;
+        if let Some(interface_name) = self.interface_view(id, static_type) {
+            let interface = self
+                .class_defs
+                .get(&interface_name)
+                .ok_or_else(|| format!("Interface '{}' is not registered", interface_name))?;
+            if !interface.properties.contains_key(&(name.to_string(), kind)) {
+                return Err(format!(
+                    "Interface '{}' has no Property '{}'",
+                    interface_name, name
+                ));
+            }
+            let prefixed = (format!("{}_{}", interface_name, name), kind);
+            return definition
+                .properties
+                .get(&prefixed)
+                .or_else(|| definition.properties.get(&(name.to_string(), kind)))
+                .cloned()
+                .map(|member| (member, true))
+                .ok_or_else(|| format!("Class property '{}.{}' not found", interface_name, name));
+        }
+        definition
+            .properties
+            .get(&(name.to_string(), kind))
+            .cloned()
+            .map(|member| (member, false))
+            .ok_or_else(|| format!("Property '{:?} {}' not found", kind, name))
+    }
+
+    fn call_class_sub_expr(
+        &mut self,
+        id: u64,
+        method: &str,
+        args: &[Expr],
+        static_type: Option<&str>,
+    ) -> Result<(), String> {
+        let (sub, interface_dispatch) = self.class_sub_for(id, method, static_type)?;
+        if !interface_dispatch && !matches!(method, "class_initialize" | "class_terminate") {
+            self.enforce_access(id, method, sub.access)?;
+        }
+        if args.len() != sub.params.len() {
+            return Err(format!(
+                "'{}' expects {} argument(s), got {}",
+                method,
+                sub.params.len(),
+                args.len()
+            ));
+        }
+        let values = args
+            .iter()
+            .enumerate()
+            .map(|(index, expr)| {
+                self.eval_runtime_arg(expr, sub.param_types.get(index).and_then(Option::as_deref))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let mut saved_scalar = Vec::new();
+        let mut saved_object = Vec::new();
+        let mut saved_types = Vec::new();
+        for (index, (name, value)) in sub.params.iter().zip(values).enumerate() {
+            saved_scalar.push((name.clone(), self.variables.remove(name)));
+            saved_object.push((name.clone(), self.object_variables.remove(name)));
+            saved_types.push((name.clone(), self.object_variable_types.remove(name)));
+            match value {
+                RuntimeArg::Scalar(value) => {
+                    self.variables.insert(name.clone(), value);
+                }
+                RuntimeArg::Object(value) => {
+                    self.object_variables.insert(name.clone(), value);
+                    if let Some(type_name) = sub.param_types[index].clone() {
+                        self.object_variable_types.insert(name.clone(), type_name);
+                    }
+                }
+            }
+        }
+        self.current_class_instances.push(id);
+        self.call_stack.push(CallFrame {
+            procedure_name: sub.name.clone(),
+            error_mode: ErrorMode::Disabled,
+        });
+        let result = self.exec_body(&sub.body, |flag| matches!(flag, ExitKind::Sub));
+        self.call_stack.pop();
+        self.current_class_instances.pop();
+        for (name, old) in saved_scalar {
+            if let Some(value) = old {
+                self.variables.insert(name, value);
+            } else {
+                self.variables.remove(&name);
+            }
+        }
+        for (name, old) in saved_object {
+            if let Some(value) = old {
+                self.object_variables.insert(name, value);
+            } else {
+                self.object_variables.remove(&name);
+            }
+        }
+        for (name, old) in saved_types {
+            if let Some(value) = old {
+                self.object_variable_types.insert(name, value);
+            } else {
+                self.object_variable_types.remove(&name);
+            }
+        }
+        result
+    }
+
+    fn call_class_func_expr(
+        &mut self,
+        id: u64,
+        method: &str,
+        args: &[Expr],
+        static_type: Option<&str>,
+    ) -> Result<Variant, String> {
+        let (function, interface_dispatch) = self.class_func_for(id, method, static_type)?;
+        if !interface_dispatch {
+            self.enforce_access(id, method, function.access)?;
+        }
+        if self.is_object_type_name(function.return_type.as_deref()) {
+            return Err(format!("Object Function '{}' requires Set", method));
+        }
+        if args.len() != function.params.len() {
+            return Err(format!(
+                "'{}' expects {} argument(s), got {}",
+                method,
+                function.params.len(),
+                args.len()
+            ));
+        }
+        let values = args
+            .iter()
+            .enumerate()
+            .map(|(index, expr)| {
+                self.eval_runtime_arg(
+                    expr,
+                    function.param_types.get(index).and_then(Option::as_deref),
+                )
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let mut saved_scalar = Vec::new();
+        let mut saved_object = Vec::new();
+        let mut saved_types = Vec::new();
+        for (index, (name, value)) in function.params.iter().zip(values).enumerate() {
+            saved_scalar.push((name.clone(), self.variables.remove(name)));
+            saved_object.push((name.clone(), self.object_variables.remove(name)));
+            saved_types.push((name.clone(), self.object_variable_types.remove(name)));
+            match value {
+                RuntimeArg::Scalar(value) => {
+                    self.variables.insert(name.clone(), value);
+                }
+                RuntimeArg::Object(value) => {
+                    self.object_variables.insert(name.clone(), value);
+                    if let Some(type_name) = function.param_types[index].clone() {
+                        self.object_variable_types.insert(name.clone(), type_name);
+                    }
+                }
+            }
+        }
+        let return_name = function.name.clone();
+        let old_return = self.variables.remove(&return_name);
+        self.current_class_instances.push(id);
+        self.call_stack.push(CallFrame {
+            procedure_name: return_name.clone(),
+            error_mode: ErrorMode::Disabled,
+        });
+        let result = self.exec_body(&function.body, |flag| {
+            matches!(flag, ExitKind::Function | ExitKind::Sub)
+        });
+        self.call_stack.pop();
+        self.current_class_instances.pop();
+        let value = self
+            .variables
+            .remove(&return_name)
+            .unwrap_or(Variant::Empty);
+        if let Some(old) = old_return {
+            self.variables.insert(return_name, old);
+        }
+        for (name, old) in saved_scalar {
+            if let Some(value) = old {
+                self.variables.insert(name, value);
+            } else {
+                self.variables.remove(&name);
+            }
+        }
+        for (name, old) in saved_object {
+            if let Some(value) = old {
+                self.object_variables.insert(name, value);
+            } else {
+                self.object_variables.remove(&name);
+            }
+        }
+        for (name, old) in saved_types {
+            if let Some(value) = old {
+                self.object_variable_types.insert(name, value);
+            } else {
+                self.object_variable_types.remove(&name);
+            }
+        }
+        result.map(|_| value)
+    }
+
+    fn call_class_object_func_expr(
+        &mut self,
+        id: u64,
+        method: &str,
+        args: &[Expr],
+        static_type: Option<&str>,
+    ) -> Result<ObjectRef, String> {
+        let (function, interface_dispatch) = self.class_func_for(id, method, static_type)?;
+        if !interface_dispatch {
+            self.enforce_access(id, method, function.access)?;
+        }
+        let return_type = function
+            .return_type
+            .as_deref()
+            .filter(|type_name| self.is_object_type_name(Some(type_name)))
+            .ok_or_else(|| format!("Class function '{}' does not return an object", method))?
+            .to_string();
+        if args.len() != function.params.len() {
+            return Err(format!(
+                "'{}' expects {} argument(s), got {}",
+                method,
+                function.params.len(),
+                args.len()
+            ));
+        }
+        let values = args
+            .iter()
+            .enumerate()
+            .map(|(index, expr)| {
+                self.eval_runtime_arg(
+                    expr,
+                    function.param_types.get(index).and_then(Option::as_deref),
+                )
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let mut saved_scalar = Vec::new();
+        let mut saved_object = Vec::new();
+        let mut saved_types = Vec::new();
+        for (index, (name, value)) in function.params.iter().zip(values).enumerate() {
+            saved_scalar.push((name.clone(), self.variables.remove(name)));
+            saved_object.push((name.clone(), self.object_variables.remove(name)));
+            saved_types.push((name.clone(), self.object_variable_types.remove(name)));
+            match value {
+                RuntimeArg::Scalar(value) => {
+                    self.variables.insert(name.clone(), value);
+                }
+                RuntimeArg::Object(value) => {
+                    self.object_variables.insert(name.clone(), value);
+                    if let Some(type_name) = function.param_types[index].clone() {
+                        self.object_variable_types.insert(name.clone(), type_name);
+                    }
+                }
+            }
+        }
+        let return_name = function.name.clone();
+        let old_return_scalar = self.variables.remove(&return_name);
+        let old_return_object = self.object_variables.remove(&return_name);
+        let old_return_type = self
+            .object_variable_types
+            .insert(return_name.clone(), return_type.clone());
+        self.current_class_instances.push(id);
+        self.call_stack.push(CallFrame {
+            procedure_name: return_name.clone(),
+            error_mode: ErrorMode::Disabled,
+        });
+        let result = self.exec_body(&function.body, |flag| {
+            matches!(flag, ExitKind::Function | ExitKind::Sub)
+        });
+        self.call_stack.pop();
+        self.current_class_instances.pop();
+        let value = self
+            .object_variables
+            .remove(&return_name)
+            .unwrap_or(ObjectRef::Nothing);
+        self.object_variable_types.remove(&return_name);
+        if let Some(old) = old_return_scalar {
+            self.variables.insert(return_name.clone(), old);
+        }
+        if let Some(old) = old_return_object {
+            self.object_variables.insert(return_name.clone(), old);
+        }
+        if let Some(old) = old_return_type {
+            self.object_variable_types.insert(return_name, old);
+        }
+        for (name, old) in saved_scalar {
+            if let Some(value) = old {
+                self.variables.insert(name, value);
+            } else {
+                self.variables.remove(&name);
+            }
+        }
+        for (name, old) in saved_object {
+            if let Some(value) = old {
+                self.object_variables.insert(name, value);
+            } else {
+                self.object_variables.remove(&name);
+            }
+        }
+        for (name, old) in saved_types {
+            if let Some(value) = old {
+                self.object_variable_types.insert(name, value);
+            } else {
+                self.object_variable_types.remove(&name);
+            }
+        }
+        result?;
+        if !self.object_ref_matches_type(&value, &return_type) {
+            return Err(format!(
+                "Class function '{}' must return '{}'",
+                method, return_type
+            ));
+        }
+        Ok(value)
+    }
+
+    fn call_property_get_scalar(
+        &mut self,
+        id: u64,
+        name: &str,
+        args: &[Expr],
+        static_type: Option<&str>,
+    ) -> Result<Variant, String> {
+        let (property, interface_dispatch) =
+            self.class_property_for(id, name, PropertyKind::Get, static_type)?;
+        if !interface_dispatch {
+            self.enforce_access(id, name, property.access)?;
+        }
+        if self.is_object_type_name(property.return_type.as_deref()) {
+            return Err(format!("Object Property Get '{}' requires Set", name));
+        }
+        if args.len() != property.params.len() {
+            return Err(format!(
+                "Property Get '{}' expects {} argument(s), got {}",
+                name,
+                property.params.len(),
+                args.len()
+            ));
+        }
+        let values = args
+            .iter()
+            .enumerate()
+            .map(|(index, expr)| {
+                self.eval_runtime_arg(
+                    expr,
+                    property.param_types.get(index).and_then(Option::as_deref),
+                )
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let saved = self.bind_runtime_args(&property.params, &property.param_types, values);
+        let return_name = property.name.clone();
+        let old = self.variables.remove(&return_name);
+        self.current_class_instances.push(id);
+        self.call_stack.push(CallFrame {
+            procedure_name: return_name.clone(),
+            error_mode: ErrorMode::Disabled,
+        });
+        let previous_module_scope = self.current_module_scope.clone();
+        self.current_module_scope = property.module_name.clone();
+        let result = self.exec_body(&property.body, |flag| matches!(flag, ExitKind::Function));
+        self.current_module_scope = previous_module_scope;
+        self.call_stack.pop();
+        self.current_class_instances.pop();
+        let value = self
+            .variables
+            .remove(&return_name)
+            .unwrap_or(Variant::Empty);
+        if let Some(old) = old {
+            self.variables.insert(return_name, old);
+        }
+        self.restore_runtime_args(saved);
+        result.map(|_| value)
+    }
+
+    fn call_property_get_object(
+        &mut self,
+        id: u64,
+        name: &str,
+        args: &[Expr],
+        static_type: Option<&str>,
+    ) -> Result<ObjectRef, String> {
+        let (property, interface_dispatch) =
+            self.class_property_for(id, name, PropertyKind::Get, static_type)?;
+        if !interface_dispatch {
+            self.enforce_access(id, name, property.access)?;
+        }
+        let return_type = property
+            .return_type
+            .as_deref()
+            .filter(|type_name| self.is_object_type_name(Some(type_name)))
+            .ok_or_else(|| format!("Property Get '{}' does not return an object", name))?
+            .to_string();
+        if args.len() != property.params.len() {
+            return Err(format!(
+                "Property Get '{}' expects {} argument(s), got {}",
+                name,
+                property.params.len(),
+                args.len()
+            ));
+        }
+        let values = args
+            .iter()
+            .enumerate()
+            .map(|(index, expr)| {
+                self.eval_runtime_arg(
+                    expr,
+                    property.param_types.get(index).and_then(Option::as_deref),
+                )
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let saved = self.bind_runtime_args(&property.params, &property.param_types, values);
+        let return_name = property.name.clone();
+        let old_scalar = self.variables.remove(&return_name);
+        let old_object = self.object_variables.remove(&return_name);
+        let old_type = self
+            .object_variable_types
+            .insert(return_name.clone(), return_type.clone());
+        self.current_class_instances.push(id);
+        self.call_stack.push(CallFrame {
+            procedure_name: return_name.clone(),
+            error_mode: ErrorMode::Disabled,
+        });
+        let previous_module_scope = self.current_module_scope.clone();
+        self.current_module_scope = property.module_name.clone();
+        let result = self.exec_body(&property.body, |flag| matches!(flag, ExitKind::Function));
+        self.current_module_scope = previous_module_scope;
+        self.call_stack.pop();
+        self.current_class_instances.pop();
+        let value = self
+            .object_variables
+            .remove(&return_name)
+            .unwrap_or(ObjectRef::Nothing);
+        self.object_variable_types.remove(&return_name);
+        if let Some(old) = old_scalar {
+            self.variables.insert(return_name.clone(), old);
+        }
+        if let Some(old) = old_object {
+            self.object_variables.insert(return_name.clone(), old);
+        }
+        if let Some(old) = old_type {
+            self.object_variable_types.insert(return_name, old);
+        }
+        self.restore_runtime_args(saved);
+        result?;
+        if !self.object_ref_matches_type(&value, &return_type) {
+            return Err(format!(
+                "Property Get '{}' must return '{}'",
+                name, return_type
+            ));
+        }
+        Ok(value)
+    }
+
+    fn call_property_let(
+        &mut self,
+        id: u64,
+        name: &str,
+        args: &[Expr],
+        value: Variant,
+        static_type: Option<&str>,
+    ) -> Result<(), String> {
+        let (property, interface_dispatch) =
+            self.class_property_for(id, name, PropertyKind::Let, static_type)?;
+        if !interface_dispatch {
+            self.enforce_access(id, name, property.access)?;
+        }
+        if property.params.len() != args.len() + 1 {
+            return Err(format!(
+                "Property Let '{}' expects {} index argument(s), got {}",
+                name,
+                property.params.len().saturating_sub(1),
+                args.len()
+            ));
+        }
+        let value_index = property.params.len() - 1;
+        if self.is_object_type_name(property.param_types[value_index].as_deref()) {
+            return Err(format!("Object property '{}' requires Property Set", name));
+        }
+        let mut values = args
+            .iter()
+            .enumerate()
+            .map(|(index, expr)| {
+                self.eval_runtime_arg(
+                    expr,
+                    property.param_types.get(index).and_then(Option::as_deref),
+                )
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        values.push(RuntimeArg::Scalar(value));
+        let saved = self.bind_runtime_args(&property.params, &property.param_types, values);
+        self.current_class_instances.push(id);
+        self.call_stack.push(CallFrame {
+            procedure_name: property.name.clone(),
+            error_mode: ErrorMode::Disabled,
+        });
+        let previous_module_scope = self.current_module_scope.clone();
+        self.current_module_scope = property.module_name.clone();
+        let result = self.exec_body(&property.body, |flag| matches!(flag, ExitKind::Sub));
+        self.current_module_scope = previous_module_scope;
+        self.call_stack.pop();
+        self.current_class_instances.pop();
+        self.restore_runtime_args(saved);
+        result
+    }
+
+    fn call_property_set(
+        &mut self,
+        id: u64,
+        name: &str,
+        args: &[Expr],
+        value: ObjectRef,
+        static_type: Option<&str>,
+    ) -> Result<(), String> {
+        let (property, interface_dispatch) =
+            self.class_property_for(id, name, PropertyKind::Set, static_type)?;
+        if !interface_dispatch {
+            self.enforce_access(id, name, property.access)?;
+        }
+        if property.params.len() != args.len() + 1 {
+            return Err(format!(
+                "Property Set '{}' expects {} index argument(s), got {}",
+                name,
+                property.params.len().saturating_sub(1),
+                args.len()
+            ));
+        }
+        let value_index = property.params.len() - 1;
+        if !self.is_object_type_name(property.param_types[value_index].as_deref()) {
+            return Err(format!(
+                "Property Set '{}' requires an object parameter",
+                name
+            ));
+        }
+        if let Some(type_name) = property.param_types[value_index].as_deref()
+            && !self.object_ref_matches_type(&value, type_name)
+        {
+            return Err(format!("Property Set '{}' requires '{}'", name, type_name));
+        }
+        let mut values = args
+            .iter()
+            .enumerate()
+            .map(|(index, expr)| {
+                self.eval_runtime_arg(
+                    expr,
+                    property.param_types.get(index).and_then(Option::as_deref),
+                )
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        values.push(RuntimeArg::Object(value));
+        let saved = self.bind_runtime_args(&property.params, &property.param_types, values);
+        self.current_class_instances.push(id);
+        self.call_stack.push(CallFrame {
+            procedure_name: property.name.clone(),
+            error_mode: ErrorMode::Disabled,
+        });
+        let previous_module_scope = self.current_module_scope.clone();
+        self.current_module_scope = property.module_name.clone();
+        let result = self.exec_body(&property.body, |flag| matches!(flag, ExitKind::Sub));
+        self.current_module_scope = previous_module_scope;
+        self.call_stack.pop();
+        self.current_class_instances.pop();
+        self.restore_runtime_args(saved);
+        result
+    }
+
+    fn validate_and_bind_implements(&mut self) -> Result<(), String> {
+        let class_names: Vec<String> = self.class_defs.keys().cloned().collect();
+        for class_name in class_names {
+            let implemented = self
+                .class_defs
+                .get(&class_name)
+                .map(|definition| definition.implements.clone())
+                .unwrap_or_default();
+            for interface_name in implemented {
+                let interface = self
+                    .class_defs
+                    .get(&interface_name)
+                    .cloned()
+                    .ok_or_else(|| {
+                        format!(
+                            "Class '{}' Implements unknown interface '{}'",
+                            class_name, interface_name
+                        )
+                    })?;
+                let prefix = format!("{}_", interface_name);
+                let target = self
+                    .class_defs
+                    .get(&class_name)
+                    .expect("class name came from map")
+                    .clone();
+                for (name, required) in &interface.methods {
+                    let candidate = target
+                        .methods
+                        .get(&format!("{}{}", prefix, name))
+                        .or_else(|| target.methods.get(name))
+                        .ok_or_else(|| {
+                            format!(
+                                "Class '{}' does not implement Sub '{}.{}'",
+                                class_name, interface_name, name
+                            )
+                        })?;
+                    if candidate.param_types != required.param_types {
+                        return Err(format!(
+                            "Class '{}' implementation of '{}.{}' has incompatible argument types",
+                            class_name, interface_name, name
+                        ));
+                    }
+                }
+                for (name, required) in &interface.functions {
+                    let candidate = target
+                        .functions
+                        .get(&format!("{}{}", prefix, name))
+                        .or_else(|| target.functions.get(name))
+                        .ok_or_else(|| {
+                            format!(
+                                "Class '{}' does not implement Function '{}.{}'",
+                                class_name, interface_name, name
+                            )
+                        })?;
+                    if candidate.param_types != required.param_types
+                        || candidate.return_type != required.return_type
+                    {
+                        return Err(format!(
+                            "Class '{}' implementation of '{}.{}' has an incompatible signature",
+                            class_name, interface_name, name
+                        ));
+                    }
+                }
+                for ((name, kind), required) in &interface.properties {
+                    let direct = (name.clone(), *kind);
+                    let prefixed = (format!("{}{}", prefix, name), *kind);
+                    let candidate = target
+                        .properties
+                        .get(&prefixed)
+                        .or_else(|| target.properties.get(&direct))
+                        .ok_or_else(|| {
+                            format!(
+                                "Class '{}' does not implement Property '{}.{}'",
+                                class_name, interface_name, name
+                            )
+                        })?;
+                    if candidate.param_types != required.param_types
+                        || candidate.return_type != required.return_type
+                    {
+                        return Err(format!(
+                            "Class '{}' implementation of '{}.{}' has an incompatible signature",
+                            class_name, interface_name, name
+                        ));
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn collection_target_id(&self, target: &CollectionTarget) -> Result<u64, String> {
+        match target {
+            CollectionTarget::Variable(var) => self.collection_id(var),
+            CollectionTarget::CurrentWith => match self.current_with()? {
+                WithValue::Collection(id) => Ok(id),
+                _ => Err("With target is not a Collection".to_string()),
+            },
+        }
+    }
+
+    fn collection_target_static_type(&self, target: &CollectionTarget) -> Option<String> {
+        match target {
+            CollectionTarget::Variable(name) => self.object_variable_types.get(name).cloned(),
+            CollectionTarget::CurrentWith => match self.with_stack.last() {
+                Some(WithValue::Class(_, static_type)) => static_type.clone(),
+                _ => None,
+            },
+        }
+    }
+
+    fn new_object_array(
+        &self,
+        bounds: Vec<ArrayBound>,
+        class_name: String,
+    ) -> Result<ObjectArray, String> {
+        if bounds.is_empty() {
+            return Ok(ObjectArray {
+                bounds,
+                class_name,
+                elements: Vec::new(),
+            });
+        }
+        let total = bounds.iter().try_fold(1usize, |total, bound| {
+            total
+                .checked_mul(bound.len() as usize)
+                .filter(|count| *count <= self.max_array_elements.unwrap_or(MAX_ARRAY_ELEMENTS))
+                .ok_or_else(|| "Out of memory".to_string())
+        })?;
+        Ok(ObjectArray {
+            bounds,
+            class_name,
+            elements: vec![ObjectRef::Nothing; total],
+        })
+    }
+
+    fn object_array_item(&mut self, name: &str, indices: &[Expr]) -> Result<ObjectRef, String> {
+        let indices = self.eval_array_indices(indices)?;
+        let array = self
+            .object_arrays
+            .get(name)
+            .ok_or_else(|| format!("'{}' is not an object array", name))?;
+        let index = VbaArray::linear_index_for(&array.bounds, &indices)?;
+        match array.elements[index].clone() {
+            ObjectRef::Nothing => Err(OBJECT_NOT_SET.to_string()),
+            value => Ok(value),
+        }
+    }
+
+    fn collection_target_class_id(&self, target: &CollectionTarget) -> Result<Option<u64>, String> {
+        Ok(match target {
+            CollectionTarget::Variable(var) => {
+                self.require_live_object(var)?;
+                match self.object_variables.get(var) {
+                    Some(ObjectRef::Class(id)) => Some(*id),
+                    _ => None,
+                }
+            }
+            CollectionTarget::CurrentWith => match self.current_with()? {
+                WithValue::Class(id, _) => Some(id),
+                _ => None,
+            },
+        })
+    }
+
+    /// Resolves VBA Collection's 1-based numeric index or case-insensitive
+    /// string key to the backing vector position.
+    fn collection_position(&self, id: u64, index: &Variant) -> Result<usize, String> {
+        let collection = self
+            .collections
+            .get(&id)
+            .ok_or_else(|| OBJECT_NOT_SET.to_string())?;
+        match index {
+            Variant::Str(key) => collection
+                .items
+                .iter()
+                .position(|entry| {
+                    entry
+                        .key
+                        .as_deref()
+                        .is_some_and(|k| k.eq_ignore_ascii_case(key))
+                })
+                .ok_or_else(|| COLLECTION_INVALID_INDEX.to_string()),
+            other => {
+                let one_based = to_f64(other)? as i64;
+                if one_based < 1 || one_based as usize > collection.items.len() {
+                    return Err(COLLECTION_INVALID_INDEX.to_string());
+                }
+                Ok(one_based as usize - 1)
+            }
+        }
+    }
+
+    fn collection_value(&self, id: u64, index: &Variant) -> Result<CollectionValue, String> {
+        let position = self.collection_position(id, index)?;
+        self.collections
+            .get(&id)
+            .and_then(|collection| collection.items.get(position))
+            .map(|entry| entry.value.clone())
+            .ok_or_else(|| COLLECTION_INVALID_INDEX.to_string())
+    }
+
+    fn collection_scalar_value(&self, id: u64, index: &Variant) -> Result<Variant, String> {
+        match self.collection_value(id, index)? {
+            CollectionValue::Scalar(value) => Ok(value),
+            CollectionValue::Object(_) => Err("Object required Set assignment".to_string()),
+        }
+    }
+
+    fn dictionary_id(&self, var: &str) -> Result<u64, String> {
+        match self.object_variables.get(var) {
+            Some(ObjectRef::Dictionary(id)) => Ok(*id),
+            Some(_) => Err(format!("'{}' is not a Dictionary object variable", var)),
+            None => Err(OBJECT_NOT_SET.to_string()),
+        }
+    }
+
+    fn dictionary_key(value: Variant, compare_mode: i64) -> Result<String, String> {
+        let key = vba_to_str(&value);
+        if key.is_empty() {
+            return Err(COLLECTION_INVALID_INDEX.to_string());
+        }
+        Ok(if compare_mode == 1 {
+            key.to_lowercase()
+        } else {
+            key
+        })
+    }
+
+    fn dictionary_value(&self, id: u64, key: &Variant) -> Result<CollectionValue, String> {
+        let dictionary = self
+            .dictionaries
+            .get(&id)
+            .ok_or_else(|| OBJECT_NOT_SET.to_string())?;
+        let normalized = Self::dictionary_key(key.clone(), dictionary.compare_mode)?;
+        dictionary
+            .entries
+            .iter()
+            .find(|entry| entry.key == normalized)
+            .map(|entry| entry.value.clone())
+            .ok_or_else(|| COLLECTION_INVALID_INDEX.to_string())
+    }
+
+    fn dictionary_scalar_value(&self, id: u64, key: &Variant) -> Result<Variant, String> {
+        match self.dictionary_value(id, key)? {
+            CollectionValue::Scalar(value) => Ok(value),
+            CollectionValue::Object(_) => Err("Object required Set assignment".to_string()),
+        }
+    }
+
+    fn collection_object_value(&self, id: u64, index: &Variant) -> Result<ObjectRef, String> {
+        match self.collection_value(id, index)? {
+            CollectionValue::Object(ObjectRef::Nothing) => Err(OBJECT_NOT_SET.to_string()),
+            CollectionValue::Object(reference) => Ok(reference),
+            CollectionValue::Scalar(_) => Err("Object required".to_string()),
+        }
+    }
+
+    /// Collection.Add's Item argument is syntactically an ordinary
+    /// expression, but a bare Set-assigned object variable or another
+    /// Collection item keeps object identity instead of being coerced to a
+    /// scalar Variant.
+    fn eval_collection_value(&mut self, expr: &Expr) -> Result<CollectionValue, String> {
+        if let Expr::Var(name) = expr
+            && let Some(reference) = self.object_variables.get(name).cloned()
+        {
+            return match reference {
+                ObjectRef::Nothing => Err(OBJECT_NOT_SET.to_string()),
+                live => Ok(CollectionValue::Object(live)),
+            };
+        }
+        if let Expr::CollectionItem { target, index } = expr {
+            let id = self.collection_target_id(target)?;
+            let index = self.eval_expr(index)?;
+            return self.collection_value(id, &index);
+        }
+        if let Expr::FuncCall { name, args } = expr
+            && let Some(ObjectRef::Collection(id)) =
+                self.object_variables.get(name.as_str()).cloned()
+        {
+            if args.len() != 1 {
+                return Err(format!(
+                    "Collection '{}' Item requires exactly one index or key",
+                    name
+                ));
+            }
+            let index = self.eval_expr(&args[0])?;
+            return self.collection_value(id, &index);
+        }
+        Ok(CollectionValue::Scalar(self.eval_expr(expr)?))
+    }
+
+    fn collection_key(value: Variant) -> Result<String, String> {
+        let key = match value {
+            Variant::Str(value) => value,
+            other => vba_to_str(&other),
+        };
+        if key.is_empty() {
+            return Err(COLLECTION_INVALID_INDEX.to_string());
+        }
+        Ok(key)
+    }
+
+    fn check_collection_capacity(&self, current_len: usize) -> Result<(), String> {
+        if let Some(limit) = self.max_array_elements
+            && current_len >= limit
+        {
+            return Err(format!(
+                "BUDGET: VBA Collection element limit exceeded ({}; maximum is {})",
+                current_len + 1,
+                limit
+            ));
+        }
+        Ok(())
+    }
+
+    /// Replaces one object-variable reference and reclaims every Collection
+    /// or class instance not reachable from a variable, active execution
+    /// root, or reachable Collection. Graph reachability handles aliases
+    /// and Collection cycles.
+    fn assign_object_variable(&mut self, var: String, value: ObjectRef) -> Result<(), String> {
+        if let Some(type_name) = self.object_variable_types.get(&var)
+            && !self.object_ref_matches_type(&value, type_name)
+        {
+            return Err(format!(
+                "Object variable '{}' requires '{}'",
+                var, type_name
+            ));
+        }
+        self.object_variables.insert(var, value);
+        self.gc_pending_mutations = self.gc_pending_mutations.saturating_add(1);
+        if !self.gc_running && self.gc_pending_mutations >= 32 {
+            self.gc_pending_mutations = 0;
+            self.reclaim_unreachable_collections();
+        }
+        Ok(())
+    }
+
+    fn reclaim_unreachable_collections(&mut self) {
+        if self.gc_running {
+            return;
+        }
+        self.gc_pending_mutations = 0;
+        let mut pending: Vec<ObjectRef> = self.object_variables.values().cloned().collect();
+        for array in self.object_arrays.values() {
+            pending.extend(array.elements.iter().cloned());
+        }
+        for value in &self.with_stack {
+            match value {
+                WithValue::Collection(id) => pending.push(ObjectRef::Collection(*id)),
+                WithValue::Class(id, _) => pending.push(ObjectRef::Class(*id)),
+                _ => {}
+            }
+        }
+        pending.extend(
+            self.collection_iteration_roots
+                .iter()
+                .copied()
+                .map(ObjectRef::Collection),
+        );
+        pending.extend(
+            self.current_class_instances
+                .iter()
+                .copied()
+                .map(ObjectRef::Class),
+        );
+
+        let mut reachable_collections = HashSet::new();
+        let mut reachable_dictionaries = HashSet::new();
+        let mut reachable_classes = HashSet::new();
+        while let Some(reference) = pending.pop() {
+            match reference {
+                ObjectRef::Collection(id) => {
+                    if !reachable_collections.insert(id) {
+                        continue;
+                    }
+                    if let Some(collection) = self.collections.get(&id) {
+                        for entry in &collection.items {
+                            if let CollectionValue::Object(reference) = &entry.value {
+                                pending.push(reference.clone());
+                            }
+                        }
+                    }
+                }
+                ObjectRef::Class(id) => {
+                    if !reachable_classes.insert(id) {
+                        continue;
+                    }
+                    if let Some(instance) = self.class_instances.get(&id) {
+                        pending.extend(instance.object_fields.values().cloned());
+                    }
+                }
+                ObjectRef::Dictionary(id) => {
+                    if !reachable_dictionaries.insert(id) {
+                        continue;
+                    }
+                    if let Some(dictionary) = self.dictionaries.get(&id) {
+                        for entry in &dictionary.entries {
+                            if let CollectionValue::Object(reference) = &entry.value {
+                                pending.push(reference.clone());
+                            }
+                        }
+                    }
+                }
+                ObjectRef::Range(_)
+                | ObjectRef::Worksheet(_)
+                | ObjectRef::Workbook
+                | ObjectRef::Nothing => {}
+            }
+        }
+        self.collections
+            .retain(|id, _| reachable_collections.contains(id));
+        self.dictionaries
+            .retain(|id, _| reachable_dictionaries.contains(id));
+        let unreachable: Vec<u64> = self
+            .class_instances
+            .keys()
+            .copied()
+            .filter(|id| !reachable_classes.contains(id) && !self.terminating_classes.contains(id))
+            .collect();
+        if !unreachable.is_empty() {
+            self.gc_running = true;
+            for id in unreachable {
+                self.terminating_classes.insert(id);
+                let has_terminate = self
+                    .class_instances
+                    .get(&id)
+                    .and_then(|instance| self.class_defs.get(&instance.class_name))
+                    .is_some_and(|definition| definition.methods.contains_key("class_terminate"));
+                if has_terminate && let Err(error) = self.call_class_sub(id, "class_terminate", &[])
+                {
+                    self.deferred_gc_error.get_or_insert(error);
+                }
+            }
+            self.gc_running = false;
+            self.reclaim_unreachable_collections();
+            return;
+        }
+        self.class_instances
+            .retain(|id, _| reachable_classes.contains(id));
+        self.terminating_classes
+            .retain(|id| self.class_instances.contains_key(id));
+    }
+
+    fn run_collection_for_each(
+        &mut self,
+        var: &str,
+        id: u64,
+        body: &[SpannedStmt],
+    ) -> Result<(), String> {
+        let values: Vec<CollectionValue> = self
+            .collections
+            .get(&id)
+            .ok_or_else(|| OBJECT_NOT_SET.to_string())?
+            .items
+            .iter()
+            .map(|entry| entry.value.clone())
+            .collect();
+        self.collection_iteration_roots.push(id);
+
+        let mut result = Ok(());
+        'items: for value in values {
+            if let Err(error) = self.check_deadline() {
+                result = Err(error);
+                break;
+            }
+            self.object_variables.remove(var);
+            match value {
+                CollectionValue::Scalar(value) => {
+                    if let Err(error) = self.check_variant_budget(&value) {
+                        result = Err(error);
+                        break;
+                    }
+                    self.variables.insert(var.to_string(), value);
+                }
+                CollectionValue::Object(reference) => {
+                    self.variables.remove(var);
+                    self.object_variables.insert(var.to_string(), reference);
+                }
+            }
+            for statement in body {
+                if let Err(error) = self.exec_stmt(statement) {
+                    result = Err(error);
+                    break 'items;
+                }
+                if matches!(self.exit_flag, Some(ExitKind::For)) {
+                    self.exit_flag = None;
+                    break 'items;
+                }
+                if self.exit_flag.is_some() {
+                    break 'items;
+                }
+            }
+        }
+
+        self.collection_iteration_roots.pop();
+        self.reclaim_unreachable_collections();
+        result
     }
 
     /// Resolves a sheet-identifying `Expr` — a string name, a 1-based
@@ -3599,6 +6908,18 @@ impl Vm {
                 Some(ObjectRef::Range(_)) => {
                     Err(format!("'{}' is a Range object, not a Worksheet", name))
                 }
+                Some(ObjectRef::Collection(_)) => Err(format!(
+                    "'{}' is a Collection object, not a Worksheet",
+                    name
+                )),
+                Some(ObjectRef::Dictionary(_)) => Err(format!(
+                    "'{}' is a Dictionary object, not a Worksheet",
+                    name
+                )),
+                Some(ObjectRef::Class(_)) => Err(format!(
+                    "'{}' is a class-module object, not a Worksheet",
+                    name
+                )),
                 Some(ObjectRef::Nothing) => Err(OBJECT_NOT_SET.to_string()),
                 None => Err(format!("'{}' is Nothing — Set was never called", name)),
             };
@@ -3653,6 +6974,105 @@ impl Vm {
                 Ok((key, display))
             }
         }
+    }
+
+    fn sheet_display_name(&self, key: &str) -> String {
+        self.worksheet_origins
+            .get(key)
+            .and_then(|origin| origin.original_display_name.clone())
+            .unwrap_or_else(|| key.to_string())
+    }
+
+    fn eval_worksheet_property(&mut self, sheet: &Expr, property: &str) -> Result<Variant, String> {
+        let (key, display) = self.resolve_sheet_expr(sheet)?;
+        self.require_sheet_exists(&display, &key)?;
+        match property {
+            "name" => Ok(Variant::Str(self.sheet_display_name(&key))),
+            "index" => self
+                .sheet_order
+                .iter()
+                .position(|candidate| candidate == &key)
+                .map(|index| Variant::Integer(index as i64 + 1))
+                .ok_or_else(|| format!("Sheet '{}' is missing from workbook order", display)),
+            "visible" => Ok(Variant::Integer(
+                match self.sheet_states.get(&key).copied().unwrap_or_default() {
+                    SheetState::Visible => -1,
+                    SheetState::Hidden => 0,
+                    SheetState::VeryHidden => 2,
+                },
+            )),
+            _ => Err(format!(
+                "Worksheet property '{}' is not implemented",
+                property
+            )),
+        }
+    }
+
+    fn set_worksheet_property(
+        &mut self,
+        sheet: &Expr,
+        property: &str,
+        value: &Expr,
+    ) -> Result<(), String> {
+        let (key, display) = self.resolve_sheet_expr(sheet)?;
+        self.require_sheet_exists(&display, &key)?;
+        match property {
+            "name" => {
+                let new_name = vba_to_str(&self.eval_expr(value)?);
+                self.rename_sheet(&key, &new_name)
+            }
+            "visible" => {
+                let value = self.eval_expr(value)?;
+                let state = match value {
+                    Variant::Integer(-1) | Variant::Boolean(true) => SheetState::Visible,
+                    Variant::Integer(0) | Variant::Boolean(false) => SheetState::Hidden,
+                    Variant::Integer(2) => SheetState::VeryHidden,
+                    other => {
+                        return Err(format!(
+                            "Worksheet.Visible requires xlSheetVisible, xlSheetHidden, or xlSheetVeryHidden; got {}",
+                            vba_to_str(&other)
+                        ));
+                    }
+                };
+                if state != SheetState::Visible
+                    && self.sheet_states.get(&key).copied().unwrap_or_default()
+                        == SheetState::Visible
+                    && self
+                        .sheets
+                        .keys()
+                        .filter(|candidate| {
+                            self.sheet_states
+                                .get(*candidate)
+                                .copied()
+                                .unwrap_or_default()
+                                == SheetState::Visible
+                        })
+                        .count()
+                        == 1
+                {
+                    return Err("Workbook must contain at least one visible worksheet".to_string());
+                }
+                if state != SheetState::Visible && self.active_sheet == key {
+                    return Err("Cannot hide the active worksheet".to_string());
+                }
+                if state == SheetState::Visible {
+                    self.sheet_states.remove(&key);
+                } else {
+                    self.sheet_states.insert(key, state);
+                }
+                Ok(())
+            }
+            _ => Err(format!("Worksheet property '{}' is not writable", property)),
+        }
+    }
+
+    fn activate_worksheet(&mut self, sheet: &Expr) -> Result<(), String> {
+        let (key, display) = self.resolve_sheet_expr(sheet)?;
+        self.require_sheet_exists(&display, &key)?;
+        if self.sheet_states.get(&key).copied().unwrap_or_default() != SheetState::Visible {
+            return Err(format!("Cannot activate hidden worksheet '{}'", display));
+        }
+        self.set_active_sheet(&key)
     }
 
     /// Records `ArrayIndexOutOfBounds` evidence and returns the same
@@ -3833,7 +7253,15 @@ impl Vm {
     fn remove_sheet(&mut self, key: &str, display: &str) -> Result<(), String> {
         self.check_sheet_not_protected(key, display)?;
         if key != self.active_sheet {
+            self.ooxml_structural_edit_dirty = true;
+            self.sheet_rename_only = false;
+            self.cell_tile_cache
+                .lock()
+                .expect("cell tile cache mutex poisoned")
+                .remove(key);
             self.sheets.remove(key);
+            self.next_append_rows.remove(key);
+            self.formula_ast_cache.remove(key);
             self.sheet_order.retain(|n| n != key);
             self.merged_ranges.remove(key);
             self.sheet_visibility.remove(key);
@@ -3850,7 +7278,10 @@ impl Vm {
             self.row_styles.remove(key);
             self.column_styles.remove(key);
             self.tables.remove(key);
+            self.sheet_code_names.remove(key);
             self.data_validations.remove(key);
+            self.conditional_format_ranges.remove(key);
+            self.comment_cells.remove(key);
             self.data_validations_touched.remove(key);
             self.autofilters.remove(key);
             self.autofilters_touched.remove(key);
@@ -3947,12 +7378,30 @@ impl Vm {
         if new_key != old_key && self.sheets.contains_key(&new_key) {
             return Err(format!("Sheet '{}' already exists", new_name));
         }
+        self.ooxml_structural_edit_dirty = true;
+        self.sheet_rename_only = true;
+
+        let mut tile_cache = self
+            .cell_tile_cache
+            .lock()
+            .expect("cell tile cache mutex poisoned");
+        if let Some(tiles) = tile_cache.remove(&old_key) {
+            tile_cache.insert(new_key.clone(), tiles);
+        }
+        drop(tile_cache);
 
         self.rewrite_qualifiers_for_rename(&old_key, new_name);
+        self.rewrite_loaded_named_ranges_for_rename(&old_key, new_name);
 
         // 1. `sheets` -- the cell map itself.
         if let Some(cells) = self.sheets.remove(&old_key) {
             self.sheets.insert(new_key.clone(), cells);
+        }
+        if let Some(row) = self.next_append_rows.remove(&old_key) {
+            self.next_append_rows.insert(new_key.clone(), row);
+        }
+        if let Some(cache) = self.formula_ast_cache.remove(&old_key) {
+            self.formula_ast_cache.insert(new_key.clone(), cache);
         }
         // 2. `sheet_order` -- IN-PLACE value swap, not remove+push, so tab position
         //    is preserved.
@@ -3962,6 +7411,43 @@ impl Vm {
         // 3. `active_sheet`.
         if self.active_sheet == old_key {
             self.active_sheet = new_key.clone();
+        }
+        if let Some(code_name) = self.sheet_code_names.remove(&old_key) {
+            self.sheet_code_names.insert(new_key.clone(), code_name);
+        }
+        // Worksheet and Range objects retain worksheet identity across a tab
+        // rename. Their compact representation uses the normalized sheet key,
+        // so re-key every live object root alongside the workbook maps.
+        for object in self.object_variables.values_mut() {
+            retarget_sheet_in_object_ref(object, &old_key, &new_key);
+        }
+        for array in self.object_arrays.values_mut() {
+            for object in &mut array.elements {
+                retarget_sheet_in_object_ref(object, &old_key, &new_key);
+            }
+        }
+        for collection in self.collections.values_mut() {
+            for entry in &mut collection.items {
+                if let CollectionValue::Object(object) = &mut entry.value {
+                    retarget_sheet_in_object_ref(object, &old_key, &new_key);
+                }
+            }
+        }
+        for instance in self.class_instances.values_mut() {
+            for object in instance.object_fields.values_mut() {
+                retarget_sheet_in_object_ref(object, &old_key, &new_key);
+            }
+        }
+        for with_value in &mut self.with_stack {
+            match with_value {
+                WithValue::Range(range) if range.sheet == old_key => {
+                    range.sheet = new_key.clone();
+                }
+                WithValue::Sheet(sheet) if *sheet == old_key => {
+                    *sheet = new_key.clone();
+                }
+                _ => {}
+            }
         }
         // 4-7: merged_ranges / sheet_visibility / cell_style_indices / cell_number_formats.
         if let Some(v) = self.merged_ranges.remove(&old_key) {
@@ -4014,6 +7500,12 @@ impl Vm {
         if let Some(v) = self.data_validations.remove(&old_key) {
             self.data_validations.insert(new_key.clone(), v);
         }
+        if let Some(v) = self.conditional_format_ranges.remove(&old_key) {
+            self.conditional_format_ranges.insert(new_key.clone(), v);
+        }
+        if let Some(v) = self.comment_cells.remove(&old_key) {
+            self.comment_cells.insert(new_key.clone(), v);
+        }
         if self.data_validations_touched.remove(&old_key) {
             self.data_validations_touched.insert(new_key.clone());
         }
@@ -4051,6 +7543,1685 @@ impl Vm {
                     .insert(old_key, new_name.to_string());
             }
         }
+        Ok(())
+    }
+
+    /// Queue a bounded edit to an existing chart series. This changes only
+    /// the category/value formula elements in the named chart part; chart
+    /// drawing geometry, caches, and relationships remain untouched.
+    pub fn set_chart_series_formulas(
+        &mut self,
+        chart_part: &str,
+        series_index: usize,
+        categories: Option<&str>,
+        values: Option<&str>,
+    ) -> Result<(), String> {
+        if self.loaded_workbook_path.is_none() {
+            return Err("chart series edits require a loaded XLSX/XLSM workbook".to_string());
+        }
+        if !(chart_part.starts_with("xl/charts/") && chart_part.ends_with(".xml")) {
+            return Err("chart_part must be an xl/charts/*.xml path".to_string());
+        }
+        if categories.is_none() && values.is_none() {
+            return Err("at least one chart series formula is required".to_string());
+        }
+        for (kind, formula) in [("categories", categories), ("values", values)] {
+            if let Some(formula) = formula {
+                if formula.is_empty() || formula.len() > 16 * 1024 {
+                    return Err(format!("chart {kind} formula must be 1..=16384 bytes"));
+                }
+                if formula.chars().any(|c| c.is_control()) {
+                    return Err(format!("chart {kind} formula contains a control character"));
+                }
+            }
+        }
+        let edit = self
+            .chart_series_edits
+            .entry(chart_part.to_string())
+            .or_default()
+            .entry(series_index)
+            .or_insert_with(|| ChartSeriesEdit {
+                name: None,
+                categories: None,
+                values: None,
+                marker_symbol: None,
+                marker_size: None,
+                smooth: None,
+                invert_if_negative: None,
+                deleted: None,
+                category_cache: None,
+                value_cache: None,
+            });
+        edit.categories = categories.map(ToOwned::to_owned);
+        edit.values = values.map(ToOwned::to_owned);
+        Ok(())
+    }
+
+    /// Queue a new chart for an existing worksheet Drawing part.
+    /// Coordinates are 1-based cells; the chart part and relationship id are
+    /// assigned during save. Formula text uses chart XML spelling and does not
+    /// require a leading `=`.
+    #[allow(clippy::too_many_arguments)]
+    pub fn add_chart(
+        &mut self,
+        drawing_part: &str,
+        chart_type: &str,
+        categories: &str,
+        values: &str,
+        title: Option<&str>,
+        from_row: u32,
+        from_col: u32,
+        to_row: u32,
+        to_col: u32,
+    ) -> Result<String, String> {
+        if self.loaded_workbook_path.is_none() {
+            return Err("chart creation requires a loaded XLSX/XLSM workbook".to_string());
+        }
+        if !(drawing_part.starts_with("xl/drawings/") && drawing_part.ends_with(".xml")) {
+            return Err("drawing_part must be an xl/drawings/*.xml path".to_string());
+        }
+        let chart_type = chart_type.to_ascii_lowercase();
+        if !matches!(chart_type.as_str(), "line" | "bar" | "area" | "pie") {
+            return Err("chart_type must be line, bar, area, or pie".to_string());
+        }
+        for (kind, formula) in [("categories", categories), ("values", values)] {
+            if formula.is_empty() || formula.len() > 16 * 1024 {
+                return Err(format!("chart {kind} formula must be 1..=16384 bytes"));
+            }
+            if formula.chars().any(|c| c.is_control()) {
+                return Err(format!("chart {kind} formula contains a control character"));
+            }
+        }
+        if from_row == 0 || from_col == 0 || to_row < from_row || to_col < from_col {
+            return Err("chart anchor must be positive and ordered".to_string());
+        }
+        if to_row - from_row > 1_000 || to_col - from_col > 1_000 {
+            return Err("chart anchor span is too large".to_string());
+        }
+        let title = title.map(str::to_owned);
+        if let Some(text) = &title
+            && (text.is_empty() || text.len() > 16 * 1024 || text.chars().any(|c| c.is_control()))
+        {
+            return Err(
+                "chart title must be 1..=16384 bytes without control characters".to_string(),
+            );
+        }
+        let index = self.chart_creations.len() + 1;
+        self.chart_creations.push(ChartCreation {
+            drawing_part: drawing_part.to_string(),
+            chart_type,
+            categories: categories.to_string(),
+            values: values.to_string(),
+            category_cache: self.chart_cache_values(categories),
+            value_cache: self.chart_cache_values(values),
+            additional_series: Vec::new(),
+            title,
+            from_row,
+            from_col,
+            to_row,
+            to_col,
+        });
+        Ok(format!("xl/charts/chart-new-{index}.xml"))
+    }
+
+    /// Queue another category/value pair for a chart created by `add_chart`.
+    /// The chart part uses one-based creation order (`chart-new-1.xml`).
+    pub fn add_chart_series(
+        &mut self,
+        chart_part: &str,
+        categories: &str,
+        values: &str,
+        title: Option<&str>,
+    ) -> Result<(), String> {
+        let Some(index_text) = chart_part
+            .strip_prefix("xl/charts/chart-new-")
+            .and_then(|part| part.strip_suffix(".xml"))
+        else {
+            return Err("chart_part must be an xl/charts/chart-new-N.xml path".to_string());
+        };
+        let index = index_text
+            .parse::<usize>()
+            .ok()
+            .and_then(|value| value.checked_sub(1))
+            .ok_or_else(|| "chart_part creation index must be positive".to_string())?;
+        let category_cache = self.chart_cache_values(categories);
+        let value_cache = self.chart_cache_values(values);
+        let chart = self
+            .chart_creations
+            .get_mut(index)
+            .ok_or_else(|| format!("created chart does not exist: {chart_part}"))?;
+        if categories.is_empty() || values.is_empty() {
+            return Err("created chart series formulas must not be empty".to_string());
+        }
+        if categories.len() > 16 * 1024 || values.len() > 16 * 1024 {
+            return Err("created chart series formulas must be 1..=16384 bytes".to_string());
+        }
+        if categories.chars().any(|c| c.is_control()) || values.chars().any(|c| c.is_control()) {
+            return Err("created chart series formulas contain a control character".to_string());
+        }
+        let title = title.map(str::to_owned);
+        if let Some(text) = &title
+            && (text.is_empty() || text.len() > 16 * 1024 || text.chars().any(|c| c.is_control()))
+        {
+            return Err("created chart series title is invalid".to_string());
+        }
+        if chart.additional_series.len() >= 64 {
+            return Err("created chart supports at most 65 series".to_string());
+        }
+        chart.additional_series.push(ChartCreationSeries {
+            categories: categories.to_string(),
+            values: values.to_string(),
+            category_cache,
+            value_cache,
+            title,
+        });
+        Ok(())
+    }
+
+    /// Queue a bounded edit to an existing chart series name formula.
+    pub fn set_chart_series_name_formula(
+        &mut self,
+        chart_part: &str,
+        series_index: usize,
+        name_formula: &str,
+    ) -> Result<(), String> {
+        if self.loaded_workbook_path.is_none() {
+            return Err("chart series edits require a loaded XLSX/XLSM workbook".to_string());
+        }
+        if !(chart_part.starts_with("xl/charts/") && chart_part.ends_with(".xml")) {
+            return Err("chart_part must be an xl/charts/*.xml path".to_string());
+        }
+        if name_formula.is_empty() || name_formula.len() > 16 * 1024 {
+            return Err("chart series name formula must be 1..=16384 bytes".to_string());
+        }
+        if name_formula.chars().any(|c| c.is_control()) {
+            return Err("chart series name formula contains a control character".to_string());
+        }
+        let edit = self
+            .chart_series_edits
+            .entry(chart_part.to_string())
+            .or_default()
+            .entry(series_index)
+            .or_insert_with(|| ChartSeriesEdit {
+                name: None,
+                categories: None,
+                values: None,
+                marker_symbol: None,
+                marker_size: None,
+                smooth: None,
+                invert_if_negative: None,
+                deleted: None,
+                category_cache: None,
+                value_cache: None,
+            });
+        edit.name = Some(name_formula.to_string());
+        Ok(())
+    }
+
+    /// Queue a bounded edit to an existing chart series marker symbol.
+    pub fn set_chart_series_marker_symbol(
+        &mut self,
+        chart_part: &str,
+        series_index: usize,
+        symbol: &str,
+    ) -> Result<(), String> {
+        if self.loaded_workbook_path.is_none() {
+            return Err(
+                "chart series marker edits require a loaded XLSX/XLSM workbook".to_string(),
+            );
+        }
+        if !(chart_part.starts_with("xl/charts/") && chart_part.ends_with(".xml")) {
+            return Err("chart_part must be an xl/charts/*.xml path".to_string());
+        }
+        if !matches!(
+            symbol,
+            "circle"
+                | "dash"
+                | "diamond"
+                | "dot"
+                | "none"
+                | "picture"
+                | "plus"
+                | "square"
+                | "star"
+                | "triangle"
+                | "x"
+        ) {
+            return Err("chart marker symbol is not a supported DrawingML value".to_string());
+        }
+        let edit = self
+            .chart_series_edits
+            .entry(chart_part.to_string())
+            .or_default()
+            .entry(series_index)
+            .or_insert_with(|| ChartSeriesEdit {
+                name: None,
+                categories: None,
+                values: None,
+                marker_symbol: None,
+                marker_size: None,
+                smooth: None,
+                invert_if_negative: None,
+                deleted: None,
+                category_cache: None,
+                value_cache: None,
+            });
+        edit.marker_symbol = Some(symbol.to_string());
+        Ok(())
+    }
+
+    /// Queue a bounded edit to an existing chart series marker size.
+    pub fn set_chart_series_marker_size(
+        &mut self,
+        chart_part: &str,
+        series_index: usize,
+        size: u32,
+    ) -> Result<(), String> {
+        if self.loaded_workbook_path.is_none() {
+            return Err(
+                "chart series marker edits require a loaded XLSX/XLSM workbook".to_string(),
+            );
+        }
+        if !(chart_part.starts_with("xl/charts/") && chart_part.ends_with(".xml")) {
+            return Err("chart_part must be an xl/charts/*.xml path".to_string());
+        }
+        if !(2..=72).contains(&size) {
+            return Err("chart marker size must be in the range 2..=72".to_string());
+        }
+        let edit = self
+            .chart_series_edits
+            .entry(chart_part.to_string())
+            .or_default()
+            .entry(series_index)
+            .or_insert_with(|| ChartSeriesEdit {
+                name: None,
+                categories: None,
+                values: None,
+                marker_symbol: None,
+                marker_size: None,
+                smooth: None,
+                invert_if_negative: None,
+                deleted: None,
+                category_cache: None,
+                value_cache: None,
+            });
+        edit.marker_size = Some(size);
+        Ok(())
+    }
+
+    /// Queue a bounded edit to an existing chart series smooth flag.
+    pub fn set_chart_series_smooth(
+        &mut self,
+        chart_part: &str,
+        series_index: usize,
+        smooth: bool,
+    ) -> Result<(), String> {
+        if self.loaded_workbook_path.is_none() {
+            return Err("chart series edits require a loaded XLSX/XLSM workbook".to_string());
+        }
+        if !(chart_part.starts_with("xl/charts/") && chart_part.ends_with(".xml")) {
+            return Err("chart_part must be an xl/charts/*.xml path".to_string());
+        }
+        let edit = self
+            .chart_series_edits
+            .entry(chart_part.to_string())
+            .or_default()
+            .entry(series_index)
+            .or_insert_with(|| ChartSeriesEdit {
+                name: None,
+                categories: None,
+                values: None,
+                marker_symbol: None,
+                marker_size: None,
+                smooth: None,
+                invert_if_negative: None,
+                deleted: None,
+                category_cache: None,
+                value_cache: None,
+            });
+        edit.smooth = Some(smooth);
+        Ok(())
+    }
+
+    /// Queue a bounded edit to an existing chart series invert-if-negative flag.
+    pub fn set_chart_series_invert_if_negative(
+        &mut self,
+        chart_part: &str,
+        series_index: usize,
+        enabled: bool,
+    ) -> Result<(), String> {
+        if self.loaded_workbook_path.is_none() {
+            return Err("chart series edits require a loaded XLSX/XLSM workbook".to_string());
+        }
+        if !(chart_part.starts_with("xl/charts/") && chart_part.ends_with(".xml")) {
+            return Err("chart_part must be an xl/charts/*.xml path".to_string());
+        }
+        let edit = self
+            .chart_series_edits
+            .entry(chart_part.to_string())
+            .or_default()
+            .entry(series_index)
+            .or_insert_with(|| ChartSeriesEdit {
+                name: None,
+                categories: None,
+                values: None,
+                marker_symbol: None,
+                marker_size: None,
+                smooth: None,
+                invert_if_negative: None,
+                deleted: None,
+                category_cache: None,
+                value_cache: None,
+            });
+        edit.invert_if_negative = Some(enabled);
+        Ok(())
+    }
+
+    /// Queue a bounded edit to an existing chart series deletion flag.
+    pub fn set_chart_series_deleted(
+        &mut self,
+        chart_part: &str,
+        series_index: usize,
+        deleted: bool,
+    ) -> Result<(), String> {
+        if self.loaded_workbook_path.is_none() {
+            return Err("chart series edits require a loaded XLSX/XLSM workbook".to_string());
+        }
+        if !(chart_part.starts_with("xl/charts/") && chart_part.ends_with(".xml")) {
+            return Err("chart_part must be an xl/charts/*.xml path".to_string());
+        }
+        let edit = self
+            .chart_series_edits
+            .entry(chart_part.to_string())
+            .or_default()
+            .entry(series_index)
+            .or_insert_with(|| ChartSeriesEdit {
+                name: None,
+                categories: None,
+                values: None,
+                marker_symbol: None,
+                marker_size: None,
+                smooth: None,
+                invert_if_negative: None,
+                deleted: None,
+                category_cache: None,
+                value_cache: None,
+            });
+        edit.deleted = Some(deleted);
+        Ok(())
+    }
+
+    /// Queue a bounded update to the cached category/value points of an
+    /// existing chart series. When the formula reference has no cached value,
+    /// the matching `strCache`/`numCache` element is created; the series
+    /// formula itself is never changed.
+    pub fn set_chart_series_cache(
+        &mut self,
+        chart_part: &str,
+        series_index: usize,
+        categories: Option<Vec<String>>,
+        values: Option<Vec<String>>,
+    ) -> Result<(), String> {
+        if self.loaded_workbook_path.is_none() {
+            return Err("chart series cache edits require a loaded XLSX/XLSM workbook".to_string());
+        }
+        if !(chart_part.starts_with("xl/charts/") && chart_part.ends_with(".xml")) {
+            return Err("chart_part must be an xl/charts/*.xml path".to_string());
+        }
+        if categories.is_none() && values.is_none() {
+            return Err("at least one chart series cache is required".to_string());
+        }
+        for (kind, entries) in [
+            ("category", categories.as_ref()),
+            ("value", values.as_ref()),
+        ] {
+            if let Some(entries) = entries {
+                if entries.len() > 16 * 1024 {
+                    return Err(format!("chart {kind} cache has too many points"));
+                }
+                for entry in entries {
+                    if entry.len() > 16 * 1024 || entry.chars().any(|c| c.is_control()) {
+                        return Err(format!("chart {kind} cache contains an invalid point"));
+                    }
+                    if kind == "value"
+                        && entry
+                            .parse::<f64>()
+                            .map_or(true, |value| !value.is_finite())
+                    {
+                        return Err("chart value cache points must be finite numbers".to_string());
+                    }
+                }
+            }
+        }
+        let edit = self
+            .chart_series_edits
+            .entry(chart_part.to_string())
+            .or_default()
+            .entry(series_index)
+            .or_insert_with(|| ChartSeriesEdit {
+                name: None,
+                categories: None,
+                values: None,
+                marker_symbol: None,
+                marker_size: None,
+                smooth: None,
+                invert_if_negative: None,
+                deleted: None,
+                category_cache: None,
+                value_cache: None,
+            });
+        edit.category_cache = categories;
+        edit.value_cache = values;
+        Ok(())
+    }
+
+    /// Queue a bounded update to the existing solid RGB line color of one
+    /// chart series. Theme colors, gradients, and missing line properties are
+    /// rejected rather than guessed or synthesized.
+    pub fn set_chart_series_line_color(
+        &mut self,
+        chart_part: &str,
+        series_index: usize,
+        color: &str,
+    ) -> Result<(), String> {
+        if self.loaded_workbook_path.is_none() {
+            return Err("chart series edits require a loaded XLSX/XLSM workbook".to_string());
+        }
+        if !(chart_part.starts_with("xl/charts/") && chart_part.ends_with(".xml")) {
+            return Err("chart_part must be an xl/charts/*.xml path".to_string());
+        }
+        let color = color.strip_prefix('#').unwrap_or(color);
+        if color.len() != 6 || !color.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+            return Err("chart series line color must be a 6-digit RGB hex string".to_string());
+        }
+        self.chart_series_line_color_edits
+            .entry(chart_part.to_string())
+            .or_default()
+            .insert(series_index, color.to_ascii_uppercase());
+        Ok(())
+    }
+
+    /// Queue a bounded update to the existing solid RGB fill color of one
+    /// chart series. Theme colors, gradients, and missing fill properties are
+    /// rejected rather than guessed or synthesized.
+    pub fn set_chart_series_fill_color(
+        &mut self,
+        chart_part: &str,
+        series_index: usize,
+        color: &str,
+    ) -> Result<(), String> {
+        if self.loaded_workbook_path.is_none() {
+            return Err("chart series edits require a loaded XLSX/XLSM workbook".to_string());
+        }
+        if !(chart_part.starts_with("xl/charts/") && chart_part.ends_with(".xml")) {
+            return Err("chart_part must be an xl/charts/*.xml path".to_string());
+        }
+        let color = color.strip_prefix('#').unwrap_or(color);
+        if color.len() != 6 || !color.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+            return Err("chart series fill color must be a 6-digit RGB hex string".to_string());
+        }
+        self.chart_series_fill_color_edits
+            .entry(chart_part.to_string())
+            .or_default()
+            .insert(series_index, color.to_ascii_uppercase());
+        Ok(())
+    }
+
+    /// Queue a bounded edit to the first text run in an existing chart title.
+    /// The chart XML outside that title text, including drawing geometry and
+    /// relationships, remains opaque and is preserved.
+    pub fn set_chart_title(&mut self, chart_part: &str, text: &str) -> Result<(), String> {
+        if self.loaded_workbook_path.is_none() {
+            return Err("chart title edits require a loaded XLSX/XLSM workbook".to_string());
+        }
+        if !(chart_part.starts_with("xl/charts/") && chart_part.ends_with(".xml")) {
+            return Err("chart_part must be an xl/charts/*.xml path".to_string());
+        }
+        if text.len() > 16 * 1024 {
+            return Err("chart title must be at most 16384 bytes".to_string());
+        }
+        if text.chars().any(|c| c.is_control()) {
+            return Err("chart title contains a control character".to_string());
+        }
+        self.chart_title_edits.insert(
+            chart_part.to_string(),
+            ChartTitleEdit {
+                text: text.to_string(),
+            },
+        );
+        Ok(())
+    }
+
+    /// Queue a bounded update to an existing chart legend position.
+    pub fn set_chart_legend_position(
+        &mut self,
+        chart_part: &str,
+        position: &str,
+    ) -> Result<(), String> {
+        if self.loaded_workbook_path.is_none() {
+            return Err(
+                "chart legend position edits require a loaded XLSX/XLSM workbook".to_string(),
+            );
+        }
+        if !(chart_part.starts_with("xl/charts/") && chart_part.ends_with(".xml")) {
+            return Err("chart_part must be an xl/charts/*.xml path".to_string());
+        }
+        if !matches!(position, "b" | "tr" | "r" | "l" | "t") {
+            return Err("chart legend position must be one of b, tr, r, l, t".to_string());
+        }
+        self.chart_legend_position_edits.insert(
+            chart_part.to_string(),
+            ChartLegendPositionEdit {
+                position: position.to_string(),
+            },
+        );
+        Ok(())
+    }
+
+    /// Queue a bounded edit to an existing chart style. Excel chart styles are
+    /// numbered 1 through 48; this does not alter chart series or theme data.
+    pub fn set_chart_style(&mut self, chart_part: &str, style: u32) -> Result<(), String> {
+        if self.loaded_workbook_path.is_none() {
+            return Err("chart style edits require a loaded XLSX/XLSM workbook".to_string());
+        }
+        if !(chart_part.starts_with("xl/charts/") && chart_part.ends_with(".xml")) {
+            return Err("chart_part must be an xl/charts/*.xml path".to_string());
+        }
+        if !(1..=48).contains(&style) {
+            return Err("chart style must be in the range 1..=48".to_string());
+        }
+        self.chart_style_edits
+            .insert(chart_part.to_string(), ChartStyleEdit { style });
+        Ok(())
+    }
+
+    /// Queue a bounded edit to an existing chart-axis title. The axis index is
+    /// zero-based in document order across cat/val/date/ser axes.
+    pub fn set_chart_axis_title(
+        &mut self,
+        chart_part: &str,
+        axis_index: usize,
+        text: &str,
+    ) -> Result<(), String> {
+        if self.loaded_workbook_path.is_none() {
+            return Err("chart axis title edits require a loaded XLSX/XLSM workbook".to_string());
+        }
+        if !(chart_part.starts_with("xl/charts/") && chart_part.ends_with(".xml")) {
+            return Err("chart_part must be an xl/charts/*.xml path".to_string());
+        }
+        if text.len() > 16 * 1024 || text.chars().any(|c| c.is_control()) {
+            return Err(
+                "chart axis title must be at most 16KiB and contain no control characters"
+                    .to_string(),
+            );
+        }
+        self.chart_axis_title_edits
+            .entry(chart_part.to_string())
+            .or_default()
+            .insert(axis_index, text.to_string());
+        Ok(())
+    }
+
+    /// Queue a bounded edit to the chart legend overlay flag.
+    pub fn set_chart_legend_overlay(
+        &mut self,
+        chart_part: &str,
+        overlay: bool,
+    ) -> Result<(), String> {
+        if self.loaded_workbook_path.is_none() {
+            return Err(
+                "chart legend overlay edits require a loaded XLSX/XLSM workbook".to_string(),
+            );
+        }
+        if !(chart_part.starts_with("xl/charts/") && chart_part.ends_with(".xml")) {
+            return Err("chart_part must be an xl/charts/*.xml path".to_string());
+        }
+        self.chart_legend_overlay_edits
+            .insert(chart_part.to_string(), ChartLegendOverlayEdit { overlay });
+        Ok(())
+    }
+
+    /// Queue an edit to the first existing chart data-labels `showVal` flag.
+    pub fn set_chart_data_labels_show_value(
+        &mut self,
+        chart_part: &str,
+        show_value: bool,
+    ) -> Result<(), String> {
+        if self.loaded_workbook_path.is_none() {
+            return Err("chart data-label edits require a loaded XLSX/XLSM workbook".to_string());
+        }
+        if !(chart_part.starts_with("xl/charts/") && chart_part.ends_with(".xml")) {
+            return Err("chart_part must be an xl/charts/*.xml path".to_string());
+        }
+        self.chart_data_labels_edits
+            .entry(chart_part.to_string())
+            .and_modify(|edit| edit.show_value = Some(show_value))
+            .or_insert(ChartDataLabelsEdit {
+                show_value: Some(show_value),
+                show_category: None,
+                show_series_name: None,
+                show_percent: None,
+                show_leader_lines: None,
+                show_bubble_size: None,
+                show_legend_key: None,
+                position: None,
+                number_format: None,
+                separator: None,
+            });
+        Ok(())
+    }
+
+    /// Queue a bounded edit to the first chart data-labels `showCat` flag.
+    pub fn set_chart_data_labels_show_category(
+        &mut self,
+        chart_part: &str,
+        show_category: bool,
+    ) -> Result<(), String> {
+        if self.loaded_workbook_path.is_none() {
+            return Err("chart data-label edits require a loaded XLSX/XLSM workbook".to_string());
+        }
+        if !(chart_part.starts_with("xl/charts/") && chart_part.ends_with(".xml")) {
+            return Err("chart_part must be an xl/charts/*.xml path".to_string());
+        }
+        self.chart_data_labels_edits
+            .entry(chart_part.to_string())
+            .and_modify(|edit| edit.show_category = Some(show_category))
+            .or_insert(ChartDataLabelsEdit {
+                show_value: None,
+                show_category: Some(show_category),
+                show_series_name: None,
+                show_percent: None,
+                show_leader_lines: None,
+                show_bubble_size: None,
+                show_legend_key: None,
+                position: None,
+                number_format: None,
+                separator: None,
+            });
+        Ok(())
+    }
+
+    /// Queue a bounded edit to the first chart data-labels `showPercent` flag.
+    pub fn set_chart_data_labels_show_percent(
+        &mut self,
+        chart_part: &str,
+        show_percent: bool,
+    ) -> Result<(), String> {
+        if self.loaded_workbook_path.is_none() {
+            return Err("chart data-label edits require a loaded XLSX/XLSM workbook".to_string());
+        }
+        if !(chart_part.starts_with("xl/charts/") && chart_part.ends_with(".xml")) {
+            return Err("chart_part must be an xl/charts/*.xml path".to_string());
+        }
+        self.chart_data_labels_edits
+            .entry(chart_part.to_string())
+            .and_modify(|edit| edit.show_percent = Some(show_percent))
+            .or_insert(ChartDataLabelsEdit {
+                show_value: None,
+                show_category: None,
+                show_series_name: None,
+                show_percent: Some(show_percent),
+                show_leader_lines: None,
+                show_bubble_size: None,
+                show_legend_key: None,
+                position: None,
+                number_format: None,
+                separator: None,
+            });
+        Ok(())
+    }
+
+    /// Queue a bounded edit to the first chart data-labels `showSerName` flag.
+    pub fn set_chart_data_labels_show_series_name(
+        &mut self,
+        chart_part: &str,
+        show_series_name: bool,
+    ) -> Result<(), String> {
+        if self.loaded_workbook_path.is_none() {
+            return Err("chart data-label edits require a loaded XLSX/XLSM workbook".to_string());
+        }
+        if !(chart_part.starts_with("xl/charts/") && chart_part.ends_with(".xml")) {
+            return Err("chart_part must be an xl/charts/*.xml path".to_string());
+        }
+        self.chart_data_labels_edits
+            .entry(chart_part.to_string())
+            .and_modify(|edit| edit.show_series_name = Some(show_series_name))
+            .or_insert(ChartDataLabelsEdit {
+                show_value: None,
+                show_category: None,
+                show_series_name: Some(show_series_name),
+                show_percent: None,
+                show_leader_lines: None,
+                show_bubble_size: None,
+                show_legend_key: None,
+                position: None,
+                number_format: None,
+                separator: None,
+            });
+        Ok(())
+    }
+
+    /// Queue a bounded edit to the first chart data-labels `showLeaderLines` flag.
+    pub fn set_chart_data_labels_show_leader_lines(
+        &mut self,
+        chart_part: &str,
+        show_leader_lines: bool,
+    ) -> Result<(), String> {
+        if self.loaded_workbook_path.is_none() {
+            return Err("chart data-label edits require a loaded XLSX/XLSM workbook".to_string());
+        }
+        if !(chart_part.starts_with("xl/charts/") && chart_part.ends_with(".xml")) {
+            return Err("chart_part must be an xl/charts/*.xml path".to_string());
+        }
+        self.chart_data_labels_edits
+            .entry(chart_part.to_string())
+            .and_modify(|edit| edit.show_leader_lines = Some(show_leader_lines))
+            .or_insert(ChartDataLabelsEdit {
+                show_value: None,
+                show_category: None,
+                show_series_name: None,
+                show_percent: None,
+                show_leader_lines: Some(show_leader_lines),
+                show_bubble_size: None,
+                show_legend_key: None,
+                position: None,
+                number_format: None,
+                separator: None,
+            });
+        Ok(())
+    }
+
+    /// Queue a bounded edit to the first chart data-labels `showBubbleSize` flag.
+    pub fn set_chart_data_labels_show_bubble_size(
+        &mut self,
+        chart_part: &str,
+        show_bubble_size: bool,
+    ) -> Result<(), String> {
+        if self.loaded_workbook_path.is_none() {
+            return Err("chart data-label edits require a loaded XLSX/XLSM workbook".to_string());
+        }
+        if !(chart_part.starts_with("xl/charts/") && chart_part.ends_with(".xml")) {
+            return Err("chart_part must be an xl/charts/*.xml path".to_string());
+        }
+        self.chart_data_labels_edits
+            .entry(chart_part.to_string())
+            .and_modify(|edit| edit.show_bubble_size = Some(show_bubble_size))
+            .or_insert(ChartDataLabelsEdit {
+                show_value: None,
+                show_category: None,
+                show_series_name: None,
+                show_percent: None,
+                show_leader_lines: None,
+                show_bubble_size: Some(show_bubble_size),
+                show_legend_key: None,
+                position: None,
+                number_format: None,
+                separator: None,
+            });
+        Ok(())
+    }
+
+    /// Queue a bounded edit to the first chart data-labels `showLegendKey` flag.
+    pub fn set_chart_data_labels_show_legend_key(
+        &mut self,
+        chart_part: &str,
+        show_legend_key: bool,
+    ) -> Result<(), String> {
+        if self.loaded_workbook_path.is_none() {
+            return Err("chart data-label edits require a loaded XLSX/XLSM workbook".to_string());
+        }
+        if !(chart_part.starts_with("xl/charts/") && chart_part.ends_with(".xml")) {
+            return Err("chart_part must be an xl/charts/*.xml path".to_string());
+        }
+        self.chart_data_labels_edits
+            .entry(chart_part.to_string())
+            .and_modify(|edit| edit.show_legend_key = Some(show_legend_key))
+            .or_insert(ChartDataLabelsEdit {
+                show_value: None,
+                show_category: None,
+                show_series_name: None,
+                show_percent: None,
+                show_leader_lines: None,
+                show_bubble_size: None,
+                show_legend_key: Some(show_legend_key),
+                position: None,
+                number_format: None,
+                separator: None,
+            });
+        Ok(())
+    }
+
+    /// Queue a bounded edit to the first chart data-label position.
+    /// Only the OOXML-defined position vocabulary is accepted.
+    pub fn set_chart_data_labels_position(
+        &mut self,
+        chart_part: &str,
+        position: &str,
+    ) -> Result<(), String> {
+        if self.loaded_workbook_path.is_none() {
+            return Err("chart data-label edits require a loaded XLSX/XLSM workbook".to_string());
+        }
+        if !(chart_part.starts_with("xl/charts/") && chart_part.ends_with(".xml")) {
+            return Err("chart_part must be an xl/charts/*.xml path".to_string());
+        }
+        let position = position.trim().to_string();
+        if !matches!(
+            position.as_str(),
+            "bestFit" | "b" | "ctr" | "inBase" | "inEnd" | "l" | "outEnd" | "r" | "t"
+        ) {
+            return Err(
+                "chart data-label position must be one of bestFit, b, ctr, inBase, inEnd, l, outEnd, r, t"
+                    .to_string(),
+            );
+        }
+        self.chart_data_labels_edits
+            .entry(chart_part.to_string())
+            .and_modify(|edit| edit.position = Some(position.clone()))
+            .or_insert(ChartDataLabelsEdit {
+                show_value: None,
+                show_category: None,
+                show_series_name: None,
+                show_percent: None,
+                show_leader_lines: None,
+                show_bubble_size: None,
+                show_legend_key: None,
+                position: Some(position),
+                number_format: None,
+                separator: None,
+            });
+        Ok(())
+    }
+
+    /// Queue a bounded edit to the first chart data-label number format.
+    pub fn set_chart_data_labels_number_format(
+        &mut self,
+        chart_part: &str,
+        number_format: &str,
+    ) -> Result<(), String> {
+        if self.loaded_workbook_path.is_none() {
+            return Err("chart data-label edits require a loaded XLSX/XLSM workbook".to_string());
+        }
+        if !(chart_part.starts_with("xl/charts/") && chart_part.ends_with(".xml")) {
+            return Err("chart_part must be an xl/charts/*.xml path".to_string());
+        }
+        let number_format = number_format.trim().to_string();
+        if number_format.is_empty()
+            || number_format.len() > 4096
+            || number_format.chars().any(|c| c.is_control())
+        {
+            return Err(
+                "chart data-label number format must be 1..=4096 bytes without control characters"
+                    .to_string(),
+            );
+        }
+        self.chart_data_labels_edits
+            .entry(chart_part.to_string())
+            .and_modify(|edit| edit.number_format = Some(number_format.clone()))
+            .or_insert(ChartDataLabelsEdit {
+                show_value: None,
+                show_category: None,
+                show_series_name: None,
+                show_percent: None,
+                show_leader_lines: None,
+                show_bubble_size: None,
+                show_legend_key: None,
+                position: None,
+                number_format: Some(number_format),
+                separator: None,
+            });
+        Ok(())
+    }
+
+    /// Queue a bounded edit to the first chart data-label separator.
+    pub fn set_chart_data_labels_separator(
+        &mut self,
+        chart_part: &str,
+        separator: &str,
+    ) -> Result<(), String> {
+        if self.loaded_workbook_path.is_none() {
+            return Err("chart data-label edits require a loaded XLSX/XLSM workbook".to_string());
+        }
+        if !(chart_part.starts_with("xl/charts/") && chart_part.ends_with(".xml")) {
+            return Err("chart_part must be an xl/charts/*.xml path".to_string());
+        }
+        if separator.is_empty()
+            || separator.len() > 1024
+            || separator.chars().any(|c| c.is_control())
+        {
+            return Err(
+                "chart data-label separator must be 1..=1024 bytes without control characters"
+                    .to_string(),
+            );
+        }
+        let separator = separator.to_string();
+        self.chart_data_labels_edits
+            .entry(chart_part.to_string())
+            .and_modify(|edit| edit.separator = Some(separator.clone()))
+            .or_insert(ChartDataLabelsEdit {
+                show_value: None,
+                show_category: None,
+                show_series_name: None,
+                show_percent: None,
+                show_leader_lines: None,
+                show_bubble_size: None,
+                show_legend_key: None,
+                position: None,
+                number_format: None,
+                separator: Some(separator),
+            });
+        Ok(())
+    }
+
+    /// Queue a bounded edit to an existing worksheet-backed Pivot cache source.
+    /// The cache records and PivotTable layout are intentionally left opaque.
+    pub fn set_pivot_worksheet_source(
+        &mut self,
+        cache_part: &str,
+        sheet: Option<&str>,
+        reference: Option<&str>,
+    ) -> Result<(), String> {
+        if self.loaded_workbook_path.is_none() {
+            return Err("Pivot source edits require a loaded XLSX/XLSM workbook".to_string());
+        }
+        if !(cache_part.starts_with("xl/pivotCache/") && cache_part.ends_with(".xml")) {
+            return Err("cache_part must be an xl/pivotCache/*.xml path".to_string());
+        }
+        if sheet.is_none() && reference.is_none() {
+            return Err("at least one Pivot worksheet source field is required".to_string());
+        }
+        if let Some(sheet) = sheet {
+            if sheet.trim().is_empty() || sheet.len() > 31 {
+                return Err("Pivot worksheet source sheet must be 1..=31 bytes".to_string());
+            }
+            if sheet.chars().any(|c| c.is_control()) {
+                return Err("Pivot worksheet source sheet contains a control character".to_string());
+            }
+            if !self.sheets.contains_key(&sheet.to_lowercase()) {
+                return Err(format!(
+                    "Pivot worksheet source sheet '{}' not found",
+                    sheet
+                ));
+            }
+        }
+        if let Some(reference) = reference
+            && (reference.is_empty()
+                || reference.len() > 16 * 1024
+                || reference.chars().any(|c| c.is_control())
+                || parse_range_addr(reference).is_none())
+        {
+            return Err("Pivot worksheet source ref must be a valid A1 range".to_string());
+        }
+        self.pivot_source_edits.insert(
+            cache_part.to_string(),
+            PivotWorksheetSourceEdit {
+                sheet: sheet.map(ToOwned::to_owned),
+                reference: reference.map(ToOwned::to_owned),
+                refresh_on_load: None,
+                field_captions: HashMap::new(),
+            },
+        );
+        Ok(())
+    }
+
+    /// Queue a bounded edit to the existing Pivot cache refresh policy.
+    /// This only changes the OOXML `refreshOnLoad` flag; it never fetches an
+    /// external source or recalculates cache records in the headless runtime.
+    pub fn set_pivot_cache_refresh_on_load(
+        &mut self,
+        cache_part: &str,
+        enabled: bool,
+    ) -> Result<(), String> {
+        if self.loaded_workbook_path.is_none() {
+            return Err("Pivot cache edits require a loaded XLSX/XLSM workbook".to_string());
+        }
+        if !(cache_part.starts_with("xl/pivotCache/") && cache_part.ends_with(".xml")) {
+            return Err("cache_part must be an xl/pivotCache/*.xml path".to_string());
+        }
+        let edit = self
+            .pivot_source_edits
+            .entry(cache_part.to_string())
+            .or_insert_with(|| PivotWorksheetSourceEdit {
+                sheet: None,
+                reference: None,
+                refresh_on_load: None,
+                field_captions: HashMap::new(),
+            });
+        edit.refresh_on_load = Some(enabled);
+        Ok(())
+    }
+
+    /// Queue a bounded update to one existing Pivot cache field caption.
+    /// Records and PivotTable layout are left unchanged.
+    pub fn set_pivot_cache_field_caption(
+        &mut self,
+        cache_part: &str,
+        field_index: usize,
+        caption: &str,
+    ) -> Result<(), String> {
+        if self.loaded_workbook_path.is_none() {
+            return Err("Pivot cache edits require a loaded XLSX/XLSM workbook".to_string());
+        }
+        if !(cache_part.starts_with("xl/pivotCache/") && cache_part.ends_with(".xml")) {
+            return Err("cache_part must be an xl/pivotCache/*.xml path".to_string());
+        }
+        if caption.is_empty()
+            || caption.len() > 16 * 1024
+            || caption.chars().any(|c| c.is_control())
+        {
+            return Err(
+                "Pivot cache field caption must be 1..=16KiB and contain no control characters"
+                    .to_string(),
+            );
+        }
+        let edit = self
+            .pivot_source_edits
+            .entry(cache_part.to_string())
+            .or_insert_with(|| PivotWorksheetSourceEdit {
+                sheet: None,
+                reference: None,
+                refresh_on_load: None,
+                field_captions: HashMap::new(),
+            });
+        edit.field_captions.insert(field_index, caption.to_string());
+        Ok(())
+    }
+
+    /// Queue a bounded edit to an existing two-cell drawing anchor. Cell
+    /// coordinates are 1-based, matching the rest of the public worksheet
+    /// API. One-cell anchors and unsupported drawing shapes are rejected at
+    /// save time rather than silently changing a different geometry model.
+    pub fn set_drawing_anchor(
+        &mut self,
+        drawing_part: &str,
+        anchor_index: usize,
+        from_row: u32,
+        from_col: u32,
+        to_row: u32,
+        to_col: u32,
+    ) -> Result<(), String> {
+        if self.loaded_workbook_path.is_none() {
+            return Err("drawing anchor edits require a loaded XLSX/XLSM workbook".to_string());
+        }
+        if !(drawing_part.starts_with("xl/drawings/") && drawing_part.ends_with(".xml"))
+            || drawing_part.contains("/_rels/")
+        {
+            return Err("drawing_part must be an xl/drawings/*.xml path".to_string());
+        }
+        if from_row == 0 || from_col == 0 || to_row == 0 || to_col == 0 {
+            return Err("drawing anchor cells must be 1-based and non-zero".to_string());
+        }
+        if to_row < from_row || to_col < from_col {
+            return Err("drawing anchor end cell must not precede start cell".to_string());
+        }
+        self.drawing_anchor_edits
+            .entry(drawing_part.to_string())
+            .or_default()
+            .insert(
+                anchor_index,
+                DrawingAnchorEdit {
+                    from_row,
+                    from_col,
+                    to_row,
+                    to_col,
+                },
+            );
+        Ok(())
+    }
+
+    /// Queue a bounded edit to the non-visual shape name of an existing
+    /// drawing anchor. Geometry, shape content, and relationships remain
+    /// unchanged.
+    pub fn set_drawing_shape_name(
+        &mut self,
+        drawing_part: &str,
+        anchor_index: usize,
+        name: &str,
+    ) -> Result<(), String> {
+        if self.loaded_workbook_path.is_none() {
+            return Err("drawing shape edits require a loaded XLSX/XLSM workbook".to_string());
+        }
+        if !(drawing_part.starts_with("xl/drawings/") && drawing_part.ends_with(".xml"))
+            || drawing_part.contains("/_rels/")
+        {
+            return Err("drawing_part must be an xl/drawings/*.xml path".to_string());
+        }
+        if name.is_empty() || name.len() > 16 * 1024 || name.chars().any(|c| c.is_control()) {
+            return Err(
+                "drawing shape name must be 1..=16KiB and contain no control characters"
+                    .to_string(),
+            );
+        }
+        self.drawing_shape_name_edits
+            .entry(drawing_part.to_string())
+            .or_default()
+            .insert(anchor_index, name.to_string());
+        Ok(())
+    }
+
+    /// Queue a bounded edit to an existing drawing anchor's alternative-text
+    /// description. Geometry, shape content, and relationships remain
+    /// unchanged.
+    pub fn set_drawing_shape_description(
+        &mut self,
+        drawing_part: &str,
+        anchor_index: usize,
+        description: &str,
+    ) -> Result<(), String> {
+        if self.loaded_workbook_path.is_none() {
+            return Err("drawing shape edits require a loaded XLSX/XLSM workbook".to_string());
+        }
+        if !(drawing_part.starts_with("xl/drawings/") && drawing_part.ends_with(".xml"))
+            || drawing_part.contains("/_rels/")
+        {
+            return Err("drawing_part must be an xl/drawings/*.xml path".to_string());
+        }
+        if description.len() > 16 * 1024 || description.chars().any(|c| c.is_control()) {
+            return Err(
+                "drawing shape description must be at most 16KiB and contain no control characters"
+                    .to_string(),
+            );
+        }
+        self.drawing_shape_description_edits
+            .entry(drawing_part.to_string())
+            .or_default()
+            .insert(anchor_index, description.to_string());
+        Ok(())
+    }
+
+    /// Queue a bounded edit to an existing drawing anchor's title metadata.
+    pub fn set_drawing_shape_title(
+        &mut self,
+        drawing_part: &str,
+        anchor_index: usize,
+        title: &str,
+    ) -> Result<(), String> {
+        if self.loaded_workbook_path.is_none() {
+            return Err("drawing shape edits require a loaded XLSX/XLSM workbook".to_string());
+        }
+        if !(drawing_part.starts_with("xl/drawings/") && drawing_part.ends_with(".xml"))
+            || drawing_part.contains("/_rels/")
+        {
+            return Err("drawing_part must be an xl/drawings/*.xml path".to_string());
+        }
+        if title.len() > 16 * 1024 || title.chars().any(|c| c.is_control()) {
+            return Err(
+                "drawing shape title must be at most 16KiB and contain no control characters"
+                    .to_string(),
+            );
+        }
+        self.drawing_shape_title_edits
+            .entry(drawing_part.to_string())
+            .or_default()
+            .insert(anchor_index, title.to_string());
+        Ok(())
+    }
+
+    /// Queue a bounded edit to the first text run of an existing drawing
+    /// shape. The text body and its surrounding DrawingML are preserved; a
+    /// missing text run is rejected rather than guessed into existence.
+    pub fn set_drawing_shape_text(
+        &mut self,
+        drawing_part: &str,
+        anchor_index: usize,
+        text: &str,
+    ) -> Result<(), String> {
+        if self.loaded_workbook_path.is_none() {
+            return Err("drawing shape edits require a loaded XLSX/XLSM workbook".to_string());
+        }
+        if !(drawing_part.starts_with("xl/drawings/") && drawing_part.ends_with(".xml"))
+            || drawing_part.contains("/_rels/")
+        {
+            return Err("drawing_part must be an xl/drawings/*.xml path".to_string());
+        }
+        if text.len() > 16 * 1024 || text.chars().any(|c| c.is_control()) {
+            return Err(
+                "drawing shape text must be at most 16KiB and contain no control characters"
+                    .to_string(),
+            );
+        }
+        self.drawing_shape_text_edits
+            .entry(drawing_part.to_string())
+            .or_default()
+            .insert(anchor_index, text.to_string());
+        Ok(())
+    }
+
+    /// Queue a bounded edit to an existing DrawingML text run in a shape.
+    /// The run index is zero-based within the selected anchor and missing
+    /// runs are rejected by the save-time XML rewriter rather than guessed.
+    pub fn set_drawing_shape_text_run(
+        &mut self,
+        drawing_part: &str,
+        anchor_index: usize,
+        run_index: usize,
+        text: &str,
+    ) -> Result<(), String> {
+        if self.loaded_workbook_path.is_none() {
+            return Err("drawing shape edits require a loaded XLSX/XLSM workbook".to_string());
+        }
+        if !(drawing_part.starts_with("xl/drawings/") && drawing_part.ends_with(".xml"))
+            || drawing_part.contains("/_rels/")
+        {
+            return Err("drawing_part must be an xl/drawings/*.xml path".to_string());
+        }
+        if text.len() > 16 * 1024 || text.chars().any(|c| c.is_control()) {
+            return Err(
+                "drawing shape text must be at most 16KiB and contain no control characters"
+                    .to_string(),
+            );
+        }
+        self.drawing_shape_text_run_edits
+            .entry(drawing_part.to_string())
+            .or_default()
+            .insert((anchor_index, run_index), text.to_string());
+        Ok(())
+    }
+
+    /// Queue a bounded edit to an existing drawing anchor's hidden metadata.
+    pub fn set_drawing_shape_hidden(
+        &mut self,
+        drawing_part: &str,
+        anchor_index: usize,
+        hidden: bool,
+    ) -> Result<(), String> {
+        if self.loaded_workbook_path.is_none() {
+            return Err("drawing shape edits require a loaded XLSX/XLSM workbook".to_string());
+        }
+        if !(drawing_part.starts_with("xl/drawings/") && drawing_part.ends_with(".xml"))
+            || drawing_part.contains("/_rels/")
+        {
+            return Err("drawing_part must be an xl/drawings/*.xml path".to_string());
+        }
+        self.drawing_shape_hidden_edits
+            .entry(drawing_part.to_string())
+            .or_default()
+            .insert(anchor_index, hidden);
+        Ok(())
+    }
+
+    /// Queue a bounded update to an existing drawing shape's rotation.
+    /// Rotation is expressed in integer degrees in the inclusive range
+    /// `0..=359`; the writer converts it to DrawingML's 1/60000-degree unit.
+    /// Only an existing `<a:xfrm rot=...>` is changed, so geometry is never
+    /// guessed or synthesized.
+    pub fn set_drawing_shape_rotation(
+        &mut self,
+        drawing_part: &str,
+        anchor_index: usize,
+        degrees: i32,
+    ) -> Result<(), String> {
+        if self.loaded_workbook_path.is_none() {
+            return Err("drawing shape edits require a loaded XLSX/XLSM workbook".to_string());
+        }
+        if !(drawing_part.starts_with("xl/drawings/") && drawing_part.ends_with(".xml"))
+            || drawing_part.contains("/_rels/")
+        {
+            return Err("drawing_part must be an xl/drawings/*.xml path".to_string());
+        }
+        if !(0..=359).contains(&degrees) {
+            return Err("drawing shape rotation must be an integer in 0..=359 degrees".to_string());
+        }
+        self.drawing_shape_rotation_edits
+            .entry(drawing_part.to_string())
+            .or_default()
+            .insert(anchor_index, degrees);
+        Ok(())
+    }
+
+    /// Queue a bounded update to an existing drawing shape's horizontal or
+    /// vertical flip state. At least one component must be supplied.
+    pub fn set_drawing_shape_flip(
+        &mut self,
+        drawing_part: &str,
+        anchor_index: usize,
+        flip_horizontal: Option<bool>,
+        flip_vertical: Option<bool>,
+    ) -> Result<(), String> {
+        if self.loaded_workbook_path.is_none() {
+            return Err("drawing shape edits require a loaded XLSX/XLSM workbook".to_string());
+        }
+        if !(drawing_part.starts_with("xl/drawings/") && drawing_part.ends_with(".xml"))
+            || drawing_part.contains("/_rels/")
+        {
+            return Err("drawing_part must be an xl/drawings/*.xml path".to_string());
+        }
+        if flip_horizontal.is_none() && flip_vertical.is_none() {
+            return Err("at least one drawing shape flip value is required".to_string());
+        }
+        self.drawing_shape_flip_edits
+            .entry(drawing_part.to_string())
+            .or_default()
+            .insert(anchor_index, (flip_horizontal, flip_vertical));
+        Ok(())
+    }
+
+    /// Queue a bounded update to an existing drawing shape's solid RGB fill.
+    /// The accepted value is six-digit RGB or eight-digit ARGB hex.
+    pub fn set_drawing_shape_fill(
+        &mut self,
+        drawing_part: &str,
+        anchor_index: usize,
+        color: &str,
+    ) -> Result<(), String> {
+        if self.loaded_workbook_path.is_none() {
+            return Err("drawing shape edits require a loaded XLSX/XLSM workbook".to_string());
+        }
+        if !(drawing_part.starts_with("xl/drawings/") && drawing_part.ends_with(".xml"))
+            || drawing_part.contains("/_rels/")
+        {
+            return Err("drawing_part must be an xl/drawings/*.xml path".to_string());
+        }
+        let color = color.strip_prefix('#').unwrap_or(color);
+        if !(color.len() == 6 || color.len() == 8)
+            || !color.bytes().all(|byte| byte.is_ascii_hexdigit())
+        {
+            return Err(
+                "drawing shape fill must be a 6-digit RGB or 8-digit ARGB hex string".to_string(),
+            );
+        }
+        let color = if color.len() == 6 {
+            format!("FF{color}")
+        } else {
+            color.to_ascii_uppercase()
+        };
+        self.drawing_shape_fill_edits
+            .entry(drawing_part.to_string())
+            .or_default()
+            .insert(anchor_index, color);
+        Ok(())
+    }
+
+    /// Queue a bounded update to an existing drawing shape's line solid RGB
+    /// color. The shape must already contain an `<a:ln>` and solid fill.
+    pub fn set_drawing_shape_line_color(
+        &mut self,
+        drawing_part: &str,
+        anchor_index: usize,
+        color: &str,
+    ) -> Result<(), String> {
+        if self.loaded_workbook_path.is_none() {
+            return Err("drawing shape edits require a loaded XLSX/XLSM workbook".to_string());
+        }
+        if !(drawing_part.starts_with("xl/drawings/") && drawing_part.ends_with(".xml"))
+            || drawing_part.contains("/_rels/")
+        {
+            return Err("drawing_part must be an xl/drawings/*.xml path".to_string());
+        }
+        let color = color.strip_prefix('#').unwrap_or(color);
+        if !(color.len() == 6 || color.len() == 8)
+            || !color.bytes().all(|byte| byte.is_ascii_hexdigit())
+        {
+            return Err(
+                "drawing shape line color must be a 6-digit RGB or 8-digit ARGB hex string"
+                    .to_string(),
+            );
+        }
+        let color = if color.len() == 6 {
+            format!("FF{color}")
+        } else {
+            color.to_ascii_uppercase()
+        };
+        self.drawing_shape_line_edits
+            .entry(drawing_part.to_string())
+            .or_default()
+            .insert(anchor_index, color);
+        Ok(())
+    }
+
+    /// Queue a bounded update to an existing drawing shape's line width in
+    /// points. The accepted range is 0 through 1584 points.
+    pub fn set_drawing_shape_line_width(
+        &mut self,
+        drawing_part: &str,
+        anchor_index: usize,
+        width_points: f64,
+    ) -> Result<(), String> {
+        if self.loaded_workbook_path.is_none() {
+            return Err("drawing shape edits require a loaded XLSX/XLSM workbook".to_string());
+        }
+        if !(drawing_part.starts_with("xl/drawings/") && drawing_part.ends_with(".xml"))
+            || drawing_part.contains("/_rels/")
+        {
+            return Err("drawing_part must be an xl/drawings/*.xml path".to_string());
+        }
+        if !width_points.is_finite() || !(0.0..=1584.0).contains(&width_points) {
+            return Err(
+                "drawing shape line width must be finite and in 0..=1584 points".to_string(),
+            );
+        }
+        let width_emu = (width_points * 12_700.0).round() as u32;
+        self.drawing_shape_line_width_edits
+            .entry(drawing_part.to_string())
+            .or_default()
+            .insert(anchor_index, width_emu);
+        Ok(())
+    }
+
+    /// Queue a bounded update to an existing drawing shape's preset line dash.
+    /// Only DrawingML `ST_PresetLineDashVal` values are accepted.
+    pub fn set_drawing_shape_line_dash(
+        &mut self,
+        drawing_part: &str,
+        anchor_index: usize,
+        dash: &str,
+    ) -> Result<(), String> {
+        if self.loaded_workbook_path.is_none() {
+            return Err("drawing shape edits require a loaded XLSX/XLSM workbook".to_string());
+        }
+        if !(drawing_part.starts_with("xl/drawings/") && drawing_part.ends_with(".xml"))
+            || drawing_part.contains("/_rels/")
+        {
+            return Err("drawing_part must be an xl/drawings/*.xml path".to_string());
+        }
+        let dash = dash.trim();
+        const ALLOWED: &[&str] = &[
+            "solid",
+            "dot",
+            "dash",
+            "lgDash",
+            "dashDot",
+            "lgDashDot",
+            "lgDashDotDot",
+            "sysDash",
+            "sysDot",
+            "sysDashDot",
+            "sysDashDotDot",
+        ];
+        let Some(value) = ALLOWED
+            .iter()
+            .find(|candidate| candidate.eq_ignore_ascii_case(dash))
+        else {
+            return Err("drawing shape line dash is not a valid DrawingML preset dash".to_string());
+        };
+        self.drawing_shape_line_dash_edits
+            .entry(drawing_part.to_string())
+            .or_default()
+            .insert(anchor_index, (*value).to_string());
+        Ok(())
+    }
+
+    /// Queue a bounded update to an existing DrawingML preset geometry.
+    /// Custom geometry and absent `<a:prstGeom>` elements are rejected.
+    pub fn set_drawing_shape_geometry(
+        &mut self,
+        drawing_part: &str,
+        anchor_index: usize,
+        preset: &str,
+    ) -> Result<(), String> {
+        if self.loaded_workbook_path.is_none() {
+            return Err("drawing shape edits require a loaded XLSX/XLSM workbook".to_string());
+        }
+        if !(drawing_part.starts_with("xl/drawings/") && drawing_part.ends_with(".xml"))
+            || drawing_part.contains("/_rels/")
+        {
+            return Err("drawing_part must be an xl/drawings/*.xml path".to_string());
+        }
+        let preset = preset.trim();
+        const ALLOWED: &[&str] = &[
+            "accentBorderCallout1",
+            "accentBorderCallout2",
+            "accentBorderCallout3",
+            "accentCallout1",
+            "accentCallout2",
+            "accentCallout3",
+            "actionButtonBackPrevious",
+            "actionButtonBeginning",
+            "actionButtonBlank",
+            "actionButtonDocument",
+            "actionButtonEnd",
+            "actionButtonForwardNext",
+            "actionButtonHelp",
+            "actionButtonHome",
+            "actionButtonInformation",
+            "actionButtonMovie",
+            "actionButtonReturn",
+            "actionButtonSound",
+            "arc",
+            "bevel",
+            "blockArc",
+            "bracePair",
+            "bracketPair",
+            "can",
+            "chartPlus",
+            "chartStar",
+            "chartX",
+            "chevron",
+            "chord",
+            "cloud",
+            "cloudCallout",
+            "corner",
+            "cornerTabs",
+            "cube",
+            "curvedDownArrow",
+            "curvedLeftArrow",
+            "curvedRightArrow",
+            "curvedUpArrow",
+            "decagon",
+            "diagStripe",
+            "diamond",
+            "donut",
+            "doubleWave",
+            "downArrow",
+            "downArrowCallout",
+            "ellipse",
+            "ellipseRibbon",
+            "ellipseRibbon2",
+            "flowChartAlternateProcess",
+            "flowChartDecision",
+            "flowChartDocument",
+            "flowChartInputOutput",
+            "flowChartMagneticDisk",
+            "flowChartMultidocument",
+            "flowChartOffpageConnector",
+            "flowChartOnlineStorage",
+            "flowChartPredefinedProcess",
+            "flowChartPreparation",
+            "flowChartProcess",
+            "flowChartPunchedCard",
+            "flowChartPunchedTape",
+            "flowChartSort",
+            "flowChartSummingJunction",
+            "flowChartTerminator",
+            "foldedCorner",
+            "frame",
+            "funnel",
+            "gear6",
+            "gear9",
+            "halfFrame",
+            "heart",
+            "heptagon",
+            "hexagon",
+            "homePlate",
+            "horizontalScroll",
+            "irregularSeal1",
+            "irregularSeal2",
+            "leftArrow",
+            "leftArrowCallout",
+            "leftBrace",
+            "leftBracket",
+            "leftRightArrow",
+            "leftRightArrowCallout",
+            "leftRightUpArrow",
+            "leftUpArrow",
+            "lightningBolt",
+            "line",
+            "lineInv",
+            "mathDivide",
+            "mathEqual",
+            "mathMinus",
+            "mathMultiply",
+            "mathNotEqual",
+            "mathPlus",
+            "moon",
+            "nonIsoscelesTrapezoid",
+            "notchedRightArrow",
+            "noSmoking",
+            "octagon",
+            "parallelogram",
+            "pentagon",
+            "pie",
+            "pieWedge",
+            "plaque",
+            "plus",
+            "quadArrow",
+            "quadArrowCallout",
+            "rect",
+            "ribbon",
+            "ribbon2",
+            "rightArrow",
+            "rightArrowCallout",
+            "rightBrace",
+            "rightBracket",
+            "rightTriangle",
+            "round1Rect",
+            "round2DiagRect",
+            "round2SameRect",
+            "roundRect",
+            "rtTriangle",
+            "snip1Rect",
+            "snip2DiagRect",
+            "snip2SameRect",
+            "snipRoundRect",
+            "squareTabs",
+            "star10",
+            "star12",
+            "star16",
+            "star24",
+            "star32",
+            "star4",
+            "star5",
+            "star6",
+            "star7",
+            "star8",
+            "stripedRightArrow",
+            "sun",
+            "swooshArrow",
+            "teardrop",
+            "trapezoid",
+            "triangle",
+            "upArrow",
+            "upArrowCallout",
+            "upDownArrow",
+            "upDownArrowCallout",
+            "uturnArrow",
+            "verticalScroll",
+            "wave",
+            "wedgeEllipseCallout",
+            "wedgeRectCallout",
+            "wedgeRoundRectCallout",
+            "whisker",
+            "wedgeRoundRectCallout",
+        ];
+        let Some(value) = ALLOWED
+            .iter()
+            .find(|candidate| candidate.eq_ignore_ascii_case(preset))
+        else {
+            return Err("drawing shape geometry is not a supported preset".to_string());
+        };
+        self.drawing_shape_geometry_edits
+            .entry(drawing_part.to_string())
+            .or_default()
+            .insert(anchor_index, (*value).to_string());
         Ok(())
     }
 
@@ -4095,6 +9266,12 @@ impl Vm {
 
         let cells = self.sheets.get(&source_key).cloned().unwrap_or_default();
         self.sheets.insert(new_key.clone(), cells);
+        if let Some(&row) = self.next_append_rows.get(&source_key) {
+            self.next_append_rows.insert(new_key.clone(), row);
+        }
+        if let Some(cache) = self.formula_ast_cache.get(&source_key).cloned() {
+            self.formula_ast_cache.insert(new_key.clone(), cache);
+        }
         self.sheet_order.push(new_key.clone());
 
         if let Some(v) = self.merged_ranges.get(&source_key).cloned() {
@@ -4150,6 +9327,12 @@ impl Vm {
             self.data_validations.insert(new_key.clone(), v);
             self.data_validations_touched.insert(new_key.clone());
         }
+        if let Some(v) = self.conditional_format_ranges.get(&source_key).cloned() {
+            self.conditional_format_ranges.insert(new_key.clone(), v);
+        }
+        if let Some(v) = self.comment_cells.get(&source_key).cloned() {
+            self.comment_cells.insert(new_key.clone(), v);
+        }
         if let Some(v) = self.autofilters.get(&source_key).cloned() {
             // Same reasoning as data_validations just above: the copy has no original
             // worksheet XML of its own, so it must be marked touched unconditionally.
@@ -4191,6 +9374,8 @@ impl Vm {
         if !self.sheets.contains_key(&key) {
             return Err(format!("Sheet '{}' not found", name));
         }
+        self.ooxml_structural_edit_dirty = true;
+        self.sheet_rename_only = false;
         self.sheet_order.retain(|k| k != &key);
         let idx = new_index.min(self.sheet_order.len());
         self.sheet_order.insert(idx, key);
@@ -4220,6 +9405,44 @@ impl Vm {
         Ok(self.sheet_states.get(&key).copied().unwrap_or_default())
     }
 
+    /// Return the source XLSX `sheetId` for `name`, if this sheet came from an
+    /// XLSX/XLSM workbook. This identity is separate from the lowercase VM
+    /// lookup key and from tab position; new and ODS sheets return `None`.
+    pub fn sheet_id(&self, name: &str) -> Result<Option<String>, String> {
+        let key = name.to_lowercase();
+        if !self.sheets.contains_key(&key) {
+            return Err(format!("Sheet '{name}' not found"));
+        }
+        Ok(self
+            .worksheet_origins
+            .get(&key)
+            .and_then(|origin| origin.original_sheet_id.clone()))
+    }
+
+    /// Resolve an XLSX `sheetId` to the current sheet lookup key. The mapping
+    /// follows a sheet through rename and tab reordering, while rejecting
+    /// missing or duplicate identities instead of falling back to position.
+    pub fn sheet_name_for_id(&self, sheet_id: &str) -> Result<String, String> {
+        if sheet_id.trim().is_empty() {
+            return Err("sheetId must not be empty".to_string());
+        }
+        let mut matches = self
+            .worksheet_origins
+            .iter()
+            .filter(|(key, origin)| {
+                self.sheets.contains_key(*key)
+                    && origin.original_sheet_id.as_deref() == Some(sheet_id)
+            })
+            .map(|(key, _)| key.clone());
+        let Some(key) = matches.next() else {
+            return Err(format!("sheetId '{sheet_id}' not found"));
+        };
+        if matches.next().is_some() {
+            return Err(format!("sheetId '{sheet_id}' is duplicated"));
+        }
+        Ok(key)
+    }
+
     /// Evaluates an `ObjectExpr` to the `ObjectRef` it names (Milestone
     /// B7c) — the object-typed sibling of `eval_expr`. `Range("...")`
     /// resolves against `self.active_sheet` *now* (fixed into the returned
@@ -4227,6 +9450,97 @@ impl Vm {
     /// parent worksheet at creation, not at each later `.Value` access).
     fn eval_object_expr(&mut self, expr: &ObjectExpr) -> Result<ObjectRef, String> {
         match expr {
+            ObjectExpr::NewCollection => {
+                let id = self.next_collection_id;
+                self.next_collection_id = self
+                    .next_collection_id
+                    .checked_add(1)
+                    .ok_or_else(|| "Collection identity space exhausted".to_string())?;
+                self.collections.insert(id, VbaCollection::default());
+                Ok(ObjectRef::Collection(id))
+            }
+            ObjectExpr::NewDictionary => {
+                let id = self.next_dictionary_id;
+                self.next_dictionary_id = self
+                    .next_dictionary_id
+                    .checked_add(1)
+                    .ok_or_else(|| "Dictionary identity space exhausted".to_string())?;
+                self.dictionaries.insert(id, VbaDictionary::default());
+                Ok(ObjectRef::Dictionary(id))
+            }
+            ObjectExpr::NewClass(class_name) => {
+                let definition = self
+                    .class_defs
+                    .get(class_name)
+                    .cloned()
+                    .ok_or_else(|| format!("Class '{}' is not registered", class_name))?;
+                let id = self.next_class_instance_id;
+                self.next_class_instance_id = self
+                    .next_class_instance_id
+                    .checked_add(1)
+                    .ok_or_else(|| "Class instance identity space exhausted".to_string())?;
+                self.class_instances.insert(
+                    id,
+                    ClassInstance {
+                        class_name: class_name.clone(),
+                        fields: definition
+                            .fields
+                            .iter()
+                            .filter(|(_, field)| {
+                                !self.is_object_type_name(field.type_name.as_deref())
+                            })
+                            .map(|(name, _)| (name.clone(), Variant::Empty))
+                            .collect(),
+                        object_fields: definition
+                            .fields
+                            .iter()
+                            .filter(|(_, field)| {
+                                self.is_object_type_name(field.type_name.as_deref())
+                            })
+                            .map(|(name, _)| (name.clone(), ObjectRef::Nothing))
+                            .collect(),
+                    },
+                );
+                if definition.methods.contains_key("class_initialize")
+                    && let Err(error) = self.call_class_sub(id, "class_initialize", &[])
+                {
+                    self.class_instances.remove(&id);
+                    return Err(error);
+                }
+                Ok(ObjectRef::Class(id))
+            }
+            ObjectExpr::CollectionItem { target, index } => {
+                if let CollectionTarget::Variable(name) = target
+                    && self.object_arrays.contains_key(name)
+                {
+                    return self.object_array_item(name, std::slice::from_ref(index));
+                }
+                if let Some(range) = self.collection_target_range_ref(target)? {
+                    return self
+                        .range_default_item(&range, std::slice::from_ref(index.as_ref()))
+                        .map(ObjectRef::Range);
+                }
+                if let Some(id) = self.collection_target_class_id(target)? {
+                    let static_type = self.collection_target_static_type(target);
+                    return self.call_property_get_object(
+                        id,
+                        "item",
+                        std::slice::from_ref(index.as_ref()),
+                        static_type.as_deref(),
+                    );
+                }
+                let id = self.collection_target_id(target)?;
+                let index = self.eval_expr(index)?;
+                self.collection_object_value(id, &index)
+            }
+            ObjectExpr::ObjectArrayItem { name, indices } => {
+                if let Some(ObjectRef::Range(range)) = self.object_variables.get(name).cloned() {
+                    return self
+                        .range_default_item(&range, indices)
+                        .map(ObjectRef::Range);
+                }
+                self.object_array_item(name, indices)
+            }
             ObjectExpr::RangeLit(addr) => {
                 let areas = self
                     .resolve_multi_area_addr(addr)
@@ -4236,12 +9550,148 @@ impl Vm {
                     areas,
                 }))
             }
-            ObjectExpr::Var(name) => self.object_variables.get(name).cloned().ok_or_else(|| {
-                format!(
-                    "Object variable '{}' is not set (Set was never called, or it holds Nothing)",
-                    name
-                )
-            }),
+            ObjectExpr::Var(name) => {
+                if name == "nothing" {
+                    return Ok(ObjectRef::Nothing);
+                }
+                if name == "me"
+                    && let Some(id) = self.current_class_instance_id()
+                {
+                    return Ok(ObjectRef::Class(id));
+                }
+                self.resolve_object_name(name)
+            }
+            ObjectExpr::Member { target, member } => {
+                let reference = self
+                    .object_target_ref(target)?
+                    .ok_or_else(|| format!("Object member '{}' requires an object", member))?;
+                if let ObjectRef::Worksheet(key) = &reference
+                    && member == "usedrange"
+                {
+                    let ((start_row, start_col), (end_row, end_col)) =
+                        self.sheet_used_range(key).unwrap_or(((1, 1), (1, 1)));
+                    return Ok(ObjectRef::Range(RangeRef::single(
+                        key.clone(),
+                        Rect {
+                            start_row,
+                            start_col,
+                            end_row,
+                            end_col,
+                        },
+                    )));
+                }
+                if reference == ObjectRef::Workbook && member == "activesheet" {
+                    return Ok(ObjectRef::Worksheet(self.active_sheet.clone()));
+                }
+                let ObjectRef::Class(id) = reference else {
+                    return Err(format!(
+                        "Object member '{}' requires a class instance",
+                        member
+                    ));
+                };
+                let static_type = self.object_target_static_type(target);
+                if let Ok((property, _)) =
+                    self.class_property_for(id, member, PropertyKind::Get, static_type.as_deref())
+                {
+                    if !self.is_object_type_name(property.return_type.as_deref()) {
+                        return Err(format!(
+                            "Property Get '{}' does not return an object",
+                            member
+                        ));
+                    }
+                    self.call_property_get_object(id, member, &[], static_type.as_deref())
+                } else {
+                    let field = self
+                        .class_field_def(id, member)
+                        .cloned()
+                        .ok_or_else(|| format!("Class member '{}' not found", member))?;
+                    self.enforce_access(id, member, field.access)?;
+                    self.class_object_field(id, member)
+                        .ok_or_else(|| format!("Class member '{}' is not object-valued", member))
+                }
+            }
+            ObjectExpr::MethodCall {
+                target,
+                method,
+                args,
+            } => {
+                let reference = self
+                    .object_target_ref(target)?
+                    .ok_or_else(|| format!("Object method '{}' requires an object", method))?;
+                if let ObjectRef::Worksheet(key) = &reference {
+                    return match method.as_str() {
+                        "range" => match args.as_slice() {
+                            [Expr::Str(addr)] => {
+                                let areas = parse_multi_area_addr(addr).ok_or_else(|| {
+                                    format!("Worksheet.Range: invalid address '{}'", addr)
+                                })?;
+                                Ok(ObjectRef::Range(RangeRef {
+                                    sheet: key.clone(),
+                                    areas,
+                                }))
+                            }
+                            _ => Err("Worksheet.Range requires one string address".to_string()),
+                        },
+                        "cells" | "item" => match args.as_slice() {
+                            [row, col] => {
+                                let row = to_cell_index(self.eval_expr(row)?, "row")?;
+                                let col = to_cell_index(self.eval_expr(col)?, "col")?;
+                                Ok(ObjectRef::Range(RangeRef::single(
+                                    key.clone(),
+                                    Rect {
+                                        start_row: row,
+                                        start_col: col,
+                                        end_row: row,
+                                        end_col: col,
+                                    },
+                                )))
+                            }
+                            _ => Err(format!("Worksheet.{} requires row and column", method)),
+                        },
+                        _ => Err(format!(
+                            "Worksheet method '{}' does not return an object",
+                            method
+                        )),
+                    };
+                }
+                if let ObjectRef::Range(range) = reference {
+                    return match method.as_str() {
+                        "cells" | "item" => {
+                            self.range_default_item(&range, args).map(ObjectRef::Range)
+                        }
+                        "range" => match args.as_slice() {
+                            [Expr::Str(addr)] => self
+                                .relative_address_ref(&range, addr)
+                                .map(ObjectRef::Range),
+                            _ => Err("Range.Range requires one string address".to_string()),
+                        },
+                        _ => Err(format!("Range method '{}' is not implemented", method)),
+                    };
+                }
+                if reference == ObjectRef::Workbook {
+                    if !matches!(method.as_str(), "worksheets" | "sheets") || args.len() != 1 {
+                        return Err(format!("Workbook method '{}' is not implemented", method));
+                    }
+                    let (key, display) = self.resolve_sheet_expr(&args[0])?;
+                    self.require_sheet_exists(&display, &key)?;
+                    return Ok(ObjectRef::Worksheet(key));
+                }
+                let ObjectRef::Class(id) = reference else {
+                    return Err(format!(
+                        "Object method '{}' requires a class instance",
+                        method
+                    ));
+                };
+                let static_type = self.object_target_static_type(target);
+                if self
+                    .class_func_for(id, method, static_type.as_deref())
+                    .is_ok()
+                {
+                    self.call_class_object_func_expr(id, method, args, static_type.as_deref())
+                } else {
+                    self.call_property_get_object(id, method, args, static_type.as_deref())
+                }
+            }
             ObjectExpr::Union(parts) => {
                 let mut areas: Vec<Rect> = Vec::new();
                 let mut sheet: Option<String> = None;
@@ -4277,13 +9727,22 @@ impl Vm {
                     r.areas[(i - 1) as usize],
                 )))
             }
-            ObjectExpr::SpecialCellsVisible(base) => {
+            ObjectExpr::SpecialCells {
+                base,
+                cell_type,
+                value,
+            } => {
                 let r = expect_range_ref(self.eval_object_expr(base)?, "SpecialCells")?;
-                let areas = self.visible_areas(&r.sheet, &r.areas);
+                let cell_type = to_f64(&self.eval_expr(cell_type)?)? as i64;
+                let value = value
+                    .as_deref()
+                    .map(|expr| self.eval_expr(expr))
+                    .transpose()?
+                    .map(|value| to_f64(&value).map(|n| n as i64))
+                    .transpose()?;
+                let areas = self.special_cells_areas(&r, cell_type, value)?;
                 if areas.is_empty() {
-                    return Err(
-                        "SpecialCells: no visible cells were found (Error 1004)".to_string()
-                    );
+                    return Err("SpecialCells: no cells were found (Error 1004)".to_string());
                 }
                 Ok(ObjectRef::Range(RangeRef {
                     sheet: r.sheet,
@@ -4291,6 +9750,155 @@ impl Vm {
                 }))
             }
         }
+    }
+
+    /// Implements Excel's `Range.SpecialCells(Type, Value)` selection over
+    /// the receiver's captured sheet and areas. Cell-materializing variants
+    /// are bounded before iteration so a full-sheet blank query cannot turn
+    /// into an unbounded scan or multi-million-area allocation.
+    fn special_cells_areas(
+        &self,
+        range: &RangeRef,
+        cell_type: i64,
+        value_mask: Option<i64>,
+    ) -> Result<Vec<Rect>, String> {
+        const XL_CELL_TYPE_ALL_FORMAT_CONDITIONS: i64 = -4172;
+        const XL_CELL_TYPE_SAME_FORMAT_CONDITIONS: i64 = -4173;
+        const XL_CELL_TYPE_ALL_VALIDATION: i64 = -4174;
+        const XL_CELL_TYPE_SAME_VALIDATION: i64 = -4175;
+        const XL_CELL_TYPE_COMMENTS: i64 = -4144;
+        const XL_CELL_TYPE_FORMULAS: i64 = -4123;
+        const XL_CELL_TYPE_CONSTANTS: i64 = 2;
+        const XL_CELL_TYPE_BLANKS: i64 = 4;
+        const XL_CELL_TYPE_LAST_CELL: i64 = 11;
+        const XL_CELL_TYPE_VISIBLE: i64 = 12;
+
+        if cell_type == XL_CELL_TYPE_VISIBLE {
+            return Ok(self.visible_areas(&range.sheet, &range.areas));
+        }
+        if cell_type == XL_CELL_TYPE_LAST_CELL {
+            let Some(((_, _), (row, col))) = self.sheet_used_range(&range.sheet) else {
+                return Ok(Vec::new());
+            };
+            return Ok(
+                if range
+                    .areas
+                    .iter()
+                    .any(|area| rect_has_cell(*area, row, col))
+                {
+                    vec![Rect {
+                        start_row: row,
+                        start_col: col,
+                        end_row: row,
+                        end_col: col,
+                    }]
+                } else {
+                    Vec::new()
+                },
+            );
+        }
+        if !matches!(
+            cell_type,
+            XL_CELL_TYPE_ALL_FORMAT_CONDITIONS
+                | XL_CELL_TYPE_SAME_FORMAT_CONDITIONS
+                | XL_CELL_TYPE_ALL_VALIDATION
+                | XL_CELL_TYPE_SAME_VALIDATION
+                | XL_CELL_TYPE_COMMENTS
+                | XL_CELL_TYPE_FORMULAS
+                | XL_CELL_TYPE_CONSTANTS
+                | XL_CELL_TYPE_BLANKS
+        ) {
+            return Err(format!(
+                "SpecialCells: unsupported cell type {} (Error 1004)",
+                cell_type
+            ));
+        }
+
+        let mut scan_count = 0_u64;
+        for area in &range.areas {
+            let count = u64::from(area.rows())
+                .checked_mul(u64::from(area.cols()))
+                .ok_or_else(|| "BUDGET: SpecialCells range size overflowed".to_string())?;
+            scan_count = scan_count
+                .checked_add(count)
+                .ok_or_else(|| "BUDGET: SpecialCells range size overflowed".to_string())?;
+        }
+        if let Some(limit) = self.max_cells
+            && scan_count > limit as u64
+        {
+            return Err(format!(
+                "BUDGET: SpecialCells scan limit exceeded ({}; maximum is {})",
+                scan_count, limit
+            ));
+        }
+
+        let cells = self.sheets.get(&range.sheet);
+        let validations = self.data_validations.get(&range.sheet);
+        let format_groups = self.conditional_format_ranges.get(&range.sheet);
+        let comments = self.comment_cells.get(&range.sheet);
+        let anchor = range.areas.first().map(|a| (a.start_row, a.start_col));
+        let anchor_validation = anchor.and_then(|(row, col)| {
+            validations.and_then(|rules| {
+                rules
+                    .iter()
+                    .find(|rule| merge_rects_have_cell(&rule.sqref, row, col))
+            })
+        });
+        let anchor_formats: Vec<usize> = anchor
+            .map(|(row, col)| format_group_ids(format_groups, row, col))
+            .unwrap_or_default();
+        let mask = value_mask.unwrap_or(1 | 2 | 4 | 16);
+        let mut selected = BTreeSet::new();
+        for area in &range.areas {
+            for row in area.start_row..=area.end_row {
+                for col in area.start_col..=area.end_col {
+                    let content = cells.and_then(|sheet| sheet.get(&(row, col)));
+                    let matches = match cell_type {
+                        XL_CELL_TYPE_CONSTANTS => content.is_some_and(|cell| {
+                            cell.formula.is_none()
+                                && !matches!(cell.value, Variant::Empty)
+                                && special_value_matches(&cell.value, mask)
+                        }),
+                        XL_CELL_TYPE_FORMULAS => content.is_some_and(|cell| {
+                            cell.formula.is_some() && special_value_matches(&cell.value, mask)
+                        }),
+                        XL_CELL_TYPE_BLANKS => content.is_none_or(|cell| {
+                            cell.formula.is_none() && matches!(cell.value, Variant::Empty)
+                        }),
+                        XL_CELL_TYPE_COMMENTS => {
+                            comments.is_some_and(|set| set.contains(&(row, col)))
+                        }
+                        XL_CELL_TYPE_ALL_VALIDATION => validations.is_some_and(|rules| {
+                            rules
+                                .iter()
+                                .any(|rule| merge_rects_have_cell(&rule.sqref, row, col))
+                        }),
+                        XL_CELL_TYPE_SAME_VALIDATION => {
+                            anchor_validation.is_some_and(|anchor_rule| {
+                                validations.is_some_and(|rules| {
+                                    rules.iter().any(|rule| {
+                                        merge_rects_have_cell(&rule.sqref, row, col)
+                                            && same_validation_criteria(rule, anchor_rule)
+                                    })
+                                })
+                            })
+                        }
+                        XL_CELL_TYPE_ALL_FORMAT_CONDITIONS => {
+                            !format_group_ids(format_groups, row, col).is_empty()
+                        }
+                        XL_CELL_TYPE_SAME_FORMAT_CONDITIONS => {
+                            !anchor_formats.is_empty()
+                                && format_group_ids(format_groups, row, col) == anchor_formats
+                        }
+                        _ => unreachable!("validated SpecialCells type"),
+                    };
+                    if matches {
+                        selected.insert((row, col));
+                    }
+                }
+            }
+        }
+        Ok(coalesce_cells_to_rects(selected))
     }
 
     /// `SpecialCells(xlCellTypeVisible)`'s geometry (Milestone B7c item 4):
@@ -4373,6 +9981,7 @@ impl Vm {
             let prev = self.active_sheet.clone();
             self.active_sheet = r.sheet.clone();
             self.cell_index_dirty = true;
+            self.auto_event_suppression_depth += 1;
             let result = (|| -> Result<(), String> {
                 for row in area.start_row..=area.end_row {
                     for col in area.start_col..=area.end_col {
@@ -4381,24 +9990,14 @@ impl Vm {
                 }
                 Ok(())
             })();
+            self.auto_event_suppression_depth -= 1;
+            let notify = result
+                .and_then(|()| self.dispatch_worksheet_change_after_range_write(&r.sheet, area));
             self.active_sheet = prev;
             self.cell_index_dirty = true;
-            result
+            notify
         } else {
-            if let Some(cells) = self.sheets.get_mut(&r.sheet) {
-                for row in area.start_row..=area.end_row {
-                    for col in area.start_col..=area.end_col {
-                        cells.insert(
-                            (row, col),
-                            CellContent {
-                                formula: None,
-                                value: v.clone(),
-                            },
-                        );
-                    }
-                }
-            }
-            self.cell_index_dirty = true;
+            self.set_scalar_range_on_sheet(&r.sheet, area, v)?;
             Ok(())
         }
     }
@@ -4889,19 +10488,133 @@ impl Vm {
     /// Two failure messages are preserved exactly so CLI callers can keep
     /// classifying them the way `--file` already does (`E3001`/`io_error`
     /// vs `E3002`/`sheet_setup_error`): a literal `"workbook has no sheets"`
-    /// for an empty workbook, or `"cannot read '<path>': <reader error>"`
-    /// for anything else.
+    /// for an empty workbook, the reader's deterministic unsupported-extension
+    /// error unchanged, or `"cannot read '<path>': <reader error>"` for any
+    /// other read failure.
     pub fn load_workbook_file(&mut self, path: &str) -> Result<Vec<String>, String> {
+        self.load_workbook_file_with_options(path, &reader::ReadOptions::default())
+    }
+
+    /// Load a workbook using explicit reader resource and cancellation controls.
+    pub fn load_workbook_file_with_options(
+        &mut self,
+        path: &str,
+        options: &reader::ReadOptions,
+    ) -> Result<Vec<String>, String> {
         self.loaded_workbook_name = std::path::Path::new(path)
             .file_name()
             .map(|n| n.to_string_lossy().to_string());
         self.loaded_workbook_path = Some(path.to_string());
-        let sheets =
-            reader::read_workbook(path).map_err(|e| format!("cannot read '{}': {}", path, e))?;
+        self.external_links_policy = options.external_links;
+        let is_ods = std::path::Path::new(path)
+            .extension()
+            .is_some_and(|value| value.eq_ignore_ascii_case("ods"));
+        let (sheets, date1904, defined_names) = if is_ods {
+            (
+                reader::read_workbook_with_options(path, options)
+                    .map_err(|error| format!("cannot read '{}': {}", path, error))?,
+                false,
+                Vec::new(),
+            )
+        } else {
+            let workbook =
+                reader::read_workbook_buffer_with_options(path, options).map_err(|error| {
+                    if error == "unsupported input extension; use .xlsx, .xlsm, or .ods" {
+                        error
+                    } else {
+                        format!("cannot read '{}': {}", path, error)
+                    }
+                })?;
+            (
+                workbook
+                    .sheets
+                    .into_iter()
+                    .map(|sheet| sheet.sheet)
+                    .collect(),
+                workbook.date1904,
+                workbook.defined_names,
+            )
+        };
         if sheets.is_empty() {
             return Err("workbook has no sheets".to_string());
         }
-        Ok(self.populate_from_sheets(sheets))
+        self.workbook_date1904 = date1904;
+        let names = self.populate_from_sheets(sheets);
+        self.load_simple_defined_names_from_decls(&defined_names)?;
+        Ok(names)
+    }
+
+    /// Whether the loaded workbook declares Excel's 1904 date system.
+    /// `false` is the default for new VMs and 1900-system workbooks.
+    pub fn workbook_date1904(&self) -> bool {
+        self.workbook_date1904
+    }
+
+    #[cfg_attr(not(feature = "python"), allow(dead_code))]
+    pub(crate) fn set_workbook_date1904(&mut self, value: bool) {
+        self.workbook_date1904 = value;
+    }
+
+    /// Import the deliberately small, address-only subset of OOXML defined
+    /// names that the workbook formula engine can evaluate today. Qualified,
+    /// dynamic, table, and external references remain available through
+    /// `defined_names()` but are not silently converted into a wrong address.
+    #[allow(dead_code)]
+    pub(crate) fn load_simple_defined_names(&mut self, path: &str) -> Result<(), String> {
+        self.loaded_named_ranges.clear();
+        self.scoped_named_ranges.clear();
+        let Some(bytes) = reader::read_raw_zip_entry_if_present(path, "xl/workbook.xml")
+            .map_err(|e| format!("cannot read '{}': {}", path, e))?
+        else {
+            return Ok(());
+        };
+        let Ok(xml) = String::from_utf8(bytes) else {
+            return Ok(());
+        };
+        let declarations = reader::xlsx_defined_name_decls(&xml)?;
+        self.load_simple_defined_names_from_decls(&declarations)
+    }
+
+    fn load_simple_defined_names_from_decls(
+        &mut self,
+        declarations: &[reader::XlsxDefinedName],
+    ) -> Result<(), String> {
+        self.loaded_named_ranges.clear();
+        self.scoped_named_ranges.clear();
+        for decl in declarations {
+            let address = decl.raw_text.trim().trim_start_matches('=').trim();
+            let valid_address =
+                if address.contains('!') || crate::types::parse_range_addr(address).is_none() {
+                    formula::parse(address)
+                        .is_ok_and(|expr| !matches!(expr, crate::formula::ast::FormulaExpr::Str(_)))
+                } else {
+                    true
+                };
+            if address.is_empty()
+                || address.contains('(')
+                || address.contains(')')
+                || address.contains('#')
+                || !valid_address
+            {
+                continue;
+            }
+            let name = decl.name.to_ascii_lowercase();
+            if name.is_empty() {
+                continue;
+            }
+            if let Some(local_sheet_id) = decl.local_sheet_id {
+                let Some(sheet) = self.sheet_order.get(local_sheet_id) else {
+                    continue;
+                };
+                self.scoped_named_ranges
+                    .entry(sheet.clone())
+                    .or_default()
+                    .insert(name, address.to_string());
+            } else {
+                self.loaded_named_ranges.insert(name, address.to_string());
+            }
+        }
+        Ok(())
     }
 
     /// Every `<definedName name="...">TEXT</definedName>` in the loaded
@@ -4944,15 +10657,15 @@ impl Vm {
         let Some(path) = self.loaded_workbook_path.as_deref() else {
             return Ok(HashMap::new());
         };
-        let raw_entries = reader::read_raw_zip_entries(path)
-            .map_err(|e| format!("cannot read '{}': {}", path, e))?;
-        let Some(xml) = raw_entries
-            .get("xl/workbook.xml")
-            .and_then(|bytes| String::from_utf8(bytes.clone()).ok())
+        let Some(bytes) = reader::read_raw_zip_entry_if_present(path, "xl/workbook.xml")
+            .map_err(|e| format!("cannot read '{}': {}", path, e))?
         else {
             return Ok(HashMap::new());
         };
-        Ok(reader::xlsx_defined_names(&xml).into_iter().collect())
+        let Ok(xml) = String::from_utf8(bytes) else {
+            return Ok(HashMap::new());
+        };
+        Ok(reader::xlsx_defined_names(&xml)?.into_iter().collect())
     }
 
     /// Populates this `Vm` from already-read sheet data and sets the active
@@ -4975,8 +10688,12 @@ impl Vm {
     pub(crate) fn populate_from_sheets(&mut self, sheets: Vec<WorkbookSheet>) -> Vec<String> {
         self.sheets.clear();
         self.sheet_order.clear();
+        self.next_append_rows.clear();
+        self.formula_ast_cache.clear();
+        self.loaded_named_ranges.clear();
+        self.scoped_named_ranges.clear();
         let mut names = Vec::with_capacity(sheets.len());
-        for sheet_data in &sheets {
+        for mut sheet_data in sheets {
             self.ensure_sheet(&sheet_data.name);
             let prev = self.active_sheet.clone();
             // Lowercased, matching `active_sheet`'s documented invariant —
@@ -4986,19 +10703,36 @@ impl Vm {
             // non-lowercase sheet name (found and fixed during extraction:
             // confirmed via a hand-crafted .xlsx with a sheet named "Input"
             // that panicked with "active sheet must exist" before this fix).
-            self.active_sheet = sheet_data.name.to_lowercase();
-            for (&(row, col), cell) in &sheet_data.cells {
+            let key = sheet_data.name.to_lowercase();
+            self.active_sheet = key.clone();
+            let mut formulas = std::mem::take(&mut sheet_data.formulas);
+            let source_cells = std::mem::take(&mut sheet_data.cells);
+            let target_cells = self
+                .sheets
+                .get_mut(&key)
+                .expect("just-inserted sheet must exist");
+            target_cells.reserve(source_cells.len().saturating_add(formulas.len()));
+            let formulas_present = !formulas.is_empty();
+            for ((row, col), cell) in source_cells {
                 let value = match cell {
-                    SheetCell::Integer(n) => Variant::Integer(*n),
-                    SheetCell::Float(f) => Variant::Float(*f),
-                    SheetCell::Str(s) => Variant::Str(s.clone()),
-                    SheetCell::Bool(b) => Variant::Boolean(*b),
-                    SheetCell::Error(e) => Variant::Error(e.clone()),
+                    SheetCell::Integer(n) => Variant::Integer(n),
+                    SheetCell::Float(f) => Variant::Float(f),
+                    SheetCell::Str(s) => Variant::Str(s),
+                    SheetCell::Bool(b) => Variant::Boolean(b),
+                    SheetCell::Error(e) => Variant::Error(e),
                 };
-                self.cells_mut().insert(
+                target_cells.insert(
                     (row, col),
                     CellContent {
-                        formula: sheet_data.formulas.get(&(row, col)).cloned(),
+                        // Numeric/text-only sheets are the dominant bulk-data
+                        // path. Avoid a HashMap lookup for every cell when the
+                        // parser found no formulas at all; the formula-bearing
+                        // path retains the existing coordinate-aware lookup.
+                        formula: if formulas_present {
+                            formulas.remove(&(row, col))
+                        } else {
+                            None
+                        },
                         value,
                     },
                 );
@@ -5012,31 +10746,28 @@ impl Vm {
             // text, but nothing ever reads `formulas` for a `(row, col)` `cells` doesn't
             // already have. Without this, such a formula silently vanished on load, even
             // though its text was successfully parsed one line up in `xlsx_sheet_cells`.
-            for (&(row, col), formula) in &sheet_data.formulas {
-                if sheet_data.cells.contains_key(&(row, col)) {
-                    continue; // already inserted above, with its real cached value
-                }
-                self.cells_mut().insert(
+            for ((row, col), formula) in formulas {
+                target_cells.insert(
                     (row, col),
                     CellContent {
-                        formula: Some(formula.clone()),
+                        formula: Some(formula),
                         value: Variant::Empty,
                     },
                 );
             }
+            self.cell_index_dirty = true;
             self.active_sheet = prev;
-            let key = sheet_data.name.to_lowercase();
             if !sheet_data.merged_ranges.is_empty() {
                 self.merged_ranges
-                    .insert(key.clone(), sheet_data.merged_ranges.clone());
+                    .insert(key.clone(), sheet_data.merged_ranges);
             }
             if !sheet_data.raw_style_indices.is_empty() {
                 self.cell_style_indices
-                    .insert(key.clone(), sheet_data.raw_style_indices.clone());
+                    .insert(key.clone(), sheet_data.raw_style_indices);
             }
             if !sheet_data.cell_number_formats.is_empty() {
                 self.cell_number_formats
-                    .insert(key.clone(), sheet_data.cell_number_formats.clone());
+                    .insert(key.clone(), sheet_data.cell_number_formats);
             }
             if !sheet_data.hidden_rows.is_empty() || !sheet_data.hidden_columns.is_empty() {
                 self.sheet_visibility.insert(
@@ -5044,13 +10775,13 @@ impl Vm {
                     SheetVisibility {
                         hidden_rows: sheet_data
                             .hidden_rows
-                            .iter()
-                            .map(|&(start, end)| Interval { start, end })
+                            .into_iter()
+                            .map(|(start, end)| Interval { start, end })
                             .collect(),
                         hidden_columns: sheet_data
                             .hidden_columns
-                            .iter()
-                            .map(|&(start, end)| Interval { start, end })
+                            .into_iter()
+                            .map(|(start, end)| Interval { start, end })
                             .collect(),
                     },
                 );
@@ -5060,38 +10791,44 @@ impl Vm {
                 self.sheet_states.insert(key.clone(), state);
             }
             if !sheet_data.row_heights.is_empty() {
-                self.row_heights
-                    .insert(key.clone(), sheet_data.row_heights.clone());
+                self.row_heights.insert(key.clone(), sheet_data.row_heights);
             }
             if !sheet_data.column_widths.is_empty() {
                 self.column_widths
-                    .insert(key.clone(), sheet_data.column_widths.clone());
+                    .insert(key.clone(), sheet_data.column_widths);
             }
             if !sheet_data.row_styles.is_empty() {
-                self.row_styles
-                    .insert(key.clone(), sheet_data.row_styles.clone());
+                self.row_styles.insert(key.clone(), sheet_data.row_styles);
             }
             if !sheet_data.column_styles.is_empty() {
                 self.column_styles
-                    .insert(key.clone(), sheet_data.column_styles.clone());
+                    .insert(key.clone(), sheet_data.column_styles);
             }
             if !sheet_data.tables.is_empty() {
-                self.tables.insert(key.clone(), sheet_data.tables.clone());
+                self.tables.insert(key.clone(), sheet_data.tables);
             }
             if !sheet_data.data_validations.is_empty() {
                 self.data_validations
-                    .insert(key.clone(), sheet_data.data_validations.clone());
+                    .insert(key.clone(), sheet_data.data_validations);
             }
-            if let Some(af) = sheet_data.autofilter.clone() {
+            if !sheet_data.conditional_format_ranges.is_empty() {
+                self.conditional_format_ranges
+                    .insert(key.clone(), sheet_data.conditional_format_ranges);
+            }
+            if !sheet_data.comment_cells.is_empty() {
+                self.comment_cells
+                    .insert(key.clone(), sheet_data.comment_cells.into_iter().collect());
+            }
+            if let Some(af) = sheet_data.autofilter {
                 self.autofilters.insert(key.clone(), af);
             }
             self.worksheet_origins.insert(
                 key.clone(),
                 WorksheetOrigin {
-                    original_sheet_id: sheet_data.sheet_id.clone(),
-                    original_workbook_rel_id: sheet_data.workbook_rel_id.clone(),
-                    original_part_name: sheet_data.source_part_name.clone(),
-                    original_display_name: Some(sheet_data.name.clone()),
+                    original_sheet_id: sheet_data.sheet_id,
+                    original_workbook_rel_id: sheet_data.workbook_rel_id,
+                    original_part_name: sheet_data.source_part_name,
+                    original_display_name: Some(sheet_data.name),
                 },
             );
             names.push(key);
@@ -5104,7 +10841,13 @@ impl Vm {
 
     fn sheet_cells_mut(&mut self, name: &str) -> Option<&mut HashMap<(u32, u32), CellContent>> {
         self.cell_index_dirty = true;
-        self.sheets.get_mut(&name.to_lowercase())
+        let key = name.to_lowercase();
+        self.cell_tile_cache
+            .lock()
+            .expect("cell tile cache mutex poisoned")
+            .remove(&key);
+        self.next_append_rows.remove(&key);
+        self.sheets.get_mut(&key)
     }
 
     /// Drain and return every MsgBox message recorded since the last call
@@ -5120,18 +10863,370 @@ impl Vm {
         self.current_span
     }
 
+    /// Drain the structured category for the most recent uncaught execution
+    /// failure. The plain `String` returned by `run_sub` remains unchanged.
+    pub fn take_runtime_failure(&mut self) -> Option<RuntimeFailureKind> {
+        self.last_runtime_failure.take()
+    }
+
+    /// Set the VBA-compatible event switch. Event handlers are opt-in in the
+    /// headless runtime and are not inferred from cell mutations.
+    pub fn set_enable_events(&mut self, enabled: bool) {
+        self.enable_events = enabled;
+    }
+
+    /// Return the current VBA-compatible event switch.
+    pub fn enable_events(&self) -> bool {
+        self.enable_events
+    }
+
+    /// Dispatch one explicitly requested, zero-argument event procedure.
+    ///
+    /// Returns `true` when the handler ran and `false` when events are
+    /// disabled or a handler is already running (re-entry suppression). The
+    /// handler name is resolved case-insensitively by `run_sub`; automatic
+    /// Workbook/Worksheet event discovery and `Target` argument binding are
+    /// intentionally outside this first bounded event slice.
+    pub fn run_event(&mut self, program: &Program, event_name: &str) -> Result<bool, String> {
+        if !self.enable_events || self.event_dispatch_depth != 0 {
+            return Ok(false);
+        }
+        let name = event_name.trim();
+        if name.is_empty() {
+            return Err("event name cannot be empty".to_string());
+        }
+        let normalized = name.to_lowercase();
+        if !matches!(
+            normalized.as_str(),
+            "workbook_open"
+                | "workbook_beforeclose"
+                | "worksheet_change"
+                | "worksheet_calculate"
+                | "worksheet_selectionchange"
+        ) {
+            return Err(format!(
+                "unsupported event '{}': explicit event dispatch supports Workbook_Open, Workbook_BeforeClose, Worksheet_Change, Worksheet_Calculate, and Worksheet_SelectionChange",
+                event_name
+            ));
+        }
+        let matching: Vec<_> = program
+            .subs
+            .iter()
+            .filter(|sub| sub.name.eq_ignore_ascii_case(&normalized))
+            .collect();
+        if matching.len() > 1 {
+            return Err(format!(
+                "duplicate event '{}' in one module — dispatch order is ambiguous",
+                event_name
+            ));
+        }
+        let sub = matching
+            .first()
+            .ok_or_else(|| format!("event '{}' not found", event_name))?;
+        if !sub.params.is_empty() {
+            return Err(format!(
+                "event '{}' requires arguments; Target binding is not implemented",
+                event_name
+            ));
+        }
+        self.event_dispatch_depth = 1;
+        let result = self.run_sub(program, &normalized);
+        self.event_dispatch_depth = 0;
+        result.map(|()| true)
+    }
+
+    /// Dispatch `Worksheet_Change(Target)` with an explicitly supplied A1
+    /// target range on the active sheet. The handler must have exactly one
+    /// `As Range` parameter; the binding is temporary and restored afterward.
+    /// This is explicit only: ordinary cell writes do not trigger it.
+    pub fn run_worksheet_change(
+        &mut self,
+        program: &Program,
+        target_address: &str,
+    ) -> Result<bool, String> {
+        if !self.enable_events || self.event_dispatch_depth != 0 {
+            return Ok(false);
+        }
+        let matching: Vec<_> = program
+            .subs
+            .iter()
+            .filter(|sub| sub.name.eq_ignore_ascii_case("worksheet_change"))
+            .collect();
+        if matching.len() > 1 {
+            return Err(
+                "duplicate event 'Worksheet_Change' in one module — dispatch order is ambiguous"
+                    .to_string(),
+            );
+        }
+        let sub = matching
+            .first()
+            .ok_or_else(|| "event 'Worksheet_Change' not found".to_string())?;
+        if sub.params.len() != 1
+            || sub.param_types.first().and_then(Option::as_deref) != Some("range")
+        {
+            return Err(
+                "event 'Worksheet_Change' requires exactly one parameter declared As Range"
+                    .to_string(),
+            );
+        }
+        let ((start_row, start_col), (end_row, end_col)) = self
+            .resolve_range_addr(target_address)
+            .filter(|&((start_row, start_col), (end_row, end_col))| {
+                start_row > 0 && start_col > 0 && end_row >= start_row && end_col >= start_col
+            })
+            .ok_or_else(|| format!("Worksheet_Change: invalid target range '{target_address}'"))?;
+        let target_name = sub.params[0].clone();
+        let old_target = self.object_variables.insert(
+            target_name.clone(),
+            ObjectRef::Range(RangeRef::single(
+                self.active_sheet.clone(),
+                Rect {
+                    start_row,
+                    start_col,
+                    end_row,
+                    end_col,
+                },
+            )),
+        );
+        let old_type = self
+            .object_variable_types
+            .insert(target_name.clone(), "range".to_string());
+        self.event_dispatch_depth = 1;
+        let result = self.run_sub(program, "Worksheet_Change");
+        self.event_dispatch_depth = 0;
+        match old_target {
+            Some(value) => {
+                self.object_variables.insert(target_name.clone(), value);
+            }
+            None => {
+                self.object_variables.remove(&target_name);
+            }
+        }
+        match old_type {
+            Some(value) => {
+                self.object_variable_types.insert(target_name, value);
+            }
+            None => {
+                self.object_variable_types.remove(&target_name);
+            }
+        }
+        let mut result = result.map(|()| true);
+        if result.is_err() {
+            self.pending_worksheet_changes.clear();
+        } else if self.event_dispatch_depth == 0 {
+            while let Some(area) = self.pending_worksheet_changes.pop_front() {
+                if self.automatic_event_chain_count >= MAX_AUTOMATIC_WORKSHEET_CHANGES {
+                    result = Err(format!(
+                        "Worksheet_Change event chain exceeded {} dispatches",
+                        MAX_AUTOMATIC_WORKSHEET_CHANGES
+                    ));
+                    self.pending_worksheet_changes.clear();
+                    break;
+                }
+                self.automatic_event_chain_count += 1;
+                let target_address = format!(
+                    "{}{}:{}{}",
+                    column_letters(area.start_col),
+                    area.start_row,
+                    column_letters(area.end_col),
+                    area.end_row
+                );
+                if let Err(error) = self.run_worksheet_change(program, &target_address) {
+                    result = Err(error);
+                    self.pending_worksheet_changes.clear();
+                    break;
+                }
+            }
+        }
+        result
+    }
+
+    fn dispatch_worksheet_change_after_range_write(
+        &mut self,
+        sheet: &str,
+        area: Rect,
+    ) -> Result<(), String> {
+        let has_handler = self.auto_event_program.as_ref().is_some_and(|program| {
+            program
+                .subs
+                .iter()
+                .any(|sub| sub.name.eq_ignore_ascii_case("worksheet_change"))
+        });
+        if self.auto_event_suppression_depth != 0
+            || !self.enable_events
+            || sheet != self.active_sheet
+            || !has_handler
+        {
+            return Ok(());
+        }
+        if self.event_dispatch_depth != 0 {
+            if self.pending_worksheet_changes.len() >= MAX_AUTOMATIC_WORKSHEET_CHANGES {
+                return Err(format!(
+                    "Worksheet_Change event chain exceeded {} queued changes",
+                    MAX_AUTOMATIC_WORKSHEET_CHANGES
+                ));
+            }
+            self.pending_worksheet_changes.push_back(area);
+            return Ok(());
+        }
+        let program = self
+            .auto_event_program
+            .as_ref()
+            .expect("worksheet handler was checked above")
+            .clone();
+        let target_address = format!(
+            "{}{}:{}{}",
+            column_letters(area.start_col),
+            area.start_row,
+            column_letters(area.end_col),
+            area.end_row
+        );
+        let outer_chain = !self.automatic_event_chain_active;
+        if outer_chain {
+            self.automatic_event_chain_active = true;
+            self.automatic_event_chain_count = 1;
+        }
+        let result = self
+            .run_worksheet_change(&program, &target_address)
+            .map(|_| ());
+        if outer_chain {
+            self.automatic_event_chain_active = false;
+            self.pending_worksheet_changes.clear();
+        }
+        result
+    }
+
+    /// Run an entrypoint with an opt-in `Workbook_Open` dispatch first.
+    ///
+    /// The ordinary `run_sub` contract remains event-free for compatibility.
+    /// If the program contains `Workbook_Open`, this method runs it only when
+    /// events are enabled, then runs `sub_name`; an event failure prevents the
+    /// main entrypoint from running.
+    pub fn run_sub_with_events(&mut self, program: &Program, sub_name: &str) -> Result<(), String> {
+        // Sheet code names are only consulted when selecting an automatic
+        // worksheet event handler. Defer loading them until event dispatch so
+        // ordinary workbook editing does not reopen every worksheet XML part.
+        if let Some(path) = self.loaded_workbook_path.clone() {
+            self.load_sheet_code_names(&path)?;
+        }
+        let previous = self.auto_event_program.replace(program.clone());
+        let result = (|| {
+            if program
+                .subs
+                .iter()
+                .any(|sub| sub.name.eq_ignore_ascii_case("workbook_open"))
+            {
+                self.run_event(program, "Workbook_Open")?;
+            }
+            self.run_sub(program, sub_name)
+        })();
+        self.auto_event_program = previous;
+        result
+    }
+
+    /// Run a multi-module entrypoint with an opt-in, uniquely resolved
+    /// `Workbook_Open` dispatch first. Class modules are not workbook event
+    /// owners here. Multiple standard-module handlers are rejected rather
+    /// than resolved by source traversal order.
+    pub fn run_sub_multi_with_events(
+        &mut self,
+        modules: &[(String, Program)],
+        entrypoint: &str,
+    ) -> Result<(), String> {
+        let open_handlers: Vec<_> = modules
+            .iter()
+            .filter(|(_, program)| !program.is_class_module)
+            .filter(|(_, program)| {
+                program
+                    .subs
+                    .iter()
+                    .any(|sub| sub.name.eq_ignore_ascii_case("workbook_open"))
+            })
+            .collect();
+        if open_handlers.len() > 1 {
+            return Err(format!(
+                "duplicate Workbook_Open across modules '{}' — event dispatch order is ambiguous",
+                open_handlers
+                    .iter()
+                    .map(|(name, _)| name.as_str())
+                    .collect::<Vec<_>>()
+                    .join("', '")
+            ));
+        }
+        let change_handlers: Vec<_> = modules
+            .iter()
+            .filter(|(_, program)| !program.is_class_module)
+            .filter(|(_, program)| {
+                program
+                    .subs
+                    .iter()
+                    .any(|sub| sub.name.eq_ignore_ascii_case("worksheet_change"))
+            })
+            .collect();
+        let selected_change_handler = match change_handlers.as_slice() {
+            [] => None,
+            [handler] => Some(*handler),
+            _ => {
+                let worksheet_handlers: Vec<_> = change_handlers
+                    .iter()
+                    .filter(|(name, _)| {
+                        name.eq_ignore_ascii_case(&self.active_sheet)
+                            || self
+                                .sheet_code_names
+                                .get(&self.active_sheet)
+                                .is_some_and(|code_name| name.eq_ignore_ascii_case(code_name))
+                    })
+                    .collect();
+                if worksheet_handlers.len() == 1 {
+                    Some(*worksheet_handlers[0])
+                } else {
+                    return Err(format!(
+                        "duplicate Worksheet_Change across modules '{}' — event dispatch order is ambiguous",
+                        change_handlers
+                            .iter()
+                            .map(|(name, _)| name.as_str())
+                            .collect::<Vec<_>>()
+                            .join("', '")
+                    ));
+                }
+            }
+        };
+        let previous = self.auto_event_program.take();
+        if let Some((_, program)) = selected_change_handler {
+            self.auto_event_program = Some(program.clone());
+        }
+        let result = (|| {
+            if let Some((_, program)) = open_handlers.first() {
+                self.run_event(program, "Workbook_Open")?;
+            }
+            self.run_sub_multi_impl(modules, entrypoint, true)
+        })();
+        self.auto_event_program = previous;
+        result
+    }
+
     pub fn run_sub(&mut self, program: &Program, sub_name: &str) -> Result<(), String> {
+        self.next_append_rows.clear();
         // Each run starts with a clean message log — otherwise a Vm reused
         // across multiple run_sub calls (e.g. from the Python bindings)
         // would leak the previous run's MsgBox text into this run's result.
         self.msgbox_log.clear();
         self.last_resolution_failure = None;
+        self.last_runtime_failure = None;
         self.err_number = 0;
         self.err_description.clear();
         self.err_source.clear();
         self.err_help_file.clear();
         self.err_help_context = 0;
         self.pending_raised_error = None;
+        self.deferred_gc_error = None;
+        self.instruction_count = 0;
+        // `variables` is public for the native API, so validate values that a
+        // caller may have inserted directly before execution starts. Values
+        // created by VBA are checked at their mutation boundary below; this
+        // one-time scan replaces the former full recursive scan after every
+        // statement.
+        self.check_variable_budget()?;
         // A Vm reused across multiple run_sub calls must not carry the
         // previous run's call frames (or their On Error state) into this
         // one — call_sub_def pushes the entrypoint's own frame below, so
@@ -5139,19 +11234,70 @@ impl Vm {
         self.call_stack.clear();
         self.option_base = program.option_base;
         // Cache user-defined functions, subs, and type definitions.
-        self.user_funcs = program
-            .funcs
-            .iter()
-            .map(|f| (f.name.clone(), f.clone()))
-            .collect();
-        self.user_subs = program
-            .subs
-            .iter()
-            .map(|s| (s.name.clone(), s.clone()))
-            .collect();
+        self.current_class_instances.clear();
+        if program.is_class_module {
+            let class_name = program
+                .module_name
+                .clone()
+                .unwrap_or_else(|| "class1".to_string())
+                .to_lowercase();
+            self.class_defs.insert(
+                class_name,
+                ClassDefinition {
+                    fields: program
+                        .class_fields
+                        .iter()
+                        .map(|field| (field.name.clone(), field.clone()))
+                        .collect(),
+                    methods: program
+                        .subs
+                        .iter()
+                        .map(|sub| (sub.name.clone(), sub.clone()))
+                        .collect(),
+                    functions: program
+                        .funcs
+                        .iter()
+                        .map(|function| (function.name.clone(), function.clone()))
+                        .collect(),
+                    properties: program
+                        .properties
+                        .iter()
+                        .map(|property| ((property.name.clone(), property.kind), property.clone()))
+                        .collect(),
+                    implements: program.implements.clone(),
+                },
+            );
+            self.user_funcs.clear();
+            self.user_subs.clear();
+        } else {
+            self.user_funcs = program
+                .funcs
+                .iter()
+                .map(|f| (f.name.clone(), Arc::new(f.clone())))
+                .collect();
+            self.user_subs = program
+                .subs
+                .iter()
+                .map(|s| (s.name.clone(), Arc::new(s.clone())))
+                .collect();
+        }
+        let duplicate_types = parser::find_type_collisions(program);
+        if let Some(name) = duplicate_types.first() {
+            return Err(format!(
+                "duplicate Type '{}' in one module — UDT declarations must be unique",
+                name
+            ));
+        }
         for td in &program.type_defs {
             self.type_defs.insert(td.name.clone(), td.fields.clone());
+            if let Some(module_name) = program.module_name.as_deref() {
+                self.type_defs.insert(
+                    format!("{}.{}", module_name.to_lowercase(), td.name),
+                    td.fields.clone(),
+                );
+            }
         }
+        self.validate_and_bind_implements()?;
 
         // Pre-flight compile-time check, run before any statement (including
         // the entrypoint's own first line) executes — see
@@ -5171,24 +11317,41 @@ impl Vm {
             .get(&name)
             .ok_or_else(|| format!("Sub '{}' not found", sub_name))?
             .clone();
-        self.call_sub_def(&sub, &[])
+        let result = self.call_sub_def(&sub, &[]);
+        self.capture_runtime_failure(&result);
+        self.reclaim_unreachable_collections();
+        result
     }
 
     /// Multi-module entrypoint (Milestone B2): `modules` is a list of
     /// (module_name, Program) pairs. Rejects the run at load time if any
     /// bare Sub or Function name collides across modules — the flat merge
     /// used for in-body calls can't express VBA's own-module-first/Private
-    /// scoping, so a colliding name is refused rather than resolved
-    /// silently (see `parser::find_cross_module_sub_collisions`). Otherwise
-    /// behaves like `run_sub`, generalized to N modules; `entrypoint` may be
-    /// a bare name or a `Module.Sub`-qualified one.
+    /// scoping, so a colliding procedure is refused rather than resolved
+    /// silently. UDT names are module-scoped and may legitimately collide.
+    /// Otherwise behaves like `run_sub`, generalized to N modules;
+    /// `entrypoint` may be a bare name or a `Module.Sub`-qualified one.
     pub fn run_sub_multi(
         &mut self,
         modules: &[(String, Program)],
         entrypoint: &str,
     ) -> Result<(), String> {
+        self.run_sub_multi_impl(modules, entrypoint, false)
+    }
+
+    fn run_sub_multi_impl(
+        &mut self,
+        modules: &[(String, Program)],
+        entrypoint: &str,
+        allow_worksheet_change_collision: bool,
+    ) -> Result<(), String> {
+        self.next_append_rows.clear();
+        self.last_runtime_failure = None;
         let sub_collisions = parser::find_cross_module_sub_collisions(modules);
-        if let Some((name, mods)) = sub_collisions.first() {
+        if let Some((name, mods)) = sub_collisions
+            .iter()
+            .find(|(name, _)| !(allow_worksheet_change_collision && name == "worksheet_change"))
+        {
             return Err(format!(
                 "duplicate Sub '{}' across modules '{}' — cross-module name collisions aren't supported yet; own-module-first/Private scoping isn't modeled — rename one of them",
                 name,
@@ -5203,6 +11366,34 @@ impl Vm {
                 mods.join("', '")
             ));
         }
+        for (_, program) in modules {
+            if let Some(name) = parser::find_type_collisions(program).first() {
+                return Err(format!(
+                    "duplicate Type '{}' in one module — UDT declarations must be unique",
+                    name
+                ));
+            }
+        }
+
+        // Files without `Attribute VB_Name` still receive a stable module
+        // name from the multi-module loader. Stamp that name onto cloned
+        // procedure definitions so bare UDT lookup works for both declared
+        // and derived module names.
+        let scoped_modules: Vec<(String, Program)> = modules
+            .iter()
+            .map(|(module_name, program)| {
+                let mut program = program.clone();
+                let scope = Some(module_name.to_lowercase());
+                for sub in &mut program.subs {
+                    sub.module_name = scope.clone();
+                }
+                for func in &mut program.funcs {
+                    func.module_name = scope.clone();
+                }
+                (module_name.to_lowercase(), program)
+            })
+            .collect();
+        let modules = scoped_modules;
 
         self.msgbox_log.clear();
         self.last_resolution_failure = None;
@@ -5212,7 +11403,10 @@ impl Vm {
         self.err_help_file.clear();
         self.err_help_context = 0;
         self.pending_raised_error = None;
+        self.deferred_gc_error = None;
+        self.instruction_count = 0;
         self.call_stack.clear();
+        self.check_variable_budget()?;
         // Real VBA scopes `Option Base` per module; this codebase's `Vm`
         // is a single flat namespace across every loaded module (same
         // simplification `user_funcs`/`user_subs`/`type_defs` already
@@ -5225,17 +11419,54 @@ impl Vm {
             .unwrap_or(0);
         self.user_funcs.clear();
         self.user_subs.clear();
-        for (_, program) in modules {
-            for f in &program.funcs {
-                self.user_funcs.insert(f.name.clone(), f.clone());
-            }
-            for s in &program.subs {
-                self.user_subs.insert(s.name.clone(), s.clone());
+        self.current_class_instances.clear();
+        for (module_name, program) in &modules {
+            if program.is_class_module {
+                self.class_defs.insert(
+                    module_name.clone(),
+                    ClassDefinition {
+                        fields: program
+                            .class_fields
+                            .iter()
+                            .map(|field| (field.name.clone(), field.clone()))
+                            .collect(),
+                        methods: program
+                            .subs
+                            .iter()
+                            .map(|sub| (sub.name.clone(), sub.clone()))
+                            .collect(),
+                        functions: program
+                            .funcs
+                            .iter()
+                            .map(|function| (function.name.clone(), function.clone()))
+                            .collect(),
+                        properties: program
+                            .properties
+                            .iter()
+                            .map(|property| {
+                                ((property.name.clone(), property.kind), property.clone())
+                            })
+                            .collect(),
+                        implements: program.implements.clone(),
+                    },
+                );
+            } else {
+                for f in &program.funcs {
+                    self.user_funcs.insert(f.name.clone(), Arc::new(f.clone()));
+                }
+                for s in &program.subs {
+                    self.user_subs.insert(s.name.clone(), Arc::new(s.clone()));
+                }
             }
             for td in &program.type_defs {
                 self.type_defs.insert(td.name.clone(), td.fields.clone());
+                self.type_defs.insert(
+                    format!("{}.{}", module_name.to_lowercase(), td.name),
+                    td.fields.clone(),
+                );
             }
         }
+        self.validate_and_bind_implements()?;
 
         // Same pre-flight compile-time check as `run_sub`, run once per
         // module — each module only sees its own `Program`, so
@@ -5244,10 +11475,10 @@ impl Vm {
         // `main.rs`'s own multi-module `elixcee check` path already does,
         // or a legitimate unqualified cross-module call would be
         // misreported as undefined.
-        for (name, program) in modules {
+        for (name, program) in &modules {
             let mut other_module_names: HashSet<String> = HashSet::new();
-            for (other_name, other_program) in modules {
-                if other_name != name {
+            for (other_name, other_program) in &modules {
+                if other_name != name && !other_program.is_class_module {
                     other_module_names.extend(other_program.subs.iter().map(|s| s.name.clone()));
                     other_module_names.extend(other_program.funcs.iter().map(|f| f.name.clone()));
                 }
@@ -5258,16 +11489,32 @@ impl Vm {
             }
         }
 
-        let sub = match parser::resolve_entrypoint(modules, entrypoint) {
+        let sub = match parser::resolve_entrypoint(&modules, entrypoint) {
             EntrypointResolution::Found(sub) => sub.clone(),
             EntrypointResolution::NotFound => {
                 return Err(format!("Sub '{}' not found", entrypoint));
             }
         };
-        self.call_sub_def(&sub, &[])
+        let result = self.call_sub_def(&sub, &[]);
+        self.capture_runtime_failure(&result);
+        self.reclaim_unreachable_collections();
+        result
+    }
+
+    fn capture_runtime_failure(&mut self, result: &Result<(), String>) {
+        if result.is_err() && self.last_runtime_failure.is_none() {
+            self.last_runtime_failure = result
+                .as_ref()
+                .err()
+                .map(|message| RuntimeFailureKind::from_message(message));
+        }
     }
 
     fn call_sub_def(&mut self, sub: &SubDef, args: &[Variant]) -> Result<(), String> {
+        self.check_call_depth()?;
+        for value in args {
+            self.check_variant_budget(value)?;
+        }
         let saved: Vec<(String, Option<Variant>)> = sub
             .params
             .iter()
@@ -5280,7 +11527,6 @@ impl Vm {
                 (p.clone(), old)
             })
             .collect();
-        let body = sub.body.clone();
         // A fresh frame per call — real VBA's `On Error` scope is the
         // procedure, not the call site, so this callee starts with no
         // active handler regardless of what the caller's own frame has set
@@ -5291,7 +11537,10 @@ impl Vm {
             procedure_name: sub.name.clone(),
             error_mode: ErrorMode::Disabled,
         });
-        let result = self.exec_body(&body, |f| matches!(f, ExitKind::Sub));
+        let previous_module_scope = self.current_module_scope.clone();
+        self.current_module_scope = sub.module_name.clone();
+        let result = self.exec_body(&sub.body, |f| matches!(f, ExitKind::Sub));
+        self.current_module_scope = previous_module_scope;
         self.call_stack.pop();
         result?;
         for (p, old) in saved {
@@ -5308,6 +11557,10 @@ impl Vm {
     }
 
     fn call_func_def(&mut self, func: &FuncDef, args: &[Variant]) -> Result<Variant, String> {
+        self.check_call_depth()?;
+        for value in args {
+            self.check_variant_budget(value)?;
+        }
         let saved: Vec<(String, Option<Variant>)> = func
             .params
             .iter()
@@ -5322,12 +11575,16 @@ impl Vm {
             .collect();
         let ret_name = func.name.clone();
         let old_ret = self.variables.remove(&ret_name);
-        let body = func.body.clone();
         self.call_stack.push(CallFrame {
             procedure_name: func.name.clone(),
             error_mode: ErrorMode::Disabled,
         });
-        let result = self.exec_body(&body, |f| matches!(f, ExitKind::Function | ExitKind::Sub));
+        let previous_module_scope = self.current_module_scope.clone();
+        self.current_module_scope = func.module_name.clone();
+        let result = self.exec_body(&func.body, |f| {
+            matches!(f, ExitKind::Function | ExitKind::Sub)
+        });
+        self.current_module_scope = previous_module_scope;
         self.call_stack.pop();
         result?;
         let ret_val = self.variables.remove(&ret_name).unwrap_or(Variant::Empty);
@@ -5434,14 +11691,24 @@ impl Vm {
         if self.exit_flag.is_some() {
             return Ok(());
         }
+        self.charge_instruction()?;
         self.current_span = Some(spanned.span);
-        let result = self.exec_stmt_inner(&spanned.stmt);
+        let mut result = self
+            .exec_stmt_inner(&spanned.stmt)
+            .and_then(|()| self.check_cell_budget());
+        if result.is_ok()
+            && let Some(error) = self.deferred_gc_error.take()
+        {
+            result = Err(error);
+        }
         match result {
             Ok(()) => Ok(()),
             // `On Error Resume Next` is not honored in strict-resolution
             // mode (`diagnose`) — see the field doc on `strict_resolution`.
             Err(e)
                 if !self.strict_resolution
+                    && !e.starts_with("BUDGET:")
+                    && !e.starts_with("SECURITY:")
                     && matches!(self.current_error_mode(), Some(ErrorMode::ResumeNext)) =>
             {
                 self.record_error(&e);
@@ -5455,21 +11722,14 @@ impl Vm {
         match stmt {
             Stmt::Assignment { var, value } => {
                 let v = self.eval_expr(value)?;
-                self.variables.insert(var.clone(), v);
+                self.check_variant_budget(&v)?;
+                self.assign_scalar_variable(var, v)?;
             }
             Stmt::CellWrite { row, col, value } => {
-                let active = self.active_sheet.clone();
-                self.check_sheet_not_protected(&active, &active)?;
                 let r = to_cell_index(self.eval_expr(row)?, "row")?;
                 let c = to_cell_index(self.eval_expr(col)?, "col")?;
                 let v = self.eval_expr(value)?;
-                self.cells_mut().insert(
-                    (r, c),
-                    CellContent {
-                        formula: None,
-                        value: v,
-                    },
-                );
+                self.set_cell_value(r, c, v)?;
             }
             Stmt::SetCalcMode(mode) => {
                 let m = match mode {
@@ -5510,46 +11770,65 @@ impl Vm {
                     i += step_f;
                 }
             }
-            Stmt::ForEach {
-                var,
-                range_addr,
-                body,
-            } => {
-                let ((r1, c1), (r2, c2)) = self
-                    .resolve_range_addr(range_addr)
-                    .ok_or_else(|| format!("ForEach: invalid range '{}'", range_addr))?;
-                'fe_outer: for r in r1..=r2 {
-                    for c in c1..=c2 {
-                        self.check_deadline()?;
-                        let v = self.get_cell(r, c);
-                        self.variables.insert(var.clone(), v);
-                        // `For Each c In Range(...)` binds `c` to a real
-                        // single-cell Range *object*, not just the cell's
-                        // value — so `c.Value` reads that cell (it used to
-                        // fall through to the UDT path and silently yield
-                        // Empty) and a `Dim c As Range` loop variable stops
-                        // reading as the never-Set Nothing its declaration
-                        // registered. The plain value stays in `variables`
-                        // too, so a bare `c` in an arithmetic context keeps
-                        // working exactly as before (VBA's own default-
-                        // property behavior).
-                        self.object_variables.insert(
-                            var.clone(),
-                            ObjectRef::Range(RangeRef::single(
-                                self.active_sheet.clone(),
-                                Rect {
-                                    start_row: r,
-                                    start_col: c,
-                                    end_row: r,
-                                    end_col: c,
-                                },
-                            )),
-                        );
-                        for s in body {
-                            self.exec_stmt(s)?;
+            Stmt::ForEach { var, source, body } => match source {
+                ForEachSource::Range(range_addr) => {
+                    let ((r1, c1), (r2, c2)) = self
+                        .resolve_range_addr(range_addr)
+                        .ok_or_else(|| format!("ForEach: invalid range '{}'", range_addr))?;
+                    'fe_range: for r in r1..=r2 {
+                        for c in c1..=c2 {
+                            self.check_deadline()?;
+                            let v = self.get_cell(r, c);
+                            self.check_variant_budget(&v)?;
+                            self.variables.insert(var.clone(), v);
+                            // A Range iteration variable exposes both its
+                            // default value and the single-cell Range object.
+                            self.assign_object_variable(
+                                var.clone(),
+                                ObjectRef::Range(RangeRef::single(
+                                    self.active_sheet.clone(),
+                                    Rect {
+                                        start_row: r,
+                                        start_col: c,
+                                        end_row: r,
+                                        end_col: c,
+                                    },
+                                )),
+                            )?;
+                            for s in body {
+                                self.exec_stmt(s)?;
+                                if matches!(self.exit_flag, Some(ExitKind::For)) {
+                                    self.exit_flag = None;
+                                    break 'fe_range;
+                                }
+                                if self.exit_flag.is_some() {
+                                    return Ok(());
+                                }
+                            }
+                        }
+                    }
+                }
+                ForEachSource::ObjectVar(collection_var) => {
+                    let id = self.collection_id(collection_var)?;
+                    self.run_collection_for_each(var, id, body)?;
+                }
+                ForEachSource::DictionaryKeys(dictionary_var) => {
+                    let id = self.dictionary_id(dictionary_var)?;
+                    let keys = self
+                        .dictionaries
+                        .get(&id)
+                        .ok_or_else(|| OBJECT_NOT_SET.to_string())?
+                        .entries
+                        .iter()
+                        .map(|entry| entry.key.clone())
+                        .collect::<Vec<_>>();
+                    for key in keys {
+                        self.variables.insert(var.clone(), Variant::Str(key));
+                        for statement in body {
+                            self.exec_stmt(statement)?;
                             if matches!(self.exit_flag, Some(ExitKind::For)) {
                                 self.exit_flag = None;
-                                break 'fe_outer;
+                                break;
                             }
                             if self.exit_flag.is_some() {
                                 return Ok(());
@@ -5557,7 +11836,7 @@ impl Vm {
                         }
                     }
                 }
-            }
+            },
             Stmt::If {
                 condition,
                 then_body,
@@ -5595,8 +11874,8 @@ impl Vm {
                 };
                 'do_loop: while check(self, pre_cond)? {
                     self.check_deadline()?;
-                    for s in body.clone() {
-                        self.exec_stmt(&s)?;
+                    for s in body {
+                        self.exec_stmt(s)?;
                         if matches!(self.exit_flag, Some(ExitKind::Do)) {
                             self.exit_flag = None;
                             break 'do_loop;
@@ -5728,25 +12007,130 @@ impl Vm {
                 self.set_current_error_mode(ErrorMode::Disabled);
             }
             Stmt::CallSub { name, args } => {
-                let arg_vals: Vec<Variant> = args
-                    .iter()
-                    .map(|a| self.eval_expr(a))
-                    .collect::<Result<_, _>>()?;
-                if let Some(func) = self.user_funcs.get(name).cloned() {
+                let class_id = self.current_class_instance_id();
+                let class_has_sub = class_id.is_some_and(|id| {
+                    self.class_instances
+                        .get(&id)
+                        .and_then(|instance| self.class_defs.get(&instance.class_name))
+                        .is_some_and(|definition| definition.methods.contains_key(name))
+                });
+                let class_has_func = class_id.is_some_and(|id| {
+                    self.class_instances
+                        .get(&id)
+                        .and_then(|instance| self.class_defs.get(&instance.class_name))
+                        .is_some_and(|definition| definition.functions.contains_key(name))
+                });
+                if class_has_sub {
+                    self.call_class_sub_expr(class_id.expect("checked above"), name, args, None)?;
+                } else if class_has_func {
+                    let _ = self.call_class_func_expr(
+                        class_id.expect("checked above"),
+                        name,
+                        args,
+                        None,
+                    )?;
+                } else if let Some(func) = self.user_funcs.get(name).cloned() {
+                    let arg_vals: Vec<Variant> = args
+                        .iter()
+                        .map(|a| self.eval_expr(a))
+                        .collect::<Result<_, _>>()?;
                     let _ = self.call_func_def(&func, &arg_vals)?;
                 } else if let Some(sub) = self.user_subs.get(name).cloned() {
+                    let arg_vals: Vec<Variant> = args
+                        .iter()
+                        .map(|a| self.eval_expr(a))
+                        .collect::<Result<_, _>>()?;
                     self.call_sub_def(&sub, &arg_vals)?;
                 } else {
                     return Err(format!("Sub/Function '{}' not found", name));
                 }
             }
+            Stmt::ObjectMethodCall {
+                target,
+                method,
+                args,
+            } => {
+                let reference = self.object_target_ref(target)?;
+                if let Some(ObjectRef::Worksheet(key)) = reference {
+                    if !args.is_empty() {
+                        return Err(format!("Worksheet.{} expects no arguments", method));
+                    }
+                    match method.as_str() {
+                        "activate" | "select" => {
+                            self.activate_worksheet(&Expr::Str(key))?;
+                        }
+                        _ => {
+                            return Err(format!(
+                                "Worksheet method '{}' is not implemented",
+                                method
+                            ));
+                        }
+                    }
+                } else if let Some(ObjectRef::Dictionary(id)) = reference {
+                    if method == "removeall" && args.is_empty() {
+                        self.dictionaries
+                            .get_mut(&id)
+                            .ok_or_else(|| OBJECT_NOT_SET.to_string())?
+                            .entries
+                            .clear();
+                    } else {
+                        return Err(format!("Dictionary method '{}' is not implemented", method));
+                    }
+                } else if let Some(ObjectRef::Range(range)) = reference {
+                    if !args.is_empty() {
+                        return Err(format!("Range.{} expects no arguments", method));
+                    }
+                    if matches!(method.as_str(), "clear" | "clearcontents") {
+                        let area = *range.single_rect().ok_or_else(|| {
+                            format!("Range.{}: multi-area range cannot be cleared", method)
+                        })?;
+                        self.clear_range_on_sheet(&range.sheet, area, method == "clearcontents")?;
+                    } else {
+                        return Err(format!("Range method '{}' is not implemented", method));
+                    }
+                } else if let Some(ObjectRef::Class(id)) = reference {
+                    let static_type = self.object_target_static_type(target);
+                    if self
+                        .class_sub_for(id, method, static_type.as_deref())
+                        .is_ok()
+                    {
+                        self.call_class_sub_expr(id, method, args, static_type.as_deref())?;
+                    } else if let Ok((function, _)) =
+                        self.class_func_for(id, method, static_type.as_deref())
+                    {
+                        if self.is_object_type_name(function.return_type.as_deref()) {
+                            let _ = self.call_class_object_func_expr(
+                                id,
+                                method,
+                                args,
+                                static_type.as_deref(),
+                            )?;
+                        } else {
+                            let _ = self.call_class_func_expr(
+                                id,
+                                method,
+                                args,
+                                static_type.as_deref(),
+                            )?;
+                        }
+                    } else {
+                        let _ = self.call_property_get_scalar(
+                            id,
+                            method,
+                            args,
+                            static_type.as_deref(),
+                        )?;
+                    }
+                    self.reclaim_unreachable_collections();
+                }
+            }
             Stmt::SetAppProp { prop, value } => {
-                let v = self.eval_expr(value);
-                if prop == "cutcopymode"
-                    && let Ok(v) = &v
-                    && !is_truthy(v)
-                {
+                let v = self.eval_expr(value)?;
+                if prop == "cutcopymode" && !is_truthy(&v) {
                     self.clipboard = None;
+                }
+                if prop == "enableevents" {
+                    self.enable_events = is_truthy(&v);
                 }
             }
             Stmt::RangeName { addr, name } => {
@@ -5760,50 +12144,64 @@ impl Vm {
                 let active = self.active_sheet.clone();
                 self.check_sheet_not_protected(&active, &active)?;
                 let v = self.eval_expr(value)?;
+                self.check_variant_budget(&v)?;
                 let ((r1, c1), (r2, c2)) = self
                     .resolve_range_addr(addr)
                     .ok_or_else(|| format!("RangeWrite: invalid address '{}'", addr))?;
                 if *is_formula {
                     let s = vba_to_str(&v);
-                    for r in r1..=r2 {
-                        for c in c1..=c2 {
-                            self.set_cell_formula(r, c, &s)?;
-                        }
-                    }
-                } else {
-                    // Batch writes: access sheet directly to avoid N dirty-flag sets
-                    let sheet = self.active_sheet.clone();
-                    if let Some(cells) = self.sheets.get_mut(&sheet) {
+                    self.auto_event_suppression_depth += 1;
+                    let result = (|| -> Result<(), String> {
                         for r in r1..=r2 {
                             for c in c1..=c2 {
-                                cells.insert(
-                                    (r, c),
-                                    CellContent {
-                                        formula: None,
-                                        value: v.clone(),
-                                    },
-                                );
+                                self.set_cell_formula(r, c, &s)?;
                             }
                         }
-                    }
-                    self.cell_index_dirty = true;
+                        Ok(())
+                    })();
+                    self.auto_event_suppression_depth -= 1;
+                    result?;
+                    self.dispatch_worksheet_change_after_range_write(
+                        &active,
+                        Rect {
+                            start_row: r1,
+                            start_col: c1,
+                            end_row: r2,
+                            end_col: c2,
+                        },
+                    )?;
+                } else {
+                    let sheet = self.active_sheet.clone();
+                    self.set_scalar_range_on_sheet(
+                        &sheet,
+                        Rect {
+                            start_row: r1,
+                            start_col: c1,
+                            end_row: r2,
+                            end_col: c2,
+                        },
+                        &v,
+                    )?;
                 }
             }
-            Stmt::RangeClear { addr, .. } => {
-                let active = self.active_sheet.clone();
-                self.check_sheet_not_protected(&active, &active)?;
+            Stmt::RangeClear {
+                addr,
+                contents_only,
+            } => {
                 let ((r1, c1), (r2, c2)) = self
                     .resolve_range_addr(addr)
                     .ok_or_else(|| format!("RangeClear: invalid address '{}'", addr))?;
                 let sheet = self.active_sheet.clone();
-                if let Some(cells) = self.sheets.get_mut(&sheet) {
-                    for r in r1..=r2 {
-                        for c in c1..=c2 {
-                            cells.remove(&(r, c));
-                        }
-                    }
-                }
-                self.cell_index_dirty = true;
+                self.clear_range_on_sheet(
+                    &sheet,
+                    Rect {
+                        start_row: r1,
+                        start_col: c1,
+                        end_row: r2,
+                        end_col: c2,
+                    },
+                    *contents_only,
+                )?;
             }
             Stmt::RangeOffsetWrite {
                 addr,
@@ -5818,15 +12216,15 @@ impl Vm {
                     .ok_or_else(|| format!("RangeOffsetWrite: invalid address '{}'", addr))?;
                 let ro = to_f64(&self.eval_expr(row_off)?)? as i64;
                 let co = to_f64(&self.eval_expr(col_off)?)? as i64;
-                let row = (base_r as i64 + ro) as u32;
-                let col = (base_c as i64 + co) as u32;
-                self.cells_mut().insert(
-                    (row, col),
-                    CellContent {
-                        formula: None,
-                        value: v,
-                    },
-                );
+                let row = base_r as i64 + ro;
+                let col = base_c as i64 + co;
+                if !(1..=u32::MAX as i64).contains(&row) || !(1..=u32::MAX as i64).contains(&col) {
+                    return Err(
+                        "RangeOffsetWrite: offset resolves outside worksheet coordinates"
+                            .to_string(),
+                    );
+                }
+                self.set_cell_value_on_sheet(&active, row as u32, col as u32, v)?;
             }
             Stmt::RangeDelete { addr, axis } => {
                 let active = self.active_sheet.clone();
@@ -5942,7 +12340,163 @@ impl Vm {
                     self.do_paste(dst_addr, false)?;
                 }
             }
+            Stmt::CollectionAdd {
+                target,
+                item,
+                key,
+                before,
+                after,
+            } => {
+                if let Some(id) = self.collection_target_class_id(target)? {
+                    let mut args = vec![self.eval_expr(item)?];
+                    for optional in [key, before, after].into_iter().flatten() {
+                        args.push(self.eval_expr(optional)?);
+                    }
+                    self.call_class_sub(id, "add", &args)?;
+                    self.reclaim_unreachable_collections();
+                    return Ok(());
+                }
+                if let CollectionTarget::Variable(name) = target
+                    && let Some(ObjectRef::Dictionary(id)) =
+                        self.object_variables.get(name).cloned()
+                {
+                    if before.is_some() || after.is_some() || key.is_none() {
+                        return Err(
+                            "Dictionary.Add requires a key and does not support Before/After"
+                                .to_string(),
+                        );
+                    }
+                    let key_expr = key.as_ref().unwrap();
+                    let key = Self::dictionary_key(
+                        self.eval_expr(item)?,
+                        self.dictionaries
+                            .get(&id)
+                            .ok_or_else(|| OBJECT_NOT_SET.to_string())?
+                            .compare_mode,
+                    )?;
+                    let item = self.eval_collection_value(key_expr)?;
+                    if let CollectionValue::Scalar(value) = &item {
+                        self.check_variant_budget(value)?;
+                    }
+                    let current_len = self
+                        .dictionaries
+                        .get(&id)
+                        .ok_or_else(|| OBJECT_NOT_SET.to_string())?
+                        .entries
+                        .len();
+                    self.check_collection_capacity(current_len)?;
+                    let dictionary = self
+                        .dictionaries
+                        .get_mut(&id)
+                        .ok_or_else(|| OBJECT_NOT_SET.to_string())?;
+                    if dictionary.entries.iter().any(|entry| entry.key == key) {
+                        return Err("Key already exists".to_string());
+                    }
+                    dictionary
+                        .entries
+                        .push(DictionaryEntry { key, value: item });
+                    self.reclaim_unreachable_collections();
+                    return Ok(());
+                }
+                let id = self.collection_target_id(target)?;
+                let item = self.eval_collection_value(item)?;
+                if let CollectionValue::Scalar(value) = &item {
+                    self.check_variant_budget(value)?;
+                }
+                let key = match key {
+                    Some(expr) => Some(Self::collection_key(self.eval_expr(expr)?)?),
+                    None => None,
+                };
+                let before = match before {
+                    Some(expr) => Some(self.eval_expr(expr)?),
+                    None => None,
+                };
+                let after = match after {
+                    Some(expr) => Some(self.eval_expr(expr)?),
+                    None => None,
+                };
+                if before.is_some() && after.is_some() {
+                    return Err(COLLECTION_INVALID_INDEX.to_string());
+                }
+                let current_len = self
+                    .collections
+                    .get(&id)
+                    .ok_or_else(|| OBJECT_NOT_SET.to_string())?
+                    .items
+                    .len();
+                self.check_collection_capacity(current_len)?;
+                if let Some(ref candidate) = key
+                    && self.collections.get(&id).is_some_and(|collection| {
+                        collection.items.iter().any(|entry| {
+                            entry
+                                .key
+                                .as_deref()
+                                .is_some_and(|existing| existing.eq_ignore_ascii_case(candidate))
+                        })
+                    })
+                {
+                    return Err(COLLECTION_DUPLICATE_KEY.to_string());
+                }
+                let position = if let Some(index) = before.as_ref() {
+                    self.collection_position(id, index)?
+                } else if let Some(index) = after.as_ref() {
+                    self.collection_position(id, index)? + 1
+                } else {
+                    current_len
+                };
+                self.collections
+                    .get_mut(&id)
+                    .ok_or_else(|| OBJECT_NOT_SET.to_string())?
+                    .items
+                    .insert(position, CollectionEntry { value: item, key });
+            }
+            Stmt::CollectionRemove { target, index } => {
+                if let Some(id) = self.collection_target_class_id(target)? {
+                    let arg = self.eval_expr(index)?;
+                    self.call_class_sub(id, "remove", &[arg])?;
+                    self.reclaim_unreachable_collections();
+                    return Ok(());
+                }
+                if let CollectionTarget::Variable(name) = target
+                    && let Some(ObjectRef::Dictionary(id)) =
+                        self.object_variables.get(name).cloned()
+                {
+                    let key = self.eval_expr(index)?;
+                    let dictionary = self
+                        .dictionaries
+                        .get_mut(&id)
+                        .ok_or_else(|| OBJECT_NOT_SET.to_string())?;
+                    let normalized = Self::dictionary_key(key, dictionary.compare_mode)?;
+                    let position = dictionary
+                        .entries
+                        .iter()
+                        .position(|entry| entry.key == normalized)
+                        .ok_or_else(|| COLLECTION_INVALID_INDEX.to_string())?;
+                    dictionary.entries.remove(position);
+                    self.reclaim_unreachable_collections();
+                    return Ok(());
+                }
+                let id = self.collection_target_id(target)?;
+                let index = self.eval_expr(index)?;
+                let position = self.collection_position(id, &index)?;
+                self.collections
+                    .get_mut(&id)
+                    .ok_or_else(|| OBJECT_NOT_SET.to_string())?
+                    .items
+                    .remove(position);
+                self.reclaim_unreachable_collections();
+            }
             Stmt::Set { var, value } => {
+                if let Some(id) = self.current_class_instance_id()
+                    && self
+                        .class_field_def(id, var)
+                        .is_some_and(|field| self.is_object_type_name(field.type_name.as_deref()))
+                {
+                    let obj = self.eval_object_expr(value)?;
+                    self.set_class_object_field(id, var, obj)?;
+                    self.reclaim_unreachable_collections();
+                    return Ok(());
+                }
                 if let ObjectExpr::Var(name) = value {
                     // `Set ws = ActiveSheet` / `Set wb = ThisWorkbook` /
                     // `Set wb = ActiveWorkbook` (Phase 2C items 7/8) — these
@@ -5956,15 +12510,14 @@ impl Vm {
                     // `Set ws = ActiveSheet` silently did nothing.
                     match name.as_str() {
                         "activesheet" => {
-                            self.object_variables.insert(
+                            self.assign_object_variable(
                                 var.clone(),
                                 ObjectRef::Worksheet(self.active_sheet.clone()),
-                            );
+                            )?;
                             return Ok(());
                         }
                         "thisworkbook" | "activeworkbook" => {
-                            self.object_variables
-                                .insert(var.clone(), ObjectRef::Workbook);
+                            self.assign_object_variable(var.clone(), ObjectRef::Workbook)?;
                             return Ok(());
                         }
                         // `Set r = Nothing` clears ONLY this variable's own
@@ -5976,8 +12529,7 @@ impl Vm {
                         // "not a live object variable" no-op below, which is
                         // where this used to land (silently doing nothing).
                         "nothing" => {
-                            self.object_variables
-                                .insert(var.clone(), ObjectRef::Nothing);
+                            self.assign_object_variable(var.clone(), ObjectRef::Nothing)?;
                             return Ok(());
                         }
                         _ => {}
@@ -5985,6 +12537,10 @@ impl Vm {
                 }
                 if let ObjectExpr::Var(name) = value
                     && !self.object_variables.contains_key(name)
+                    && !self
+                        .current_class_instance_id()
+                        .is_some_and(|id| self.class_object_field(id, name).is_some())
+                    && !(name == "me" && self.current_class_instance_id().is_some())
                 {
                     // A bare identifier in object position that isn't a
                     // live object variable and isn't one of the three names
@@ -6004,7 +12560,76 @@ impl Vm {
                     return Ok(());
                 }
                 let obj = self.eval_object_expr(value)?;
-                self.object_variables.insert(var.clone(), obj);
+                self.assign_object_variable(var.clone(), obj)?;
+            }
+            Stmt::SetObjectMember {
+                target,
+                member,
+                args,
+                value,
+            } => {
+                let Some(ObjectRef::Class(id)) = self.object_target_ref(target)? else {
+                    return Err(format!(
+                        "Object member '{}' requires a class instance",
+                        member
+                    ));
+                };
+                let static_type = self.object_target_static_type(target);
+                let value = self.eval_object_expr(value)?;
+                if self
+                    .class_property_for(id, member, PropertyKind::Set, static_type.as_deref())
+                    .is_ok()
+                {
+                    self.call_property_set(id, member, args, value, static_type.as_deref())?;
+                } else {
+                    if !args.is_empty() {
+                        return Err(format!("Property Set '{}' not found", member));
+                    }
+                    self.set_class_object_field(id, member, value)?;
+                }
+                self.reclaim_unreachable_collections();
+            }
+            Stmt::ObjectPropertyLet {
+                target,
+                member,
+                args,
+                value,
+            } => {
+                let Some(ObjectRef::Class(id)) = self.object_target_ref(target)? else {
+                    return Err(format!(
+                        "Object member '{}' requires a class instance",
+                        member
+                    ));
+                };
+                let static_type = self.object_target_static_type(target);
+                let value = self.eval_expr(value)?;
+                self.check_variant_budget(&value)?;
+                self.call_property_let(id, member, args, value, static_type.as_deref())?;
+            }
+            Stmt::SetObjectArray {
+                name,
+                indices,
+                value,
+            } => {
+                let value = self.eval_object_expr(value)?;
+                let indices = self.eval_array_indices(indices)?;
+                let (bounds, expected_type) = self
+                    .object_arrays
+                    .get(name)
+                    .map(|array| (array.bounds.clone(), array.class_name.clone()))
+                    .ok_or_else(|| format!("'{}' is not an object array", name))?;
+                if !self.object_ref_matches_type(&value, &expected_type) {
+                    return Err(format!(
+                        "Object array '{}' requires '{}'",
+                        name, expected_type
+                    ));
+                }
+                let index = VbaArray::linear_index_for(&bounds, &indices)?;
+                self.object_arrays
+                    .get_mut(name)
+                    .expect("checked above")
+                    .elements[index] = value;
+                self.reclaim_unreachable_collections();
             }
             Stmt::RangePaste {
                 dest_addr,
@@ -6036,6 +12661,14 @@ impl Vm {
                 col,
                 value,
             } => {
+                if let Expr::ObjectVarSheet(name) = sheet
+                    && let Some(ObjectRef::Range(base)) = self.object_variables.get(name).cloned()
+                {
+                    let target = self.relative_cell_ref(&base, row, col)?;
+                    let value = self.eval_expr(value)?;
+                    self.write_range_ref_value(&target, false, &value)?;
+                    return Ok(());
+                }
                 let (key, display) = self.resolve_sheet_expr(sheet)?;
                 self.check_strict_sheet_exists(&display, &key)?;
                 self.check_sheet_not_protected(&key, &display)?;
@@ -6045,13 +12678,7 @@ impl Vm {
                 if !self.strict_resolution {
                     self.ensure_sheet(&key);
                 }
-                self.sheet_cells_mut(&key).unwrap().insert(
-                    (r, c),
-                    CellContent {
-                        formula: None,
-                        value: v,
-                    },
-                );
+                self.set_cell_value_on_sheet(&key, r, c, v)?;
             }
             Stmt::SheetRangeWrite {
                 sheet,
@@ -6059,6 +12686,14 @@ impl Vm {
                 is_formula,
                 value,
             } => {
+                if let Expr::ObjectVarSheet(name) = sheet
+                    && let Some(ObjectRef::Range(base)) = self.object_variables.get(name).cloned()
+                {
+                    let target = self.relative_address_ref(&base, addr)?;
+                    let value = self.eval_expr(value)?;
+                    self.write_range_ref_value(&target, *is_formula, &value)?;
+                    return Ok(());
+                }
                 let (key, display) = self.resolve_sheet_expr(sheet)?;
                 self.check_strict_sheet_exists(&display, &key)?;
                 self.check_sheet_not_protected(&key, &display)?;
@@ -6072,26 +12707,46 @@ impl Vm {
                     let s = vba_to_str(&v);
                     let prev = self.active_sheet.clone();
                     self.active_sheet = key.clone();
-                    for r in r1..=r2 {
-                        for c in c1..=c2 {
-                            self.set_cell_formula(r, c, &s)?;
+                    self.auto_event_suppression_depth += 1;
+                    let result = (|| -> Result<(), String> {
+                        for r in r1..=r2 {
+                            for c in c1..=c2 {
+                                self.set_cell_formula(r, c, &s)?;
+                            }
                         }
-                    }
+                        Ok(())
+                    })();
+                    self.auto_event_suppression_depth -= 1;
+                    let notify = result.and_then(|()| {
+                        self.dispatch_worksheet_change_after_range_write(
+                            &key,
+                            Rect {
+                                start_row: r1,
+                                start_col: c1,
+                                end_row: r2,
+                                end_col: c2,
+                            },
+                        )
+                    });
                     self.active_sheet = prev;
-                } else if let Some(cells) = self.sheet_cells_mut(&key) {
+                    notify?;
+                } else {
                     for r in r1..=r2 {
                         for c in c1..=c2 {
-                            cells.insert(
-                                (r, c),
-                                CellContent {
-                                    formula: None,
-                                    value: v.clone(),
-                                },
-                            );
+                            self.set_cell_value_on_sheet(&key, r, c, v.clone())?;
                         }
                     }
-                    self.cell_index_dirty = true;
                 }
+            }
+            Stmt::SheetPropertySet {
+                sheet,
+                property,
+                value,
+            } => {
+                self.set_worksheet_property(sheet, property, value)?;
+            }
+            Stmt::SheetActivate { sheet } => {
+                self.activate_worksheet(sheet)?;
             }
             Stmt::WithSheet { sheet_name, body } => {
                 self.check_strict_sheet_exists(sheet_name, &sheet_name.to_lowercase())?;
@@ -6174,7 +12829,13 @@ impl Vm {
                     self.exec_stmt_inner(s)?;
                 }
             }
-            Stmt::Unsupported { .. } => {}
+            Stmt::Unsupported { reason } => {
+                if self.reject_blocked_external_effects && is_blocked_external_effect(reason) {
+                    self.last_runtime_failure =
+                        Some(RuntimeFailureKind::SecurityBlockedExternalEffect);
+                    return Err(format!("SECURITY: blocked external VBA effect: {}", reason));
+                }
+            }
             Stmt::DimArray { name, sizes } => {
                 if sizes.is_empty() {
                     // `Dim arr()` — dynamic array, unsized until a later
@@ -6192,7 +12853,9 @@ impl Vm {
                 } else {
                     let bounds = self.eval_array_bounds(sizes)?;
                     let arr = VbaArray::new_zeroed(bounds)?;
-                    self.variables.insert(name.clone(), Variant::VbaArray(arr));
+                    let value = Variant::VbaArray(arr);
+                    self.check_variant_budget(&value)?;
+                    self.variables.insert(name.clone(), value);
                 }
             }
             Stmt::ReDim {
@@ -6201,6 +12864,44 @@ impl Vm {
                 preserve,
             } => {
                 let bounds = self.eval_array_bounds(sizes)?;
+                if let Some(old) = self.object_arrays.get(name).cloned() {
+                    let mut new = self.new_object_array(bounds, old.class_name)?;
+                    if *preserve {
+                        if old.bounds.len() != new.bounds.len()
+                            || old
+                                .bounds
+                                .iter()
+                                .zip(&new.bounds)
+                                .take(old.bounds.len().saturating_sub(1))
+                                .any(|(a, b)| a != b)
+                        {
+                            return Err(
+                                "ReDim Preserve can only change the last object-array dimension"
+                                    .to_string(),
+                            );
+                        }
+                        for (old_index, value) in old.elements.into_iter().enumerate() {
+                            let mut remaining = old_index;
+                            let mut indices = vec![0i64; old.bounds.len()];
+                            for dimension in (0..old.bounds.len()).rev() {
+                                let len = old.bounds[dimension].len() as usize;
+                                if len == 0 {
+                                    break;
+                                }
+                                indices[dimension] =
+                                    old.bounds[dimension].lower + (remaining % len) as i64;
+                                remaining /= len;
+                            }
+                            if let Ok(new_index) = VbaArray::linear_index_for(&new.bounds, &indices)
+                            {
+                                new.elements[new_index] = value;
+                            }
+                        }
+                    }
+                    self.object_arrays.insert(name.clone(), new);
+                    self.reclaim_unreachable_collections();
+                    return Ok(());
+                }
                 let new_arr = if *preserve {
                     match self.variables.get(name) {
                         Some(Variant::VbaArray(old)) if old.rank() == bounds.len() => {
@@ -6211,10 +12912,16 @@ impl Vm {
                 } else {
                     VbaArray::new_zeroed(bounds)?
                 };
-                self.variables
-                    .insert(name.clone(), Variant::VbaArray(new_arr));
+                let value = Variant::VbaArray(new_arr);
+                self.check_variant_budget(&value)?;
+                self.variables.insert(name.clone(), value);
             }
             Stmt::Erase { name } => {
+                if let Some(array) = self.object_arrays.get_mut(name) {
+                    array.elements.fill(ObjectRef::Nothing);
+                    self.reclaim_unreachable_collections();
+                    return Ok(());
+                }
                 if let Some(Variant::VbaArray(arr)) = self.variables.get_mut(name) {
                     for v in arr.elements.iter_mut() {
                         *v = Variant::Empty;
@@ -6227,6 +12934,12 @@ impl Vm {
                 value,
             } => {
                 let v = self.eval_expr(value)?;
+                self.check_variant_budget(&v)?;
+                if let Some(ObjectRef::Range(base)) = self.object_variables.get(name).cloned() {
+                    let target = self.range_default_item(&base, indices)?;
+                    self.write_range_ref_value(&target, false, &v)?;
+                    return Ok(());
+                }
                 let idx = self.eval_array_indices(indices)?;
                 let bounds = match self.variables.get(name) {
                     Some(Variant::VbaArray(arr)) => arr.bounds.clone(),
@@ -6258,6 +12971,7 @@ impl Vm {
                 // ones that are then treated as a blocking error.
                 self.msgbox_log.push(msg.to_string());
                 if self.error_on_msgbox {
+                    self.last_runtime_failure = Some(RuntimeFailureKind::MsgBoxBlocked);
                     return Err(format!("MsgBox: {}", msg));
                 }
                 if self.print_msgbox {
@@ -6265,10 +12979,26 @@ impl Vm {
                 }
             }
             Stmt::DimRecord { var, type_name } => {
-                if let Some(fields) = self.type_defs.get(type_name).cloned() {
-                    let record = make_record_default(&fields, &self.type_defs);
+                if let Some(fields) = self.resolve_type_fields(type_name) {
+                    let record = make_record_default(
+                        &fields,
+                        &self.type_defs,
+                        self.current_module_scope.as_deref(),
+                    );
                     self.variables.insert(var.clone(), record);
-                } else if matches!(type_name.as_str(), "range" | "worksheet" | "workbook") {
+                } else if matches!(
+                    type_name.as_str(),
+                    "object"
+                        | "range"
+                        | "worksheet"
+                        | "workbook"
+                        | "collection"
+                        | "dictionary"
+                        | "scripting.dictionary"
+                ) || self.class_defs.contains_key(type_name)
+                {
+                    self.object_variable_types
+                        .insert(var.clone(), type_name.clone());
                     // `Dim r As Range` declares an *object* variable holding
                     // no reference yet — real VBA's `r Is Nothing` is True
                     // here, and any member access through it raises error 91
@@ -6284,22 +13014,55 @@ impl Vm {
                 }
                 // Any other unknown type name → no-op (built-in type)
             }
+            Stmt::DimObjectNew {
+                var,
+                type_name,
+                value,
+            } => {
+                self.object_variable_types
+                    .insert(var.clone(), type_name.clone());
+                let value = self.eval_object_expr(value)?;
+                self.assign_object_variable(var.clone(), value)?;
+            }
             Stmt::DimArrayRecord {
                 name,
                 sizes,
                 type_name,
             } => {
-                let upper = to_f64(&self.eval_expr(&sizes[0])?)? as usize;
-                let element = if let Some(fields) = self.type_defs.get(type_name).cloned() {
-                    make_record_default(&fields, &self.type_defs)
+                if self.is_object_type_name(Some(type_name)) {
+                    let bounds = if sizes.is_empty() {
+                        Vec::new()
+                    } else {
+                        self.eval_array_bounds(sizes)?
+                    };
+                    let array = self.new_object_array(bounds, type_name.clone())?;
+                    self.object_arrays.insert(name.clone(), array);
+                    return Ok(());
+                }
+                let upper = sizes
+                    .first()
+                    .map(|dimension| self.eval_expr(&dimension.upper))
+                    .transpose()?
+                    .map(|value| to_f64(&value))
+                    .transpose()?
+                    .unwrap_or(-1.0) as i64;
+                let len = upper.saturating_add(1) as usize;
+                let element = if let Some(fields) = self.resolve_type_fields(type_name) {
+                    make_record_default(
+                        &fields,
+                        &self.type_defs,
+                        self.current_module_scope.as_deref(),
+                    )
                 } else {
                     Variant::Empty
                 };
-                self.variables
-                    .insert(name.clone(), Variant::Array(vec![element; upper + 1]));
+                let value = Variant::Array(vec![element; len]);
+                self.check_variant_budget(&value)?;
+                self.variables.insert(name.clone(), value);
             }
             Stmt::RecordSetNested { var, fields, value } => {
                 let v = self.eval_expr(value)?;
+                self.check_variant_budget(&v)?;
                 let target = self
                     .variables
                     .entry(var.clone())
@@ -6313,6 +13076,7 @@ impl Vm {
                 value,
             } => {
                 let v = self.eval_expr(value)?;
+                self.check_variant_budget(&v)?;
                 let idx = to_f64(&self.eval_expr(&indices[0])?)? as usize;
                 let oob_len = match self.variables.get(name) {
                     Some(Variant::Array(arr)) if idx >= arr.len() => Some(arr.len()),
@@ -6348,6 +13112,36 @@ impl Vm {
                 // against a genuine `Type`-based record that happens to
                 // have a field literally named "value"/"formula".
                 self.require_live_object(var)?;
+                let class_id = if var == "me" {
+                    self.current_class_instance_id()
+                } else {
+                    match self.object_variables.get(var) {
+                        Some(ObjectRef::Class(id)) => Some(*id),
+                        _ => None,
+                    }
+                };
+                if let Some(id) = class_id {
+                    let static_type = if var == "me" {
+                        None
+                    } else {
+                        self.object_variable_types.get(var).cloned()
+                    };
+                    let v = self.eval_expr(value)?;
+                    self.check_variant_budget(&v)?;
+                    if self
+                        .class_property_for(id, field, PropertyKind::Let, static_type.as_deref())
+                        .is_ok()
+                    {
+                        self.call_property_let(id, field, &[], v, static_type.as_deref())?;
+                    } else {
+                        self.set_class_field(id, field, v)?;
+                    }
+                    return Ok(());
+                }
+                if let Some(ObjectRef::Worksheet(key)) = self.object_variables.get(var).cloned() {
+                    self.set_worksheet_property(&Expr::Str(key), field, value)?;
+                    return Ok(());
+                }
                 if let Some(ObjectRef::Range(r)) = self.object_variables.get(var).cloned() {
                     if field == "value" || field == "formula" {
                         let v = self.eval_expr(value)?;
@@ -6359,7 +13153,28 @@ impl Vm {
                     // `parse_ident_stmt`.
                     return Ok(());
                 }
+                if let Some(ObjectRef::Dictionary(id)) = self.object_variables.get(var).cloned() {
+                    if field != "comparemode" {
+                        return Ok(());
+                    }
+                    let mode = to_f64(&self.eval_expr(value)?)? as i64;
+                    if !matches!(mode, 0 | 1) {
+                        return Err("Invalid CompareMode".to_string());
+                    }
+                    let dictionary = self
+                        .dictionaries
+                        .get_mut(&id)
+                        .ok_or_else(|| OBJECT_NOT_SET.to_string())?;
+                    if !dictionary.entries.is_empty() && dictionary.compare_mode != mode {
+                        return Err(
+                            "Cannot change CompareMode after items have been added".to_string()
+                        );
+                    }
+                    dictionary.compare_mode = mode;
+                    return Ok(());
+                }
                 let v = self.eval_expr(value)?;
+                self.check_variant_budget(&v)?;
                 let entry = self
                     .variables
                     .entry(var.clone())
@@ -6396,12 +13211,40 @@ impl Vm {
                 if let Some(v) = self.variables.get(name) {
                     return Ok(v.clone());
                 }
+                if let Some(ObjectRef::Range(range)) = self.object_variables.get(name) {
+                    return self.read_range_ref_value(range);
+                }
+                if let Some(id) = self.current_class_instance_id()
+                    && self.class_declares_field(id, name)
+                {
+                    return Ok(self.class_field(id, name).unwrap_or(Variant::Empty));
+                }
                 // Excel built-in constants
                 Ok(match name.as_str() {
                     // Calculation mode
                     "xlcalculationmanual" => Variant::Integer(-4135),
                     "xlcalculationautomatic" => Variant::Integer(-4105),
                     "xlcalculationsemiautomatic" => Variant::Integer(2),
+                    // Range.SpecialCells cell types
+                    "xlcelltypeallformatconditions" => Variant::Integer(-4172),
+                    "xlcelltypesameformatconditions" => Variant::Integer(-4173),
+                    "xlcelltypeallvalidation" => Variant::Integer(-4174),
+                    "xlcelltypesamevalidation" => Variant::Integer(-4175),
+                    "xlcelltypecomments" => Variant::Integer(-4144),
+                    "xlcelltypeformulas" => Variant::Integer(-4123),
+                    "xlcelltypeconstants" => Variant::Integer(2),
+                    "xlcelltypeblanks" => Variant::Integer(4),
+                    "xlcelltypelastcell" => Variant::Integer(11),
+                    "xlcelltypevisible" => Variant::Integer(12),
+                    // XlSpecialCellsValue bit flags
+                    "xlnumbers" => Variant::Integer(1),
+                    "xltextvalues" => Variant::Integer(2),
+                    "xllogical" => Variant::Integer(4),
+                    "xlerrors" => Variant::Integer(16),
+                    // Worksheet visibility
+                    "xlsheetvisible" => Variant::Integer(-1),
+                    "xlsheethidden" => Variant::Integer(0),
+                    "xlsheetveryhidden" => Variant::Integer(2),
                     // Direction
                     "xlup" => Variant::Integer(-4162),
                     "xldown" => Variant::Integer(-4121),
@@ -6481,6 +13324,68 @@ impl Vm {
                 Ok(self.get_cell(r, c))
             }
             Expr::FuncCall { name, args } => {
+                if let Some(property) = name.strip_prefix("__worksheet_") {
+                    let sheet = args
+                        .first()
+                        .ok_or_else(|| "Worksheet property requires a target".to_string())?;
+                    return self.eval_worksheet_property(sheet, property);
+                }
+                if name == "__worksheets_count" {
+                    return Ok(Variant::Integer(self.sheet_order.len() as i64));
+                }
+                if name == "__workbook_name" {
+                    if let Some(workbook) = args.first() {
+                        let requested = self.eval_expr(workbook)?;
+                        if !self.workbook_matches(&requested) {
+                            return Err(format!("Workbook '{}' not found", vba_to_str(&requested)));
+                        }
+                    }
+                    return Ok(Variant::Str(
+                        self.loaded_workbook_name.clone().unwrap_or_default(),
+                    ));
+                }
+                if let Some(ObjectRef::Range(range)) =
+                    self.object_variables.get(name.as_str()).cloned()
+                {
+                    let item = self.range_default_item(&range, args)?;
+                    return self.read_range_ref_value(&item);
+                }
+                // Collection's default member: `items(1)` is the same as
+                // `items.Item(1)`. Object variables take precedence over a
+                // same-named user Function or scalar array.
+                if let Some(ObjectRef::Collection(id)) =
+                    self.object_variables.get(name.as_str()).cloned()
+                {
+                    if args.len() != 1 {
+                        return Err(format!(
+                            "Collection '{}' Item requires exactly one index or key",
+                            name
+                        ));
+                    }
+                    let index = self.eval_expr(&args[0])?;
+                    return self.collection_scalar_value(id, &index);
+                }
+                if let Some(ObjectRef::Dictionary(id)) =
+                    self.object_variables.get(name.as_str()).cloned()
+                {
+                    if args.len() != 1 {
+                        return Err(format!(
+                            "Dictionary '{}' Item requires exactly one key",
+                            name
+                        ));
+                    }
+                    let key = self.eval_expr(&args[0])?;
+                    return self.dictionary_scalar_value(id, &key);
+                }
+                if let Some(id) = self.current_class_instance_id()
+                    && self
+                        .class_instances
+                        .get(&id)
+                        .and_then(|instance| self.class_defs.get(&instance.class_name))
+                        .is_some_and(|definition| definition.functions.contains_key(name))
+                {
+                    return self.call_class_func_expr(id, name, args, None);
+                }
                 // User-defined functions take priority over built-ins
                 if let Some(func) = self.user_funcs.get(name).cloned() {
                     let arg_vals: Vec<Variant> = args
@@ -6565,6 +13470,12 @@ impl Vm {
                 Ok(self.get_cell((base_r as i64 + ro) as u32, (base_c as i64 + co) as u32))
             }
             Expr::SheetCellRead { sheet, row, col } => {
+                if let Expr::ObjectVarSheet(name) = sheet.as_ref()
+                    && let Some(ObjectRef::Range(base)) = self.object_variables.get(name).cloned()
+                {
+                    let target = self.relative_cell_ref(&base, row, col)?;
+                    return self.read_range_ref_value(&target);
+                }
                 let (key, display) = self.resolve_sheet_expr(sheet)?;
                 self.check_strict_sheet_exists(&display, &key)?;
                 let r = to_cell_index(self.eval_expr(row)?, "row")?;
@@ -6577,6 +13488,12 @@ impl Vm {
                     .unwrap_or(Variant::Empty))
             }
             Expr::SheetRangeRead { sheet, addr } => {
+                if let Expr::ObjectVarSheet(name) = sheet.as_ref()
+                    && let Some(ObjectRef::Range(base)) = self.object_variables.get(name).cloned()
+                {
+                    let target = self.relative_address_ref(&base, addr)?;
+                    return self.read_range_ref_value(&target);
+                }
                 let (key, display) = self.resolve_sheet_expr(sheet)?;
                 self.check_strict_sheet_exists(&display, &key)?;
                 let ((r1, c1), (r2, c2)) = parse_range_addr(addr)
@@ -6678,10 +13595,52 @@ impl Vm {
                     }
                     Ok(cur)
                 }
+                WithValue::Collection(id) => {
+                    if fields.as_slice() == ["count"] {
+                        let len = self
+                            .collections
+                            .get(&id)
+                            .ok_or_else(|| OBJECT_NOT_SET.to_string())?
+                            .items
+                            .len();
+                        Ok(Variant::Integer(len as i64))
+                    } else {
+                        Ok(Variant::Empty)
+                    }
+                }
+                WithValue::Class(id, static_type) => {
+                    let field = fields
+                        .first()
+                        .ok_or_else(|| "Class member name is empty".to_string())?;
+                    if self
+                        .class_property_for(id, field, PropertyKind::Get, static_type.as_deref())
+                        .is_ok()
+                    {
+                        return self.call_property_get_scalar(
+                            id,
+                            field,
+                            &[],
+                            static_type.as_deref(),
+                        );
+                    }
+                    let field_def = self
+                        .class_field_def(id, field)
+                        .cloned()
+                        .ok_or_else(|| format!("Class member '{}' not found", field))?;
+                    self.enforce_access(id, field, field_def.access)?;
+                    self.class_field(id, field)
+                        .ok_or_else(|| format!("Class member '{}' not found", field))
+                }
                 // Worksheet/unmodeled property reads aren't modeled — the
                 // same `Empty` an unmodeled `<var>.<field>` read already
                 // gives, rather than a new error condition.
-                WithValue::Sheet(_) | WithValue::Unmodeled => Ok(Variant::Empty),
+                WithValue::Sheet(key) => {
+                    let property = fields
+                        .first()
+                        .ok_or_else(|| "Worksheet member name is empty".to_string())?;
+                    self.eval_worksheet_property(&Expr::Str(key), property)
+                }
+                WithValue::Unmodeled => Ok(Variant::Empty),
             },
             Expr::IsNothing(name) => {
                 // True for a declared-but-unset object variable and for one
@@ -6692,12 +13651,97 @@ impl Vm {
                 // "no live object reference" is the closest true answer
                 // elixcee can give without inventing a type error the rest
                 // of the VM has no way to raise.
+                let value = self.object_variables.get(name).cloned().or_else(|| {
+                    self.current_class_instance_id()
+                        .and_then(|id| self.class_object_field(id, name))
+                });
                 Ok(Variant::Boolean(!matches!(
-                    self.object_variables.get(name),
+                    value,
                     Some(ObjectRef::Range(_))
+                        | Some(ObjectRef::Collection(_))
+                        | Some(ObjectRef::Dictionary(_))
+                        | Some(ObjectRef::Class(_))
                         | Some(ObjectRef::Worksheet(_))
                         | Some(ObjectRef::Workbook)
                 )))
+            }
+            Expr::CollectionItem { target, index } => {
+                if let Some(range) = self.collection_target_range_ref(target)? {
+                    let item =
+                        self.range_default_item(&range, std::slice::from_ref(index.as_ref()))?;
+                    return self.read_range_ref_value(&item);
+                }
+                if let Some(id) = self.collection_target_class_id(target)? {
+                    let static_type = self.collection_target_static_type(target);
+                    return self.call_property_get_scalar(
+                        id,
+                        "item",
+                        std::slice::from_ref(index.as_ref()),
+                        static_type.as_deref(),
+                    );
+                }
+                if let CollectionTarget::Variable(name) = target
+                    && let Some(ObjectRef::Dictionary(id)) =
+                        self.object_variables.get(name).cloned()
+                {
+                    let index = self.eval_expr(index)?;
+                    return self.dictionary_scalar_value(id, &index);
+                }
+                let id = self.collection_target_id(target)?;
+                let index = self.eval_expr(index)?;
+                self.collection_scalar_value(id, &index)
+            }
+            Expr::ObjectMethodCall {
+                target,
+                method,
+                args,
+            } => {
+                let reference = self.object_target_ref(target)?;
+                if let Some(ObjectRef::Dictionary(id)) = reference.as_ref() {
+                    return match method.as_str() {
+                        "exists" if args.len() == 1 => {
+                            let key = self.eval_expr(&args[0])?;
+                            let dictionary = self
+                                .dictionaries
+                                .get(id)
+                                .ok_or_else(|| OBJECT_NOT_SET.to_string())?;
+                            let key = Self::dictionary_key(key, dictionary.compare_mode)?;
+                            Ok(Variant::Boolean(
+                                dictionary.entries.iter().any(|entry| entry.key == key),
+                            ))
+                        }
+                        "removeall" if args.is_empty() => {
+                            self.dictionaries
+                                .get_mut(id)
+                                .ok_or_else(|| OBJECT_NOT_SET.to_string())?
+                                .entries
+                                .clear();
+                            Ok(Variant::Empty)
+                        }
+                        _ => Err(format!("Dictionary method '{}' is not implemented", method)),
+                    };
+                }
+                if let Some(ObjectRef::Range(range)) = reference.as_ref()
+                    && matches!(method.as_str(), "item" | "cells")
+                {
+                    let item = self.range_default_item(range, args)?;
+                    return self.read_range_ref_value(&item);
+                }
+                let Some(ObjectRef::Class(id)) = reference else {
+                    return Err(format!(
+                        "Object method '{}' requires a class-module instance",
+                        method
+                    ));
+                };
+                let static_type = self.object_target_static_type(target);
+                if self
+                    .class_func_for(id, method, static_type.as_deref())
+                    .is_ok()
+                {
+                    self.call_class_func_expr(id, method, args, static_type.as_deref())
+                } else {
+                    self.call_property_get_scalar(id, method, args, static_type.as_deref())
+                }
             }
             Expr::RecordGet { var, field } => {
                 // `x = <var>.Value` where `var` is a `Set`-assigned object
@@ -6705,11 +13749,96 @@ impl Vm {
                 // matching write-side comment for why this is safe to
                 // disambiguate purely by which namespace holds `var`.
                 self.require_live_object(var)?;
+                let class_id = if var == "me" {
+                    self.current_class_instance_id()
+                } else {
+                    match self.object_variables.get(var) {
+                        Some(ObjectRef::Class(id)) => Some(*id),
+                        _ => None,
+                    }
+                };
+                if let Some(id) = class_id {
+                    let static_type = if var == "me" {
+                        None
+                    } else {
+                        self.object_variable_types.get(var).cloned()
+                    };
+                    if self
+                        .class_property_for(id, field, PropertyKind::Get, static_type.as_deref())
+                        .is_ok()
+                    {
+                        return self.call_property_get_scalar(
+                            id,
+                            field,
+                            &[],
+                            static_type.as_deref(),
+                        );
+                    }
+                    let field_def = self
+                        .class_field_def(id, field)
+                        .cloned()
+                        .ok_or_else(|| format!("Class member '{}' not found", field))?;
+                    self.enforce_access(id, field, field_def.access)?;
+                    return self
+                        .class_field(id, field)
+                        .ok_or_else(|| format!("Class member '{}' not found", field));
+                }
+                if let Some(ObjectRef::Worksheet(key)) = self.object_variables.get(var).cloned() {
+                    return self.eval_worksheet_property(&Expr::Str(key), field);
+                }
+                if matches!(self.object_variables.get(var), Some(ObjectRef::Workbook))
+                    || matches!(var.as_str(), "thisworkbook" | "activeworkbook")
+                {
+                    return if field == "name" {
+                        Ok(Variant::Str(
+                            self.loaded_workbook_name.clone().unwrap_or_default(),
+                        ))
+                    } else {
+                        Err(format!("Workbook property '{}' is not implemented", field))
+                    };
+                }
                 if let Some(ObjectRef::Range(r)) = self.object_variables.get(var).cloned() {
-                    return if field == "value" {
-                        self.read_range_ref_value(&r)
+                    return match field.as_str() {
+                        "value" => self.read_range_ref_value(&r),
+                        "address" => Ok(Variant::Str(range_address(&r))),
+                        "row" => Ok(Variant::Integer(
+                            r.single_rect().map_or(0, |area| area.start_row) as i64,
+                        )),
+                        "column" => Ok(Variant::Integer(
+                            r.single_rect().map_or(0, |area| area.start_col) as i64,
+                        )),
+                        _ => Ok(Variant::Empty),
+                    };
+                }
+                if let Some(ObjectRef::Collection(id)) = self.object_variables.get(var).cloned() {
+                    return if field == "count" {
+                        let len = self
+                            .collections
+                            .get(&id)
+                            .ok_or_else(|| OBJECT_NOT_SET.to_string())?
+                            .items
+                            .len();
+                        Ok(Variant::Integer(len as i64))
                     } else {
                         Ok(Variant::Empty)
+                    };
+                }
+                if let Some(ObjectRef::Dictionary(id)) = self.object_variables.get(var).cloned() {
+                    return match field.as_str() {
+                        "count" => Ok(Variant::Integer(
+                            self.dictionaries
+                                .get(&id)
+                                .ok_or(OBJECT_NOT_SET)?
+                                .entries
+                                .len() as i64,
+                        )),
+                        "comparemode" => Ok(Variant::Integer(
+                            self.dictionaries
+                                .get(&id)
+                                .ok_or(OBJECT_NOT_SET)?
+                                .compare_mode,
+                        )),
+                        _ => Ok(Variant::Empty),
                     };
                 }
                 match self.variables.get(var) {
@@ -6722,11 +13851,35 @@ impl Vm {
                 // object-variable disambiguation as above.
                 self.require_live_object(var)?;
                 if let Some(ObjectRef::Range(r)) = self.object_variables.get(var).cloned() {
-                    return if fields.len() == 2 && fields[0] == "areas" && fields[1] == "count" {
-                        Ok(Variant::Integer(r.areas.len() as i64))
-                    } else {
-                        Ok(Variant::Empty)
-                    };
+                    if fields.as_slice() == ["parent", "name"] {
+                        return Ok(Variant::Str(self.sheet_display_name(&r.sheet)));
+                    }
+                    if fields.len() == 2 && fields[1] == "count" {
+                        return match fields[0].as_str() {
+                            "areas" => Ok(Variant::Integer(r.areas.len() as i64)),
+                            "rows" => Ok(Variant::Integer(
+                                r.single_rect().map_or(0, Rect::rows) as i64
+                            )),
+                            "columns" => Ok(Variant::Integer(
+                                r.single_rect().map_or(0, Rect::cols) as i64,
+                            )),
+                            "cells" => Ok(Variant::Integer(
+                                r.single_rect()
+                                    .map_or(0, |area| area.rows().saturating_mul(area.cols()))
+                                    as i64,
+                            )),
+                            _ => Ok(Variant::Empty),
+                        };
+                    }
+                    return Ok(Variant::Empty);
+                }
+                if (matches!(self.object_variables.get(var), Some(ObjectRef::Workbook))
+                    || matches!(var.as_str(), "thisworkbook" | "activeworkbook"))
+                    && fields.len() == 2
+                    && matches!(fields[0].as_str(), "worksheets" | "sheets")
+                    && fields[1] == "count"
+                {
+                    return Ok(Variant::Integer(self.sheet_order.len() as i64));
                 }
                 let mut cur = self.variables.get(var).cloned().unwrap_or(Variant::Empty);
                 for f in fields {
@@ -7181,14 +14334,13 @@ impl Vm {
             // ── Range object (used as WSF arg) ───────────────────────────────
             "range" => {
                 if let Some(Variant::Str(addr)) = vals.first() {
-                    let ((r1, c1), (r2, c2)) = self
-                        .resolve_range_addr(addr)
+                    let areas = self
+                        .resolve_multi_area_addr(addr)
                         .ok_or_else(|| format!("Range: invalid address '{}'", addr))?;
-                    let arr = (r1..=r2)
-                        .flat_map(|r| (c1..=c2).map(move |c| (r, c)))
-                        .map(|(r, c)| self.get_cell(r, c))
-                        .collect();
-                    Ok(Variant::Array(arr))
+                    self.read_range_ref_value(&RangeRef {
+                        sheet: self.active_sheet.clone(),
+                        areas,
+                    })
                 } else {
                     Err("Range: requires a string address argument".into())
                 }
@@ -7209,6 +14361,179 @@ impl Vm {
             .unwrap_or(Variant::Empty)
     }
 
+    /// Store a scalar cell value through the same edit, spill, and dependency
+    /// invalidation path used by formula-aware VM edits.
+    pub fn set_cell_value(&mut self, row: u32, col: u32, value: Variant) -> Result<(), String> {
+        let active = self.active_sheet.clone();
+        self.set_cell_value_on_sheet(&active, row, col, value)
+    }
+
+    fn set_cell_value_on_sheet(
+        &mut self,
+        sheet: &str,
+        row: u32,
+        col: u32,
+        value: Variant,
+    ) -> Result<(), String> {
+        if row == 0 || col == 0 {
+            return Err("cell coordinates are 1-based and must be positive".to_string());
+        }
+        self.check_sheet_not_protected(sheet, sheet)?;
+        self.check_variant_budget(&value)?;
+        self.record_edit_history();
+        let mut spill_changed = Vec::new();
+        self.clear_spill_for_anchor(sheet, (row, col), &mut spill_changed);
+        self.formula_plan.remove(sheet);
+        self.formula_dirty_cells.remove(sheet);
+        self.sheet_cells_mut(sheet)
+            .ok_or_else(|| format!("sheet '{}' not found", sheet))?
+            .insert(
+                (row, col),
+                CellContent {
+                    formula: None,
+                    value,
+                },
+            );
+        self.formula_ast_cache
+            .entry(sheet.to_string())
+            .or_default()
+            .remove(&(row, col));
+        self.workbook_formula_dirty
+            .entry(sheet.to_string())
+            .or_default()
+            .extend(spill_changed);
+        self.workbook_formula_dirty
+            .entry(sheet.to_string())
+            .or_default()
+            .insert((row, col));
+        self.workbook_formula_tracking_valid = true;
+        self.workbook_formula_structure_dirty = true;
+        self.dispatch_worksheet_change_after_range_write(
+            sheet,
+            Rect {
+                start_row: row,
+                start_col: col,
+                end_row: row,
+                end_col: col,
+            },
+        )
+    }
+
+    fn set_scalar_range_on_sheet(
+        &mut self,
+        sheet: &str,
+        area: Rect,
+        value: &Variant,
+    ) -> Result<(), String> {
+        self.check_sheet_not_protected(sheet, sheet)?;
+        self.check_variant_budget(value)?;
+        self.record_edit_history();
+        let mut spill_changed = Vec::new();
+        for row in area.start_row..=area.end_row {
+            for col in area.start_col..=area.end_col {
+                self.clear_spill_for_anchor(sheet, (row, col), &mut spill_changed);
+            }
+        }
+        self.formula_plan.remove(sheet);
+        self.formula_dirty_cells.remove(sheet);
+        self.sheet_cells_mut(sheet)
+            .ok_or_else(|| format!("sheet '{}' not found", sheet))?;
+        for row in area.start_row..=area.end_row {
+            for col in area.start_col..=area.end_col {
+                self.sheet_cells_mut(sheet)
+                    .expect("sheet existence checked above")
+                    .insert(
+                        (row, col),
+                        CellContent {
+                            formula: None,
+                            value: value.clone(),
+                        },
+                    );
+                self.formula_ast_cache
+                    .entry(sheet.to_string())
+                    .or_default()
+                    .remove(&(row, col));
+                self.workbook_formula_dirty
+                    .entry(sheet.to_string())
+                    .or_default()
+                    .insert((row, col));
+            }
+        }
+        self.workbook_formula_dirty
+            .entry(sheet.to_string())
+            .or_default()
+            .extend(spill_changed);
+        self.workbook_formula_tracking_valid = true;
+        self.workbook_formula_structure_dirty = true;
+        self.cell_index_dirty = true;
+        self.dispatch_worksheet_change_after_range_write(sheet, area)
+    }
+
+    fn clear_range_on_sheet(
+        &mut self,
+        sheet: &str,
+        area: Rect,
+        contents_only: bool,
+    ) -> Result<(), String> {
+        self.check_sheet_not_protected(sheet, sheet)?;
+        self.record_edit_history();
+        let mut spill_changed = Vec::new();
+        for row in area.start_row..=area.end_row {
+            for col in area.start_col..=area.end_col {
+                self.clear_spill_for_anchor(sheet, (row, col), &mut spill_changed);
+            }
+        }
+        self.formula_plan.remove(sheet);
+        self.formula_dirty_cells.remove(sheet);
+        if self.sheet_cells_mut(sheet).is_none() {
+            return Err(format!("sheet '{}' not found", sheet));
+        }
+        for row in area.start_row..=area.end_row {
+            for col in area.start_col..=area.end_col {
+                self.sheet_cells_mut(sheet)
+                    .expect("sheet existence checked above")
+                    .remove(&(row, col));
+                self.formula_ast_cache
+                    .entry(sheet.to_string())
+                    .or_default()
+                    .remove(&(row, col));
+                self.workbook_formula_dirty
+                    .entry(sheet.to_string())
+                    .or_default()
+                    .insert((row, col));
+            }
+        }
+        self.workbook_formula_dirty
+            .entry(sheet.to_string())
+            .or_default()
+            .extend(spill_changed);
+        self.cell_tile_cache
+            .lock()
+            .expect("cell tile cache mutex poisoned")
+            .remove(sheet);
+        self.workbook_formula_tracking_valid = true;
+        self.workbook_formula_structure_dirty = true;
+        self.cell_index_dirty = true;
+        if !contents_only {
+            if let Some(formats) = self.cell_number_formats.get_mut(sheet) {
+                formats.retain(|&(row, col), _| !rect_has_cell(area, row, col));
+            }
+            if let Some(formats) = self.pending_number_formats.get_mut(sheet) {
+                formats.retain(|&(row, col), _| !rect_has_cell(area, row, col));
+            }
+            if let Some(attrs) = self.pending_style_attrs.get_mut(sheet) {
+                attrs.retain(|&(row, col), _| !rect_has_cell(area, row, col));
+            }
+            if let Some(copies) = self.pending_style_copies.get_mut(sheet) {
+                copies.retain(|&(row, col), _| !rect_has_cell(area, row, col));
+            }
+            if let Some(comments) = self.comment_cells.get_mut(sheet) {
+                comments.retain(|&(row, col)| !rect_has_cell(area, row, col));
+            }
+        }
+        self.dispatch_worksheet_change_after_range_write(sheet, area)
+    }
+
     /// The active sheet's resolved number-format code for a cell (GitHub #4), e.g.
     /// `"m/d/yyyy"` for a date-formatted cell -- `None` for a cell with no format, the
     /// General format, or a sheet built purely in-VBA/loaded from `.ods`. Letting a
@@ -7224,18 +14549,289 @@ impl Vm {
 
     pub fn set_cell_formula(&mut self, row: u32, col: u32, formula: &str) -> Result<(), String> {
         let expr = formula::parse(formula)?;
-        let value = formula::evaluate(&expr, self.cells())?;
+        let value = if formula::references_another_sheet(&expr) {
+            // Workbook-wide evaluation runs on the next explicit recalculate;
+            // do not read the active sheet as a misleading initial value.
+            Variant::Empty
+        } else {
+            let sheet_number = self
+                .sheet_order
+                .iter()
+                .position(|name| name == &self.active_sheet)
+                .map_or(1, |index| index + 1);
+            formula::with_sheet_context(sheet_number, self.sheet_order.len(), || {
+                formula::evaluate(&expr, self.cells())
+            })?
+        };
+        self.check_variant_budget(&value)?;
+        self.record_edit_history();
+        let active = self.active_sheet.clone();
+        let mut spill_changed = Vec::new();
+        self.clear_spill_for_anchor(&active, (row, col), &mut spill_changed);
+        self.formula_plan.remove(&active);
+        self.formula_dirty_cells.remove(&active);
+        let source = formula.to_string();
         self.cells_mut().insert(
             (row, col),
             CellContent {
-                formula: Some(formula.to_string()),
+                formula: Some(source.clone()),
                 value,
             },
         );
+        self.formula_ast_cache
+            .entry(active)
+            .or_default()
+            .insert((row, col), (source, Some(expr)));
+        self.workbook_formula_dirty
+            .entry(self.active_sheet.clone())
+            .or_default()
+            .extend(spill_changed.iter().copied());
+        self.workbook_formula_dirty
+            .entry(self.active_sheet.clone())
+            .or_default()
+            .insert((row, col));
+        self.workbook_formula_tracking_valid = true;
+        self.workbook_formula_structure_dirty = true;
+        self.dispatch_worksheet_change_after_range_write(
+            &self.active_sheet.clone(),
+            Rect {
+                start_row: row,
+                start_col: col,
+                end_row: row,
+                end_col: col,
+            },
+        )
+    }
+
+    /// Register a simple A1 range scoped to one worksheet for workbook formula evaluation.
+    /// Dynamic names and structured references remain outside this bounded API.
+    pub fn set_sheet_named_range(
+        &mut self,
+        sheet: &str,
+        name: &str,
+        address: &str,
+    ) -> Result<(), String> {
+        let sheet_key = sheet.to_ascii_lowercase();
+        if !self.sheets.contains_key(&sheet_key) {
+            return Err(format!("Sheet '{}' not found", sheet));
+        }
+        if name.trim().is_empty() {
+            return Err("named range name must not be empty".to_string());
+        }
+        if parse_range_addr(address).is_none() {
+            return Err(format!("invalid named range address: {address}"));
+        }
+        self.scoped_named_ranges
+            .entry(sheet_key)
+            .or_default()
+            .insert(name.to_ascii_lowercase(), address.to_string());
+        self.workbook_formula_structure_dirty = true;
         Ok(())
     }
 
+    /// Undo the most recent explicit cell/value or cell/formula edit.
+    /// Returns false when the bounded history is empty.
+    pub fn undo_edit(&mut self) -> bool {
+        let Some(previous) = self.edit_undo.pop() else {
+            return false;
+        };
+        self.edit_redo.push(self.capture_edit_history());
+        self.restore_edit_history(previous);
+        true
+    }
+
+    /// Redo the most recently undone explicit cell edit.
+    /// Returns false when there is no redo entry.
+    pub fn redo_edit(&mut self) -> bool {
+        let Some(next) = self.edit_redo.pop() else {
+            return false;
+        };
+        self.edit_undo.push(self.capture_edit_history());
+        self.restore_edit_history(next);
+        true
+    }
+
+    pub fn can_undo_edit(&self) -> bool {
+        !self.edit_undo.is_empty()
+    }
+
+    pub fn can_redo_edit(&self) -> bool {
+        !self.edit_redo.is_empty()
+    }
+
+    /// Start a transaction for explicit cell/formula edits.
+    pub fn begin_edit_transaction(&mut self) -> Result<(), String> {
+        if self.edit_transaction.is_some() {
+            return Err("an edit transaction is already active".to_string());
+        }
+        self.edit_transaction = Some(EditTransaction {
+            state: self.capture_edit_history(),
+            undo_len: self.edit_undo.len(),
+        });
+        Ok(())
+    }
+
+    /// Commit the current transaction as one undoable edit.
+    pub fn commit_edit_transaction(&mut self) -> bool {
+        let Some(transaction) = self.edit_transaction.take() else {
+            return false;
+        };
+        self.edit_undo.push(transaction.state);
+        self.edit_undo.truncate(MAX_EDIT_HISTORY);
+        self.edit_redo.clear();
+        true
+    }
+
+    /// Abort the current transaction and restore its pre-edit state.
+    pub fn abort_edit_transaction(&mut self) -> bool {
+        let Some(transaction) = self.edit_transaction.take() else {
+            return false;
+        };
+        self.restore_edit_history(transaction.state);
+        self.edit_undo.truncate(transaction.undo_len);
+        true
+    }
+
+    fn capture_edit_history(&self) -> EditHistoryState {
+        EditHistoryState {
+            sheets: self.sheets.clone(),
+            active_sheet: self.active_sheet.clone(),
+            next_append_rows: self.next_append_rows.clone(),
+            formula_ast_cache: self.formula_ast_cache.clone(),
+            formula_plan: self.formula_plan.clone(),
+            formula_dirty_cells: self.formula_dirty_cells.clone(),
+            workbook_formula_dirty: self.workbook_formula_dirty.clone(),
+            workbook_formula_tracking_valid: self.workbook_formula_tracking_valid,
+            workbook_formula_structure_dirty: self.workbook_formula_structure_dirty,
+            ooxml_structural_edit_dirty: self.ooxml_structural_edit_dirty,
+            spill_rects: self.spill_rects.clone(),
+        }
+    }
+
+    fn record_edit_history(&mut self) {
+        // A transaction already owns its pre-edit snapshot. Recording another
+        // full VM clone for every range/cell inside it defeats the bounded
+        // transaction contract on large workbooks; commit records the single
+        // pre-transaction state as one undo entry.
+        if self.edit_transaction.is_some() {
+            return;
+        }
+        self.edit_undo.push(self.capture_edit_history());
+        self.edit_undo.truncate(MAX_EDIT_HISTORY);
+        self.edit_redo.clear();
+    }
+
+    fn restore_edit_history(&mut self, state: EditHistoryState) {
+        self.sheets = state.sheets;
+        self.active_sheet = state.active_sheet;
+        self.next_append_rows = state.next_append_rows;
+        self.formula_ast_cache = state.formula_ast_cache;
+        self.formula_plan = state.formula_plan;
+        self.formula_dirty_cells = state.formula_dirty_cells;
+        self.workbook_formula_dirty = state.workbook_formula_dirty;
+        self.workbook_formula_tracking_valid = state.workbook_formula_tracking_valid;
+        self.workbook_formula_structure_dirty = state.workbook_formula_structure_dirty;
+        self.ooxml_structural_edit_dirty = state.ooxml_structural_edit_dirty;
+        self.spill_rects = state.spill_rects;
+        self.cell_index_dirty = true;
+        self.cell_tile_cache = Arc::new(Mutex::new(HashMap::new()));
+        self.cell_tile_cache_clock = Arc::new(AtomicU64::new(0));
+    }
+
     pub fn recalculate_all(&mut self) -> Result<(), String> {
+        let active = self.active_sheet.clone();
+        self.next_append_rows.remove(&active);
+        let mut effective_named_ranges = self.loaded_named_ranges.clone();
+        effective_named_ranges.extend(self.named_ranges.clone());
+        let (structured_ranges, structured_named_ranges) = self.structured_formula_ranges();
+        effective_named_ranges.extend(structured_named_ranges);
+        let force_workbook_rebuild =
+            !self.workbook_formula_tracking_valid || self.workbook_formula_structure_dirty;
+        if formula::recalculate_workbook(
+            &mut self.sheets,
+            &effective_named_ranges,
+            &self.scoped_named_ranges,
+            &structured_ranges,
+            Some(&self.workbook_formula_dirty),
+            force_workbook_rebuild,
+        )? {
+            self.formula_plan.clear();
+            self.formula_dirty_cells.clear();
+            self.workbook_formula_dirty.clear();
+            self.workbook_formula_tracking_valid = true;
+            self.workbook_formula_structure_dirty = false;
+            self.cell_index_dirty = true;
+            return Ok(());
+        }
+        // `cells_mut()` intentionally exposes the public cell map for
+        // low-level integrations. Such callers can edit a formula source
+        // without going through `set_cell_formula`, so a warm dependency
+        // plan must be treated as stale when its formula coordinates or
+        // source text no longer match the live sheet. Otherwise the empty
+        // dirty set below incorrectly turns the recalculation into a no-op
+        // and leaves the cached value from the previous formula behind.
+        let plan_stale = !self.workbook_formula_tracking_valid
+            && self.formula_plan.get(&active).is_some_and(|plan| {
+                let live: HashMap<(u32, u32), &str> = self
+                    .cells()
+                    .iter()
+                    .filter_map(|(position, cell)| {
+                        cell.formula.as_deref().map(|source| (*position, source))
+                    })
+                    .collect();
+                if live.len() != plan.cells.len() {
+                    return true;
+                }
+                plan.cells.iter().any(|(row, col, expr)| {
+                    let Some(source) = live.get(&(*row, *col)) else {
+                        return true;
+                    };
+                    let Ok(parsed) = formula::parse(source) else {
+                        return true;
+                    };
+                    parsed != *expr
+                })
+            });
+        if plan_stale {
+            self.formula_plan.remove(&active);
+            self.formula_dirty_cells.remove(&active);
+        }
+        if let Some(plan) = self.formula_plan.get(&active).cloned() {
+            let dirty = self.formula_dirty_cells.remove(&active).unwrap_or_default();
+            if dirty.is_empty() {
+                return Ok(());
+            }
+            let mut dirty_indices = vec![false; plan.cells.len()];
+            for position in dirty {
+                if let Some(&index) = plan.position_to_index.get(&position) {
+                    dirty_indices[index] = true;
+                }
+            }
+            for &idx in &plan.order {
+                if !dirty_indices[idx] {
+                    continue;
+                }
+                let (row, col, ref expr) = plan.cells[idx];
+                let sheet_number = self
+                    .sheet_order
+                    .iter()
+                    .position(|name| name == &active)
+                    .map_or(1, |index| index + 1);
+                let value =
+                    formula::with_sheet_context(sheet_number, self.sheet_order.len(), || {
+                        formula::evaluate(expr, self.cells())
+                    })?;
+                if let Some(cell) = self
+                    .sheets
+                    .get_mut(&active)
+                    .and_then(|m| m.get_mut(&(row, col)))
+                {
+                    cell.value = value;
+                }
+            }
+            self.cell_index_dirty = true;
+            return Ok(());
+        }
         // Collect all formula cells and parse them. A formula containing a
         // sheet-qualified reference (0.14.0-A2, e.g. `=Sheet2!A1`) now PARSES
         // successfully but is deliberately excluded here, same as a genuine
@@ -7245,29 +14841,85 @@ impl Vm {
         // that formula's cached value is simply left as-is, same as it
         // already was for every cross-sheet formula before 0.14.0-A2 (when
         // all of them failed to parse at all).
-        let formula_cells: Vec<(u32, u32, formula::FormulaExpr)> = {
+        let formula_sources: Vec<(u32, u32, String)> = {
             self.cells()
                 .iter()
                 .filter_map(|((r, c), cell)| {
-                    cell.formula.as_ref().and_then(|f| {
-                        let expr = formula::parse(f).ok()?;
-                        if formula::references_another_sheet(&expr) {
-                            return None;
+                    cell.formula
+                        .as_ref()
+                        .map(|formula| (*r, *c, formula.clone()))
+                })
+                .collect()
+        };
+        let formula_cells: Vec<(u32, u32, formula::FormulaExpr)> = {
+            let live_positions: HashSet<(u32, u32)> = formula_sources
+                .iter()
+                .map(|(row, col, _)| (*row, *col))
+                .collect();
+            let cache = self.formula_ast_cache.entry(active.clone()).or_default();
+            cache.retain(|position, _| live_positions.contains(position));
+            formula_sources
+                .into_iter()
+                .filter_map(|(row, col, source)| {
+                    let parsed = match cache.get(&(row, col)) {
+                        Some((cached_source, parsed)) if cached_source == &source => parsed.clone(),
+                        _ => {
+                            let parsed = formula::parse(&source).ok();
+                            cache.insert((row, col), (source, parsed.clone()));
+                            parsed
                         }
-                        Some((*r, *c, expr))
-                    })
+                    }?;
+                    if formula::references_another_sheet(&parsed) {
+                        None
+                    } else {
+                        Some((row, col, parsed))
+                    }
                 })
                 .collect()
         };
 
         // Sort by dependency order so that A2=A1+1 evaluates after A1
-        let order = topo_sort_formulas(&formula_cells)?;
+        let order = topo_sort_formulas(&formula_cells, self.spill_rects.get(&active))?;
+
+        let mut reverse: HashMap<(u32, u32), Vec<usize>> = HashMap::new();
+        let mut range_dependents = Vec::new();
+        for (index, (_, _, expr)) in formula_cells.iter().enumerate() {
+            let mut refs = HashSet::new();
+            let mut ranges = Vec::new();
+            collect_direct_formula_inputs(expr, &mut refs, &mut ranges);
+            for reference in refs {
+                reverse.entry(reference).or_default().push(index);
+            }
+            for range in ranges {
+                range_dependents.push((range, index));
+            }
+        }
+        self.formula_plan.insert(
+            active.clone(),
+            FormulaPlan {
+                cells: formula_cells.clone(),
+                order: order.clone(),
+                position_to_index: formula_cells
+                    .iter()
+                    .enumerate()
+                    .map(|(index, (row, col, _))| ((*row, *col), index))
+                    .collect(),
+                reverse,
+                range_dependents,
+            },
+        );
 
         // Update cell values directly, bypassing cells_mut() to avoid N dirty-flag sets.
-        let active = self.active_sheet.clone();
         for idx in order {
             let (row, col, ref expr) = formula_cells[idx];
-            let value = formula::evaluate(expr, self.cells())?;
+            let sheet_number = self
+                .sheet_order
+                .iter()
+                .position(|name| name == &active)
+                .map_or(1, |index| index + 1);
+            let value = formula::with_sheet_context(sheet_number, self.sheet_order.len(), || {
+                formula::evaluate(expr, self.cells())
+            })?;
             if let Some(cell) = self
                 .sheets
                 .get_mut(&active)
@@ -7280,7 +14932,278 @@ impl Vm {
         if !formula_cells.is_empty() {
             self.cell_index_dirty = true;
         }
+        self.formula_dirty_cells.remove(&active);
         Ok(())
+    }
+
+    /// Recalculates formulas on every worksheet, applies array results as
+    /// spills, then recalculates once more so formulas depending on spill cells
+    /// observe the newly written values. The existing `recalculate_all()`
+    /// contract is unchanged and this opt-in path does not add edit history.
+    pub fn recalculate_all_with_spills(&mut self) -> Result<(), String> {
+        let original_active = self.active_sheet.clone();
+        let before = self.capture_edit_history();
+        let sheets = self.sheet_order.clone();
+        let result = (|| {
+            for sheet in sheets {
+                if !self.sheets.contains_key(&sheet) {
+                    continue;
+                }
+                self.active_sheet = sheet;
+                self.recalculate_all()?;
+                self.materialize_active_sheet_spills()?;
+            }
+            self.recalculate_all()
+        })();
+        self.active_sheet = original_active;
+        if let Err(error) = result {
+            self.restore_edit_history(before);
+            return Err(error);
+        }
+        Ok(())
+    }
+
+    fn materialize_active_sheet_spills(&mut self) -> Result<(), String> {
+        let pending = self
+            .cells()
+            .iter()
+            .filter_map(|(&(row, col), cell)| {
+                cell.formula
+                    .as_ref()
+                    .filter(|_| matches!(cell.value, Variant::Array(_)))
+                    .map(|formula| ((row, col), formula::parse(formula).ok(), cell.value.clone()))
+            })
+            .collect::<Vec<_>>();
+        let mut planned = Vec::with_capacity(pending.len());
+        for &((row, col), ref parsed, ref value) in &pending {
+            let shape = parsed
+                .as_ref()
+                .and_then(|expr| formula_spill_shape(expr, self.cells(), value))
+                .or_else(|| value.array_shape())
+                .expect("array formula values always have a spill plan");
+            let rect = SpillRect::new(row, col, shape)?;
+            self.plan_spill_rect(rect)?;
+            planned.push(((row, col), rect));
+        }
+        for (index, &((row, col), rect)) in planned.iter().enumerate() {
+            for &((other_row, other_col), other_rect) in planned.iter().skip(index + 1) {
+                if (row, col) != (other_row, other_col) && rect.intersects(&other_rect) {
+                    return Err(format!(
+                        "#SPILL!: array anchors {}:{} and {}:{} overlap",
+                        row, col, other_row, other_col
+                    ));
+                }
+            }
+        }
+        for ((row, col), parsed, value) in pending {
+            self.apply_spill_for_formula_untracked(row, col, parsed.as_ref(), &value)?;
+        }
+        Ok(())
+    }
+
+    fn apply_spill_for_formula_untracked(
+        &mut self,
+        origin_row: u32,
+        origin_col: u32,
+        formula: Option<&formula::FormulaExpr>,
+        value: &Variant,
+    ) -> Result<SpillRect, String> {
+        let shape = formula
+            .and_then(|expr| formula_spill_shape(expr, self.cells(), value))
+            .or_else(|| value.array_shape())
+            .ok_or_else(|| "cannot apply a scalar value as a spill".to_string())?;
+        let rect = SpillRect::new(origin_row, origin_col, shape)?;
+        self.plan_spill_rect(rect)?;
+        let Variant::Array(values) = value else {
+            return Err("formula spill value must be a flat array".to_string());
+        };
+        self.apply_spill_rect_values(rect, values)
+    }
+
+    /// Plans the worksheet footprint for a dynamic-array value without
+    /// mutating the sheet. `None` means the value is scalar. An error names
+    /// the first occupied cell that would collide with the spill rectangle;
+    /// callers can convert that result to Excel's `#SPILL!` behavior when
+    /// wiring the actual spill writer.
+    pub fn plan_spill_for_value(
+        &self,
+        origin_row: u32,
+        origin_col: u32,
+        value: &Variant,
+    ) -> Result<Option<SpillRect>, String> {
+        let Some(shape) = value.array_shape() else {
+            return Ok(None);
+        };
+        let rect = SpillRect::new(origin_row, origin_col, shape)?;
+        self.plan_spill_rect(rect)?;
+        Ok(Some(rect))
+    }
+
+    fn plan_spill_rect(&self, rect: SpillRect) -> Result<(), String> {
+        let shape = rect.shape;
+        let Some(cells) = self.sheets.get(&self.active_sheet) else {
+            return Ok(());
+        };
+        for row_offset in 0..shape.rows {
+            for col_offset in 0..shape.cols {
+                let Some(position) = rect.cell_at(row_offset, col_offset) else {
+                    continue;
+                };
+                if position == (rect.origin_row, rect.origin_col) {
+                    continue;
+                }
+                let owned_by_same_anchor = self
+                    .spill_rects
+                    .get(&self.active_sheet)
+                    .and_then(|anchors| anchors.get(&(rect.origin_row, rect.origin_col)))
+                    .is_some_and(|old_rect| old_rect.contains(position));
+                if !owned_by_same_anchor
+                    && cells.get(&position).is_some_and(|cell| {
+                        cell.formula.is_some() || !matches!(cell.value, Variant::Empty)
+                    })
+                {
+                    return Err(format!(
+                        "#SPILL!: target cell {}:{} is occupied",
+                        position.0, position.1
+                    ));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Applies a dynamic-array value to the active worksheet. The anchor's
+    /// existing formula is preserved; newly occupied cells receive values
+    /// without formulas. Planning is completed before mutation, so a
+    /// collision cannot leave a partial spill behind.
+    pub fn apply_spill_for_value(
+        &mut self,
+        origin_row: u32,
+        origin_col: u32,
+        value: &Variant,
+    ) -> Result<SpillRect, String> {
+        self.plan_spill_for_value(origin_row, origin_col, value)?
+            .ok_or_else(|| "cannot apply a scalar value as a spill".to_string())?;
+        self.record_edit_history();
+        self.apply_spill_for_value_untracked(origin_row, origin_col, value)
+    }
+
+    fn apply_spill_for_value_untracked(
+        &mut self,
+        origin_row: u32,
+        origin_col: u32,
+        value: &Variant,
+    ) -> Result<SpillRect, String> {
+        let Some(rect) = self.plan_spill_for_value(origin_row, origin_col, value)? else {
+            return Err("cannot apply a scalar value as a spill".to_string());
+        };
+        let values = match value {
+            Variant::Array(values) => values,
+            _ => unreachable!("plan_spill_for_value rejects scalar values"),
+        };
+        self.apply_spill_rect_values(rect, values)
+    }
+
+    fn apply_spill_rect_values(
+        &mut self,
+        rect: SpillRect,
+        values: &[Variant],
+    ) -> Result<SpillRect, String> {
+        if rect.shape.cell_count() != values.len() {
+            return Err("spill value count does not match its shape".to_string());
+        }
+        let shape = rect.shape;
+        let origin_row = rect.origin_row;
+        let origin_col = rect.origin_col;
+        let active = self.active_sheet.clone();
+        let mut changed = Vec::with_capacity(shape.cell_count().max(1));
+        self.clear_spill_for_anchor(&active, (origin_row, origin_col), &mut changed);
+        let Some(cells) = self.sheets.get_mut(&active) else {
+            return Err(format!("unknown active sheet '{}'", active));
+        };
+        if shape.is_empty() {
+            let formula = cells
+                .get(&(origin_row, origin_col))
+                .and_then(|cell| cell.formula.clone());
+            cells.insert(
+                (origin_row, origin_col),
+                CellContent {
+                    formula,
+                    value: Variant::Empty,
+                },
+            );
+            changed.push((origin_row, origin_col));
+        } else {
+            for row_offset in 0..shape.rows {
+                for col_offset in 0..shape.cols {
+                    let position = rect
+                        .cell_at(row_offset, col_offset)
+                        .expect("validated spill rectangle cell");
+                    let flat_index = row_offset * shape.cols + col_offset;
+                    let formula = if position == (origin_row, origin_col) {
+                        cells.get(&position).and_then(|cell| cell.formula.clone())
+                    } else {
+                        None
+                    };
+                    cells.insert(
+                        position,
+                        CellContent {
+                            formula,
+                            value: values[flat_index].clone(),
+                        },
+                    );
+                    changed.push(position);
+                }
+            }
+        }
+        self.cell_index_dirty = true;
+        self.next_append_rows.remove(&active);
+        self.workbook_formula_dirty
+            .entry(active.clone())
+            .or_default()
+            .extend(changed.iter().copied());
+        self.workbook_formula_tracking_valid = true;
+        self.mark_formula_dependents(&active, &changed);
+        self.cell_tile_cache
+            .lock()
+            .expect("cell tile cache mutex poisoned")
+            .remove(&active);
+        if shape.is_empty() {
+            if let Some(anchors) = self.spill_rects.get_mut(&active) {
+                anchors.remove(&(origin_row, origin_col));
+            }
+        } else {
+            self.spill_rects
+                .entry(active)
+                .or_default()
+                .insert((origin_row, origin_col), rect);
+        }
+        Ok(rect)
+    }
+
+    /// Applies a rectangular two-dimensional array to the active worksheet.
+    /// Ragged rows are rejected before any mutation. This is the shape-aware
+    /// entry point for functions such as `TRANSPOSE`; the legacy flat
+    /// `Variant::Array` path remains one row for compatibility.
+    pub fn apply_spill_matrix(
+        &mut self,
+        origin_row: u32,
+        origin_col: u32,
+        matrix: &[Vec<Variant>],
+    ) -> Result<SpillRect, String> {
+        let rows = matrix.len();
+        let cols = matrix.first().map_or(0, Vec::len);
+        if matrix.iter().any(|row| row.len() != cols) {
+            return Err("spill matrix rows must have equal widths".to_string());
+        }
+        let rect = SpillRect::new(origin_row, origin_col, ArrayShape::new(rows, cols))?;
+        self.plan_spill_rect(rect)?;
+        let values = matrix
+            .iter()
+            .flat_map(|row| row.iter().cloned())
+            .collect::<Vec<_>>();
+        self.record_edit_history();
+        self.apply_spill_rect_values(rect, &values)
     }
 
     pub fn set_calc_mode(&mut self, mode: CalculationMode) -> Result<(), String> {
@@ -7366,11 +15289,74 @@ impl Default for Vm {
 // col_letters_to_num_vm/parse_cell_addr/parse_range_addr moved to
 // elixcee-types (Phase 2A); re-exported near the top of this file.
 
+/// Extract one XML attribute from a bounded element fragment. This is used for
+/// the tiny `sheetPr` metadata projection only; the source fragment itself is
+/// still preserved and written through the OOXML passthrough path.
+fn xml_attr_value(fragment: &str, wanted: &str) -> Option<String> {
+    let bytes = fragment.as_bytes();
+    let mut cursor = 0;
+    while let Some(relative) = fragment[cursor..].find(wanted) {
+        let start = cursor + relative;
+        let boundary = |value: Option<u8>| {
+            value.is_none_or(|ch| !(ch.is_ascii_alphanumeric() || ch == b'_' || ch == b':'))
+        };
+        if boundary(start.checked_sub(1).and_then(|i| bytes.get(i)).copied())
+            && boundary(bytes.get(start + wanted.len()).copied())
+        {
+            let mut i = start + wanted.len();
+            while bytes.get(i).is_some_and(u8::is_ascii_whitespace) {
+                i += 1;
+            }
+            if bytes.get(i) == Some(&b'=') {
+                i += 1;
+                while bytes.get(i).is_some_and(u8::is_ascii_whitespace) {
+                    i += 1;
+                }
+                let quote = *bytes.get(i)?;
+                if quote == b'"' || quote == b'\'' {
+                    let value_start = i + 1;
+                    let end = fragment[value_start..].find(quote as char)? + value_start;
+                    return Some(fragment[value_start..end].to_string());
+                }
+            }
+        }
+        cursor = start + wanted.len();
+    }
+    None
+}
+
 /// Splits `addr` on top-level commas and parses each piece with
 /// `parse_range_addr` (Milestone B7a) — `"A1:A3,C1:C3"` becomes 2 `Rect`s;
 /// a plain `"A1:C10"` (no comma) still returns a 1-element `Vec` so callers
 /// can treat single- and multi-area addresses uniformly. `parse_range_addr`
 /// itself is untouched — every other caller keeps its current signature.
+fn column_letters(mut col: u32) -> String {
+    let mut out = String::new();
+    while col > 0 {
+        let digit = ((col - 1) % 26) as u8;
+        out.push((b'A' + digit) as char);
+        col = (col - 1) / 26;
+    }
+    out.chars().rev().collect()
+}
+
+fn range_address(range: &RangeRef) -> String {
+    range
+        .areas
+        .iter()
+        .map(|area| {
+            let start = format!("${}${}", column_letters(area.start_col), area.start_row);
+            let end = format!("${}${}", column_letters(area.end_col), area.end_row);
+            if start == end {
+                start
+            } else {
+                format!("{start}:{end}")
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
 pub fn parse_multi_area_addr(addr: &str) -> Option<Vec<Rect>> {
     addr.split(',')
         .map(|piece| {
@@ -7830,6 +15816,7 @@ fn closest_match(requested: &str, candidates: &[String]) -> Option<String> {
 fn make_record_default(
     fields: &[(String, String)],
     type_defs: &HashMap<String, Vec<(String, String)>>,
+    module_scope: Option<&str>,
 ) -> Variant {
     let map: HashMap<String, Variant> = fields
         .iter()
@@ -7840,8 +15827,11 @@ fn make_record_default(
                 "boolean" => Variant::Boolean(false),
                 "string" => Variant::Str(String::new()),
                 other => {
-                    if let Some(nested) = type_defs.get(other) {
-                        make_record_default(nested, type_defs)
+                    let nested = module_scope
+                        .and_then(|module| type_defs.get(&format!("{module}.{other}")))
+                        .or_else(|| type_defs.get(other));
+                    if let Some(nested) = nested {
+                        make_record_default(nested, type_defs, module_scope)
                     } else {
                         Variant::Empty
                     }
@@ -7878,28 +15868,104 @@ fn nested_set(target: &mut Variant, fields: &[String], value: Variant) {
 
 // ── Formula dependency ordering ───────────────────────────────────────────────
 
-/// Collect all (row, col) cell references in a formula expression (deduped).
-fn extract_cell_refs(expr: &formula::FormulaExpr) -> HashSet<(u32, u32)> {
+fn collect_direct_formula_inputs(
+    expr: &formula::FormulaExpr,
+    refs: &mut HashSet<(u32, u32)>,
+    ranges: &mut Vec<(u32, u32, u32, u32)>,
+) {
     use formula::FormulaExpr::*;
     match expr {
-        CellRef { col, row, .. } => [(*row, *col)].into(),
+        CellRef { col, row, .. } => {
+            refs.insert((*row, *col));
+        }
+        Range { c1, r1, c2, r2, .. } => ranges.push((
+            (*r1).min(*r2),
+            (*c1).min(*c2),
+            (*r1).max(*r2),
+            (*c1).max(*c2),
+        )),
+        BinOp { lhs, rhs, .. } => {
+            collect_direct_formula_inputs(lhs, refs, ranges);
+            collect_direct_formula_inputs(rhs, refs, ranges);
+        }
+        UnaryMinus(inner) => collect_direct_formula_inputs(inner, refs, ranges),
+        FuncCall { args, .. } => {
+            for arg in args {
+                collect_direct_formula_inputs(arg, refs, ranges);
+            }
+        }
+        Call { callee, args } => {
+            collect_direct_formula_inputs(callee, refs, ranges);
+            for arg in args {
+                collect_direct_formula_inputs(arg, refs, ranges);
+            }
+        }
+        Number(_) | Str(_) | Bool(_) | Omitted => {}
+    }
+}
+
+/// Collect only references that point at another formula cell. Large ordinary
+/// data ranges must not be expanded into one HashSet entry per coordinate just
+/// to discover that almost none of those coordinates participate in the
+/// dependency graph.
+fn collect_formula_dependencies(
+    expr: &formula::FormulaExpr,
+    positions: &HashMap<(u32, u32), usize>,
+    positions_by_row: &BTreeMap<u32, BTreeMap<u32, usize>>,
+    spill_rects: Option<&HashMap<(u32, u32), SpillRect>>,
+    out: &mut HashSet<usize>,
+) {
+    use formula::FormulaExpr::*;
+    match expr {
+        CellRef { col, row, .. } => {
+            let position = spill_rects
+                .and_then(|rects| {
+                    rects
+                        .iter()
+                        .find_map(|(anchor, rect)| rect.contains((*row, *col)).then_some(*anchor))
+                })
+                .unwrap_or((*row, *col));
+            if let Some(&index) = positions.get(&position) {
+                out.insert(index);
+            }
+        }
         Range { c1, r1, c2, r2, .. } => {
-            let mut s = HashSet::new();
-            for r in *r1..=*r2 {
-                for c in *c1..=*c2 {
-                    s.insert((r, c));
+            let (rmin, rmax) = (r1.min(r2), r1.max(r2));
+            let (cmin, cmax) = (c1.min(c2), c1.max(c2));
+            for (_, columns) in positions_by_row.range(*rmin..=*rmax) {
+                for (_, &index) in columns.range(*cmin..=*cmax) {
+                    out.insert(index);
                 }
             }
-            s
+            if let Some(rects) = spill_rects {
+                for (anchor, rect) in rects {
+                    if spill_rect_overlaps_range(rect, *rmin, *cmin, *rmax, *cmax)
+                        && let Some(&index) = positions.get(anchor)
+                    {
+                        out.insert(index);
+                    }
+                }
+            }
         }
         BinOp { lhs, rhs, .. } => {
-            let mut s = extract_cell_refs(lhs);
-            s.extend(extract_cell_refs(rhs));
-            s
+            collect_formula_dependencies(lhs, positions, positions_by_row, spill_rects, out);
+            collect_formula_dependencies(rhs, positions, positions_by_row, spill_rects, out);
         }
-        UnaryMinus(inner) => extract_cell_refs(inner),
-        FuncCall { args, .. } => args.iter().flat_map(extract_cell_refs).collect(),
-        Number(_) | Str(_) | Bool(_) => HashSet::new(),
+        UnaryMinus(inner) => {
+            collect_formula_dependencies(inner, positions, positions_by_row, spill_rects, out)
+        }
+        FuncCall { args, .. } => {
+            for arg in args {
+                collect_formula_dependencies(arg, positions, positions_by_row, spill_rects, out);
+            }
+        }
+        Call { callee, args } => {
+            collect_formula_dependencies(callee, positions, positions_by_row, spill_rects, out);
+            for arg in args {
+                collect_formula_dependencies(arg, positions, positions_by_row, spill_rects, out);
+            }
+        }
+        Number(_) | Str(_) | Bool(_) | Omitted => {}
     }
 }
 
@@ -7907,7 +15973,10 @@ fn extract_cell_refs(expr: &formula::FormulaExpr) -> HashSet<(u32, u32)> {
 /// Returns indices into `cells` in safe evaluation order.
 /// Cells with no inter-formula dependencies appear first.
 /// Returns `Err` if a circular reference is detected.
-fn topo_sort_formulas(cells: &[(u32, u32, formula::FormulaExpr)]) -> Result<Vec<usize>, String> {
+fn topo_sort_formulas(
+    cells: &[(u32, u32, formula::FormulaExpr)],
+    spill_rects: Option<&HashMap<(u32, u32), SpillRect>>,
+) -> Result<Vec<usize>, String> {
     let n = cells.len();
     // map (row, col) → index in cells slice
     let pos: HashMap<(u32, u32), usize> = cells
@@ -7915,6 +15984,10 @@ fn topo_sort_formulas(cells: &[(u32, u32, formula::FormulaExpr)]) -> Result<Vec<
         .enumerate()
         .map(|(i, (r, c, _))| ((*r, *c), i))
         .collect();
+    let mut positions_by_row: BTreeMap<u32, BTreeMap<u32, usize>> = BTreeMap::new();
+    for (&(row, col), &index) in &pos {
+        positions_by_row.entry(row).or_default().insert(col, index);
+    }
 
     // in_degree[i] = number of formula cells that i depends on
     let mut in_degree = vec![0usize; n];
@@ -7922,10 +15995,16 @@ fn topo_sort_formulas(cells: &[(u32, u32, formula::FormulaExpr)]) -> Result<Vec<
     let mut adj: Vec<Vec<usize>> = vec![vec![]; n];
 
     for (i, (_, _, expr)) in cells.iter().enumerate() {
-        for dep in extract_cell_refs(expr) {
-            if let Some(&j) = pos.get(&dep)
-                && j != i
-            {
+        let mut dependencies = HashSet::new();
+        collect_formula_dependencies(
+            expr,
+            &pos,
+            &positions_by_row,
+            spill_rects,
+            &mut dependencies,
+        );
+        for j in dependencies {
+            if j != i {
                 // skip self-reference
                 adj[j].push(i);
                 in_degree[i] += 1;
@@ -7957,6 +16036,715 @@ fn topo_sort_formulas(cells: &[(u32, u32, formula::FormulaExpr)]) -> Result<Vec<
         // Return Ok with best-effort order rather than hard-erroring; circular refs will show stale values
     }
     Ok(order)
+}
+
+fn spill_rect_overlaps_range(rect: &SpillRect, r1: u32, c1: u32, r2: u32, c2: u32) -> bool {
+    if rect.shape.is_empty() {
+        return false;
+    }
+    let rect_r2 = rect.origin_row as u64 + rect.shape.rows as u64 - 1;
+    let rect_c2 = rect.origin_col as u64 + rect.shape.cols as u64 - 1;
+    rect.origin_row as u64 <= r2 as u64
+        && r1 as u64 <= rect_r2
+        && rect.origin_col as u64 <= c2 as u64
+        && c1 as u64 <= rect_c2
+}
+
+/// Recover the worksheet shape of formula-engine arrays whose legacy value
+/// representation is intentionally flat. The evaluator already emits values
+/// in row-major order; this helper supplies the missing footprint metadata at
+/// the VM boundary without changing VBA `Variant::Array` semantics.
+fn formula_spill_shape(
+    expr: &formula::FormulaExpr,
+    cells: &HashMap<(u32, u32), CellContent>,
+    value: &Variant,
+) -> Option<ArrayShape> {
+    use formula::FormulaExpr;
+
+    let fallback = value.array_shape()?;
+    if let formula::FormulaExpr::Range { c1, r1, c2, r2, .. } = expr {
+        let rows = (r2.max(r1) - r2.min(r1) + 1) as usize;
+        let cols = (c2.max(c1) - c2.min(c1) + 1) as usize;
+        let shape = ArrayShape::new(rows, cols);
+        return (shape.cell_count() == value_len(value)).then_some(shape);
+    }
+    let FormulaExpr::FuncCall { name, args } = expr else {
+        return Some(fallback);
+    };
+    let name = name.to_ascii_uppercase();
+    let dimension = |arg: Option<&FormulaExpr>, default: usize| -> Option<usize> {
+        let Some(arg) = arg else { return Some(default) };
+        match formula::evaluate(arg, cells).ok()? {
+            Variant::Integer(v) if v >= 0 => Some(v as usize),
+            Variant::Float(v) if v.is_finite() && v >= 0.0 => Some(v as usize),
+            _ => None,
+        }
+    };
+    let exact = |rows: usize, cols: usize| {
+        let shape = ArrayShape::new(rows, cols);
+        (shape.cell_count() == value_len(value)).then_some(shape)
+    };
+
+    match name.as_str() {
+        "SEQUENCE" | "RANDARRAY" | "MAKEARRAY" => {
+            let rows = dimension(args.first(), 1)?.max(1);
+            let cols = dimension(args.get(1), 1)?.max(1);
+            exact(rows, cols).or(Some(fallback))
+        }
+        "FREQUENCY" => {
+            let bins = match args.get(1)? {
+                FormulaExpr::Range { c1, r1, c2, r2, .. } => {
+                    (c2.max(c1) - c2.min(c1) + 1) as usize * (r2.max(r1) - r2.min(r1) + 1) as usize
+                }
+                expr => formula::evaluate(expr, cells)
+                    .ok()
+                    .map(|value| value_len(&value))
+                    .unwrap_or(0),
+            };
+            exact(bins.saturating_add(1), 1).or(Some(fallback))
+        }
+        "MODE.MULT" => exact(value_len(value), 1).or(Some(fallback)),
+        "LINEST" | "LOGEST" => {
+            let x_cols = match args.get(1) {
+                Some(FormulaExpr::Range { c1, c2, .. }) => (c2.max(c1) - c2.min(c1) + 1) as usize,
+                Some(expr) => formula::evaluate(expr, cells)
+                    .ok()
+                    .and_then(|value| {
+                        formula_spill_shape(expr, cells, &value).or_else(|| value.array_shape())
+                    })
+                    .map_or(1, |shape| shape.cols),
+                None => 1,
+            };
+            let constant = args
+                .get(2)
+                .and_then(|arg| formula::evaluate(arg, cells).ok())
+                .is_none_or(|value| is_truthy(&value));
+            let width = x_cols.saturating_add(usize::from(constant));
+            let rows = if args
+                .get(3)
+                .and_then(|arg| formula::evaluate(arg, cells).ok())
+                .is_some_and(|value| is_truthy(&value))
+            {
+                5
+            } else {
+                1
+            };
+            exact(rows, width).or(Some(fallback))
+        }
+        "TREND" | "GROWTH" => {
+            let known_x_cols = match args.get(1) {
+                Some(FormulaExpr::Range { c1, c2, .. }) => (c2.max(c1) - c2.min(c1) + 1) as usize,
+                _ => 1,
+            };
+            if known_x_cols > 1 {
+                let new_x = args.get(2)?;
+                if let FormulaExpr::Range { r1, r2, .. } = new_x {
+                    let rows = (r2.max(r1) - r2.min(r1) + 1) as usize;
+                    return exact(rows, 1).or(Some(fallback));
+                }
+            }
+            Some(fallback)
+        }
+        "TRANSPOSE" => match args.first()? {
+            FormulaExpr::Range { c1, r1, c2, r2, .. } => exact(
+                (c2.max(c1) - c2.min(c1) + 1) as usize,
+                (r2.max(r1) - r2.min(r1) + 1) as usize,
+            )
+            .or(Some(fallback)),
+            inner => formula_spill_shape(inner, cells, value)
+                .map(|shape| ArrayShape::new(shape.cols, shape.rows))
+                .or(Some(fallback)),
+        },
+        "FILTER" => {
+            let source = args.first()?;
+            if let FormulaExpr::Range { c1, c2, .. } = source {
+                let cols = (c2.max(c1) - c2.min(c1) + 1) as usize;
+                return (cols > 0 && value_len(value).is_multiple_of(cols))
+                    .then_some(ArrayShape::new(value_len(value) / cols, cols))
+                    .or(Some(fallback));
+            }
+            let source_value = formula::evaluate(source, cells).ok()?;
+            let source_shape = formula_spill_shape(source, cells, &source_value)
+                .or_else(|| source_value.array_shape())?;
+            let include = args
+                .get(1)
+                .and_then(|arg| formula::evaluate(arg, cells).ok());
+            let include_len = include.as_ref().map(value_len).unwrap_or(0);
+            let (include_rows, include_cols) =
+                if let (Some(include_expr), Some(include)) = (args.get(1), include.as_ref()) {
+                    let shape = formula_spill_shape(include_expr, cells, include)
+                        .unwrap_or_else(|| ArrayShape::new(1, include_len));
+                    (shape.rows, shape.cols)
+                } else {
+                    (1, include_len)
+                };
+            let column_include = include_rows == 1 && include_cols == source_shape.cols;
+            let shape = if column_include {
+                let count = match include {
+                    Some(Variant::Array(values)) => {
+                        values.iter().filter(|value| is_truthy(value)).count()
+                    }
+                    Some(value) if is_truthy(&value) => 1,
+                    _ => 0,
+                };
+                ArrayShape::new(source_shape.rows, count)
+            } else if source_shape.cols > 0 && value_len(value).is_multiple_of(source_shape.cols) {
+                ArrayShape::new(value_len(value) / source_shape.cols, source_shape.cols)
+            } else {
+                fallback
+            };
+            exact(shape.rows, shape.cols).or(Some(fallback))
+        }
+        "INDEX" => {
+            let FormulaExpr::Range { c1, r1, c2, r2, .. } = args.first()? else {
+                return Some(fallback);
+            };
+            let number = |arg: Option<&FormulaExpr>| -> Option<i64> {
+                match formula::evaluate(arg?, cells).ok()? {
+                    Variant::Integer(value) => Some(value),
+                    Variant::Float(value) if value.is_finite() => Some(value as i64),
+                    _ => None,
+                }
+            };
+            let row = number(args.get(1))?;
+            let col = if args.len() >= 3 {
+                number(args.get(2))?
+            } else {
+                1
+            };
+            let rows = (r2.max(r1) - r2.min(r1) + 1) as usize;
+            let cols = (c2.max(c1) - c2.min(c1) + 1) as usize;
+            let shape = match (row, col) {
+                (0, 0) => ArrayShape::new(rows, cols),
+                (0, _) => ArrayShape::new(rows, 1),
+                (_, 0) => ArrayShape::new(1, cols),
+                _ => return Some(fallback),
+            };
+            exact(shape.rows, shape.cols).or(Some(fallback))
+        }
+        "TAKE" | "DROP" => {
+            let source = args.first()?;
+            let source_value = formula::evaluate(source, cells).ok()?;
+            let source_shape = formula_spill_shape(source, cells, &source_value)
+                .or_else(|| source_value.array_shape())?;
+            let count = |arg: Option<&formula::FormulaExpr>, size: usize| -> Option<usize> {
+                let value = match formula::evaluate(arg?, cells).ok()? {
+                    Variant::Integer(value) => value,
+                    Variant::Float(value) if value.is_finite() => value as i64,
+                    _ => return None,
+                };
+                (value != 0).then_some((value.unsigned_abs() as usize).min(size))
+            };
+            let rows = count(args.get(1), source_shape.rows)?;
+            let cols = args
+                .get(2)
+                .and_then(|arg| count(Some(arg), source_shape.cols));
+            let shape = if name == "TAKE" {
+                ArrayShape::new(rows, cols.unwrap_or(source_shape.cols))
+            } else {
+                ArrayShape::new(
+                    source_shape.rows.saturating_sub(rows),
+                    cols.map_or(source_shape.cols, |cols| {
+                        source_shape.cols.saturating_sub(cols)
+                    }),
+                )
+            };
+            exact(shape.rows, shape.cols).or(Some(fallback))
+        }
+        "UNIQUE" | "SORT" | "SORTBY" => {
+            let source = args.first()?;
+            let source_value = formula::evaluate(source, cells).ok()?;
+            let source_shape = formula_spill_shape(source, cells, &source_value)
+                .or_else(|| source_value.array_shape())?;
+            if name == "SORTBY" {
+                return if source_shape.rows > 1 && source_shape.cols > 1 {
+                    exact(source_shape.rows, source_shape.cols).or(Some(fallback))
+                } else {
+                    Some(fallback)
+                };
+            }
+            if source_shape.rows <= 1 || source_shape.cols <= 1 {
+                return if source_shape.cols == 1 {
+                    exact(value_len(value), 1).or(Some(fallback))
+                } else {
+                    Some(fallback)
+                };
+            }
+            if name == "UNIQUE" {
+                let by_col = args
+                    .get(2)
+                    .and_then(|arg| formula::evaluate(arg, cells).ok())
+                    .is_some_and(|value| is_truthy(&value));
+                let exactly_once = args
+                    .get(1)
+                    .and_then(|arg| formula::evaluate(arg, cells).ok())
+                    .is_some_and(|value| is_truthy(&value));
+                let outer = if by_col {
+                    source_shape.cols
+                } else {
+                    source_shape.rows
+                };
+                let inner = if by_col {
+                    source_shape.rows
+                } else {
+                    source_shape.cols
+                };
+                let source_values = match source_value {
+                    Variant::Array(values) => values,
+                    _ => return Some(fallback),
+                };
+                let mut groups: Vec<Vec<Variant>> = Vec::new();
+                let mut counts: Vec<usize> = Vec::new();
+                for index in 0..outer {
+                    let group: Vec<Variant> = if by_col {
+                        (0..inner)
+                            .map(|offset| source_values[offset * source_shape.cols + index].clone())
+                            .collect()
+                    } else {
+                        source_values[index * source_shape.cols..(index + 1) * source_shape.cols]
+                            .to_vec()
+                    };
+                    if let Some(existing) = groups.iter().position(|candidate| {
+                        candidate
+                            .iter()
+                            .zip(&group)
+                            .all(|(left, right)| left == right)
+                    }) {
+                        counts[existing] += 1;
+                    } else {
+                        groups.push(group);
+                        counts.push(1);
+                    }
+                }
+                let count = groups
+                    .iter()
+                    .zip(&counts)
+                    .filter(|(_, count)| !exactly_once || **count == 1)
+                    .count();
+                if by_col {
+                    exact(source_shape.rows, count).or(Some(fallback))
+                } else {
+                    exact(count, source_shape.cols).or(Some(fallback))
+                }
+            } else {
+                exact(source_shape.rows, source_shape.cols).or(Some(fallback))
+            }
+        }
+        "CHOOSECOLS" | "CHOOSEROWS" => {
+            let source = args.first()?;
+            let source_value = formula::evaluate(source, cells).ok()?;
+            let source_shape = formula_spill_shape(source, cells, &source_value)
+                .or_else(|| source_value.array_shape())?;
+            if source_shape.rows <= 1 || source_shape.cols <= 1 {
+                return Some(fallback);
+            }
+            let mut count = 0usize;
+            for arg in &args[1..] {
+                let n = match formula::evaluate(arg, cells).ok()? {
+                    Variant::Integer(value) => value,
+                    Variant::Float(value) if value.is_finite() => value as i64,
+                    _ => return Some(fallback),
+                };
+                let size = if name == "CHOOSECOLS" {
+                    source_shape.cols
+                } else {
+                    source_shape.rows
+                };
+                let index = if n > 0 { n - 1 } else { size as i64 + n };
+                if index < 0 || index >= size as i64 {
+                    return Some(fallback);
+                }
+                count += 1;
+            }
+            let shape = if name == "CHOOSECOLS" {
+                ArrayShape::new(source_shape.rows, count)
+            } else {
+                ArrayShape::new(count, source_shape.cols)
+            };
+            exact(shape.rows, shape.cols).or(Some(fallback))
+        }
+        "GROUPBY" => {
+            let source = args.first()?;
+            let group_cols = match source {
+                FormulaExpr::Range { c1, c2, .. } => (c2.max(c1) - c2.min(c1) + 1) as usize,
+                _ => {
+                    let source_value = formula::evaluate(source, cells).ok()?;
+                    formula_spill_shape(source, cells, &source_value)
+                        .or_else(|| source_value.array_shape())?
+                        .cols
+                }
+            };
+            let values = args.get(1)?;
+            let value_cols = match values {
+                FormulaExpr::Range { c1, c2, .. } => (c2.max(c1) - c2.min(c1) + 1) as usize,
+                _ => {
+                    let value = formula::evaluate(values, cells).ok()?;
+                    formula_spill_shape(values, cells, &value)
+                        .or_else(|| value.array_shape())?
+                        .cols
+                }
+            };
+            let reducer_count = match args.get(2) {
+                Some(FormulaExpr::FuncCall { name, args })
+                    if name.eq_ignore_ascii_case("HSTACK") && !args.is_empty() =>
+                {
+                    args.len()
+                }
+                Some(_) => 1,
+                None => return Some(fallback),
+            };
+            let width = group_cols.saturating_add(value_cols.saturating_mul(reducer_count));
+            if width == 0 || !value_len(value).is_multiple_of(width) {
+                Some(fallback)
+            } else {
+                exact(value_len(value) / width, width).or(Some(fallback))
+            }
+        }
+        "PIVOTBY" => {
+            let values_for_shape = |expr: &FormulaExpr| -> Option<Variant> {
+                match expr {
+                    FormulaExpr::Range { c1, r1, c2, r2, .. } => Some(Variant::Array(
+                        (*r1..=*r2)
+                            .flat_map(|row| {
+                                (*c1..=*c2).map(move |col| {
+                                    cells
+                                        .get(&(row, col))
+                                        .map_or(Variant::Empty, |cell| cell.value.clone())
+                                })
+                            })
+                            .collect(),
+                    )),
+                    _ => formula::evaluate(expr, cells).ok(),
+                }
+            };
+            let mut rows = values_for_shape(args.first()?)?;
+            let mut cols = values_for_shape(args.get(1)?)?;
+            let data = args.get(2).and_then(values_for_shape);
+            let field_shape = |expr: &FormulaExpr, value: &Variant| -> Option<(usize, usize)> {
+                if let FormulaExpr::Range { c1, r1, c2, r2, .. } = expr {
+                    return Some((
+                        (r2.max(r1) - r2.min(r1) + 1) as usize,
+                        (c2.max(c1) - c2.min(c1) + 1) as usize,
+                    ));
+                }
+                formula_spill_shape(expr, cells, value)
+                    .or_else(|| value.array_shape())
+                    .map(|shape| (shape.rows, shape.cols))
+            };
+            let distinct_count = |value: &Variant, width: usize| -> Option<usize> {
+                let values = match value {
+                    Variant::Array(values) => values,
+                    _ => return Some(1),
+                };
+                if width == 0 || !values.len().is_multiple_of(width) {
+                    return None;
+                }
+                let mut distinct = Vec::new();
+                for key in values.chunks(width) {
+                    if !distinct.iter().any(|candidate: &Vec<Variant>| {
+                        candidate.iter().zip(key).all(|(left, right)| left == right)
+                    }) {
+                        distinct.push(key.to_vec());
+                    }
+                }
+                Some(distinct.len())
+            };
+            let (_, row_width) = field_shape(args.first()?, &rows)?;
+            let (_, col_width) = field_shape(args.get(1)?, &cols)?;
+            let data_width_for_headers = match args.get(2)? {
+                FormulaExpr::Range { c1, c2, .. } => (c2.max(c1) - c2.min(c1) + 1) as usize,
+                _ => data
+                    .as_ref()
+                    .and_then(Variant::array_shape)
+                    .map_or(1, |shape| shape.cols),
+            };
+            let field_headers = match args
+                .get(4)
+                .and_then(|arg| formula::evaluate(arg, cells).ok())
+            {
+                None => 3,
+                Some(Variant::Integer(value)) => value,
+                Some(Variant::Float(value)) if value.is_finite() && value.fract() == 0.0 => {
+                    value as i64
+                }
+                _ => return Some(fallback),
+            };
+            if !(0..=3).contains(&field_headers) {
+                return Some(fallback);
+            }
+            let explicit_field_headers = args.get(4).is_some();
+            let automatic_input_headers = !explicit_field_headers
+                && data_width_for_headers > 0
+                && matches!(
+                    data.as_ref(),
+                    Some(Variant::Array(values))
+                        if values.len() > data_width_for_headers
+                            && matches!(values.first(), Some(Variant::Str(_)))
+                            && matches!(
+                                values.get(data_width_for_headers),
+                                Some(Variant::Integer(_) | Variant::Float(_))
+                            )
+                );
+            let input_headers = if explicit_field_headers {
+                matches!(field_headers, 1 | 3)
+            } else {
+                automatic_input_headers
+            };
+            if input_headers {
+                let drop_header = |value: &mut Variant, width: usize| -> Option<()> {
+                    let Variant::Array(values) = value else {
+                        return None;
+                    };
+                    if width == 0 || values.len() < width {
+                        return None;
+                    }
+                    values.drain(..width);
+                    Some(())
+                };
+                drop_header(&mut rows, row_width)?;
+                drop_header(&mut cols, col_width)?;
+            }
+            let row_count = distinct_count(&rows, row_width)?;
+            let col_count = distinct_count(&cols, col_width)?;
+            let data_shape = args.get(2).and_then(|arg| match arg {
+                FormulaExpr::Range { c1, c2, .. } => Some((c2.max(c1) - c2.min(c1) + 1) as usize),
+                _ => data.as_ref().and_then(|value| {
+                    formula_spill_shape(arg, cells, value)
+                        .or_else(|| value.array_shape())
+                        .map(|shape| shape.cols)
+                }),
+            })?;
+            let show_field_header_row = if explicit_field_headers {
+                matches!(field_headers, 2 | 3)
+            } else if automatic_input_headers {
+                row_width > 1 || col_width > 1
+            } else {
+                true
+            };
+            let number = |index: usize| -> Option<i64> {
+                match args
+                    .get(index)
+                    .and_then(|arg| formula::evaluate(arg, cells).ok())
+                {
+                    Some(Variant::Integer(value)) => Some(value),
+                    Some(Variant::Float(value)) if value.is_finite() && value.fract() == 0.0 => {
+                        Some(value as i64)
+                    }
+                    None => Some(0),
+                    _ => None,
+                }
+            };
+            let row_total = number(5)?;
+            let col_total = number(7)?;
+            if !(-2..=2).contains(&row_total) || !(-2..=2).contains(&col_total) {
+                return Some(fallback);
+            }
+            if row_total.unsigned_abs() >= 2 && row_width < 2 {
+                return Some(fallback);
+            }
+            if col_total.unsigned_abs() >= 2 && col_width < 2 {
+                return Some(fallback);
+            }
+            let reducer_vertical = matches!(
+                args.get(3),
+                Some(FormulaExpr::FuncCall { name, args })
+                    if name.eq_ignore_ascii_case("VSTACK") && !args.is_empty()
+            );
+            let reducer_count = match args.get(3) {
+                Some(FormulaExpr::FuncCall { name, args })
+                    if (name.eq_ignore_ascii_case("HSTACK")
+                        || name.eq_ignore_ascii_case("VSTACK"))
+                        && !args.is_empty() =>
+                {
+                    args.len()
+                }
+                Some(_) => 1,
+                None => return Some(fallback),
+            };
+            let output_value_width = if reducer_vertical {
+                data_shape
+            } else {
+                data_shape.saturating_mul(reducer_count)
+            };
+            let col_subtotal_count = if col_total.unsigned_abs() >= 2 {
+                let Variant::Array(values) = &cols else {
+                    return Some(fallback);
+                };
+                let mut parents = Vec::new();
+                for key in values.chunks(col_width) {
+                    let parent = &key[..col_width - 1];
+                    if !parents.iter().any(|candidate: &Vec<Variant>| {
+                        candidate
+                            .iter()
+                            .zip(parent)
+                            .all(|(left, right)| left == right)
+                    }) {
+                        parents.push(parent.to_vec());
+                    }
+                }
+                parents.len()
+            } else {
+                0
+            };
+            let total_column = row_total != 0 || col_total != 0;
+            let output_cols = row_width
+                .saturating_add(
+                    col_count
+                        .saturating_add(col_subtotal_count)
+                        .saturating_mul(output_value_width),
+                )
+                .saturating_add(usize::from(total_column).saturating_mul(output_value_width));
+            let data_output_rows = if reducer_vertical {
+                row_count.saturating_mul(reducer_count)
+            } else {
+                row_count
+            };
+            let row_subtotal_count = if row_total.unsigned_abs() >= 2 {
+                let Variant::Array(values) = &rows else {
+                    return Some(fallback);
+                };
+                let mut parents = Vec::new();
+                for key in values.chunks(row_width) {
+                    let parent = &key[..row_width - 1];
+                    if !parents.iter().any(|candidate: &Vec<Variant>| {
+                        candidate
+                            .iter()
+                            .zip(parent)
+                            .all(|(left, right)| left == right)
+                    }) {
+                        parents.push(parent.to_vec());
+                    }
+                }
+                parents.len()
+            } else {
+                0
+            };
+            let total_output_rows = if col_total != 0 {
+                if reducer_vertical { reducer_count } else { 1 }
+            } else {
+                0
+            };
+            let output_rows = data_output_rows
+                .saturating_add(row_subtotal_count.saturating_mul(if reducer_vertical {
+                    reducer_count
+                } else {
+                    1
+                }))
+                .saturating_add(usize::from(show_field_header_row))
+                .saturating_add(total_output_rows);
+            exact(output_rows, output_cols).or(Some(fallback))
+        }
+        "TEXTSPLIT" => {
+            let text = formula::evaluate(args.first()?, cells).ok()?;
+            let text = spill_text_scalar(&text)?;
+            let row_delimiters = args
+                .get(2)
+                .and_then(|arg| formula::evaluate(arg, cells).ok())
+                .and_then(|value| spill_text_delimiters(&value))
+                .filter(|delimiters| delimiters.iter().any(|delimiter| !delimiter.is_empty()));
+            let ignore_empty = args
+                .get(3)
+                .and_then(|arg| formula::evaluate(arg, cells).ok())
+                .is_some_and(|value| is_truthy(&value));
+            let rows = row_delimiters.as_deref().map_or(1, |delimiters| {
+                split_part_count(&text, delimiters, ignore_empty)
+            });
+            if rows == 0 || !value_len(value).is_multiple_of(rows) {
+                Some(fallback)
+            } else {
+                exact(rows, value_len(value) / rows).or(Some(fallback))
+            }
+        }
+        "TOCOL" => Some(ArrayShape::new(value_len(value), 1)),
+        "TOROW" => Some(ArrayShape::new(1, value_len(value))),
+        "WRAPCOLS" => {
+            let rows = dimension(args.get(1), 0)?.max(1);
+            exact(rows, value_len(value).div_ceil(rows)).or(Some(fallback))
+        }
+        "WRAPROWS" => {
+            let cols = dimension(args.get(1), 0)?.max(1);
+            exact(value_len(value).div_ceil(cols), cols).or(Some(fallback))
+        }
+        "VSTACK" | "HSTACK" => {
+            let mut shapes = Vec::with_capacity(args.len());
+            for arg in args {
+                let arg_value = formula::evaluate(arg, cells).ok()?;
+                let shape = formula_spill_shape(arg, cells, &arg_value)
+                    .or_else(|| arg_value.array_shape())
+                    .unwrap_or(ArrayShape::new(1, 1));
+                shapes.push(shape);
+            }
+            let shape = if name == "VSTACK" {
+                ArrayShape::new(
+                    shapes.iter().map(|shape| shape.rows).sum(),
+                    shapes.iter().map(|shape| shape.cols).max().unwrap_or(0),
+                )
+            } else {
+                ArrayShape::new(
+                    shapes.iter().map(|shape| shape.rows).max().unwrap_or(0),
+                    shapes.iter().map(|shape| shape.cols).sum(),
+                )
+            };
+            exact(shape.rows, shape.cols).or(Some(fallback))
+        }
+        _ => Some(fallback),
+    }
+}
+
+fn value_len(value: &Variant) -> usize {
+    match value {
+        Variant::Array(values) => values.len(),
+        _ => 1,
+    }
+}
+
+fn spill_text_scalar(value: &Variant) -> Option<String> {
+    match value {
+        Variant::Str(value) => Some(value.clone()),
+        Variant::Integer(value) => Some(value.to_string()),
+        Variant::Float(value) if value.is_finite() => Some(value.to_string()),
+        Variant::Boolean(value) => Some(if *value { "TRUE" } else { "FALSE" }.to_string()),
+        Variant::Empty => Some(String::new()),
+        _ => None,
+    }
+}
+
+fn spill_text_delimiters(value: &Variant) -> Option<Vec<String>> {
+    match value {
+        Variant::Array(values) => values.iter().map(spill_text_scalar).collect(),
+        value => Some(vec![spill_text_scalar(value)?]),
+    }
+}
+
+fn split_part_count(text: &str, delimiters: &[String], ignore_empty: bool) -> usize {
+    let mut start = 0usize;
+    let mut parts = 0usize;
+    loop {
+        let next = delimiters
+            .iter()
+            .filter(|delimiter| !delimiter.is_empty())
+            .filter_map(|delimiter| {
+                text[start..]
+                    .find(delimiter)
+                    .map(|offset| (start + offset, delimiter.len()))
+            })
+            .min_by(|(left_pos, left_len), (right_pos, right_len)| {
+                left_pos
+                    .cmp(right_pos)
+                    .then_with(|| right_len.cmp(left_len))
+            });
+        let Some((end, delimiter_len)) = next else {
+            break;
+        };
+        if !ignore_empty || end > start {
+            parts += 1;
+        }
+        start = end + delimiter_len;
+    }
+    if !ignore_empty || start < text.len() {
+        parts += 1;
+    }
+    parts
 }
 
 /// `ReDim Preserve arr(...)` on an array of the same rank as `new_bounds`.
@@ -8166,6 +16954,117 @@ fn eval_wsf(func: &str, vals: &[Variant]) -> Result<Variant, String> {
                 .sum();
             Ok(as_int_if_whole(total))
         }
+        "textjoin" => {
+            if vals.len() < 3 {
+                return Err("WorksheetFunction.TextJoin requires at least 3 arguments".into());
+            }
+            let delimiter = vba_to_str(&vals[0]);
+            let ignore_empty = is_truthy(&vals[1]);
+            let parts = flat_all(&vals[2..])
+                .into_iter()
+                .map(|value| vba_to_str(&value))
+                .filter(|value| !ignore_empty || !value.is_empty())
+                .collect::<Vec<_>>();
+            Ok(Variant::Str(parts.join(&delimiter)))
+        }
+        "xlookup" => {
+            if !(3..=6).contains(&vals.len()) {
+                return Err("WorksheetFunction.XLookup requires 3 to 6 arguments".into());
+            }
+            let key = &vals[0];
+            let lookup = flat_all(std::slice::from_ref(&vals[1]));
+            let result = flat_all(std::slice::from_ref(&vals[2]));
+            if lookup.len() != result.len() {
+                return Err(
+                    "WorksheetFunction.XLookup lookup and return arrays differ in size".into(),
+                );
+            }
+            let not_found = vals.get(3).cloned();
+            let match_mode = vals.get(4).map(to_f64_excel).transpose()?.unwrap_or(0.0);
+            let search_mode = vals.get(5).map(to_f64_excel).transpose()?.unwrap_or(1.0);
+            if !(match_mode == 0.0 || match_mode == 2.0)
+                || !matches!(search_mode, 1.0 | -1.0 | 2.0 | -2.0)
+            {
+                return Err("WorksheetFunction.XLookup supports exact/wildcard match and search_mode 1/-1/2/-2".into());
+            }
+            if matches!(search_mode, 2.0 | -2.0) {
+                if match_mode == 2.0 {
+                    return Err("WorksheetFunction.XLookup wildcard match is incompatible with binary search".into());
+                }
+                let index = crate::formula::eval::xlookup_binary_index(
+                    &lookup,
+                    key,
+                    search_mode == 2.0,
+                    0,
+                )?;
+                return Ok(index
+                    .and_then(|i| result.get(i).cloned())
+                    .or(not_found)
+                    .unwrap_or(Variant::Error(ExcelError::NA)));
+            }
+            let indices: Box<dyn Iterator<Item = usize>> = if search_mode == -1.0 {
+                Box::new((0..lookup.len()).rev())
+            } else {
+                Box::new(0..lookup.len())
+            };
+            for index in indices {
+                if (match_mode == 0.0 && vba_eq(&lookup[index], key))
+                    || (match_mode == 2.0
+                        && crate::formula::eval::wildcard_match(
+                            &vba_to_str(&lookup[index]),
+                            &vba_to_str(key),
+                        ))
+                {
+                    return Ok(result[index].clone());
+                }
+            }
+            Ok(not_found.unwrap_or(Variant::Error(ExcelError::NA)))
+        }
+        "xmatch" => {
+            if !(2..=4).contains(&vals.len()) {
+                return Err("WorksheetFunction.XMatch requires 2 to 4 arguments".into());
+            }
+            let key = &vals[0];
+            let lookup = flat_all(std::slice::from_ref(&vals[1]));
+            let match_mode = vals.get(2).map(to_f64_excel).transpose()?.unwrap_or(0.0);
+            let search_mode = vals.get(3).map(to_f64_excel).transpose()?.unwrap_or(1.0);
+            if !(match_mode == 0.0 || match_mode == 2.0)
+                || !matches!(search_mode, 1.0 | -1.0 | 2.0 | -2.0)
+            {
+                return Err("WorksheetFunction.XMatch supports exact/wildcard match and search_mode 1/-1/2/-2".into());
+            }
+            if matches!(search_mode, 2.0 | -2.0) {
+                if match_mode == 2.0 {
+                    return Err("WorksheetFunction.XMatch wildcard match is incompatible with binary search".into());
+                }
+                let index = crate::formula::eval::xlookup_binary_index(
+                    &lookup,
+                    key,
+                    search_mode == 2.0,
+                    0,
+                )?;
+                return Ok(index
+                    .map(|i| Variant::Integer(i as i64 + 1))
+                    .unwrap_or(Variant::Error(ExcelError::NA)));
+            }
+            let indices: Box<dyn Iterator<Item = usize>> = if search_mode == -1.0 {
+                Box::new((0..lookup.len()).rev())
+            } else {
+                Box::new(0..lookup.len())
+            };
+            for index in indices {
+                if (match_mode == 0.0 && vba_eq(&lookup[index], key))
+                    || (match_mode == 2.0
+                        && crate::formula::eval::wildcard_match(
+                            &vba_to_str(&lookup[index]),
+                            &vba_to_str(key),
+                        ))
+                {
+                    return Ok(Variant::Integer(index as i64 + 1));
+                }
+            }
+            Ok(Variant::Error(ExcelError::NA))
+        }
         "round" => {
             if vals.is_empty() {
                 return Err("WorksheetFunction.Round requires arguments".into());
@@ -8261,10 +17160,7 @@ pub fn is_known_builtin_function(name: &str) -> bool {
 /// Used by `check::compile_check_errors` so its pre-flight rejection of an
 /// unresolvable `Expr::FuncCall` reports the same wording running it would
 /// have produced, instead of inventing separate text that could drift from
-/// a dispatch arm's own message — `wsf_textjoin`, for instance, fails
-/// inside `eval_wsf` with "WorksheetFunction.textjoin is not implemented",
-/// not the generic "Unknown VBA function" `eval_vba_func`'s own top-level
-/// fallback arm uses.
+/// a dispatch arm's own message.
 pub fn builtin_call_error(name: &str) -> Option<String> {
     let mut vm = Vm::new();
     vm.eval_vba_func(name, &[]).err()
@@ -8800,6 +17696,39 @@ mod tests {
         let mut vm = Vm::new();
         vm.run_sub(&prog, "mysub").unwrap();
         vm
+    }
+
+    #[test]
+    fn set_cell_value_invalidates_formula_and_supports_undo() {
+        let mut vm = Vm::new();
+        vm.set_cell_formula(1, 1, "=1+1").unwrap();
+        assert_eq!(vm.get_cell(1, 1), Variant::Integer(2));
+        vm.set_cell_value(1, 1, Variant::Integer(7)).unwrap();
+        assert_eq!(vm.get_cell(1, 1), Variant::Integer(7));
+        assert!(vm.cells().get(&(1, 1)).unwrap().formula.is_none());
+        assert!(vm.undo_edit());
+        assert_eq!(vm.get_cell(1, 1), Variant::Integer(2));
+    }
+
+    #[test]
+    fn set_cell_value_rejects_zero_based_coordinates() {
+        let mut vm = Vm::new();
+        assert!(vm.set_cell_value(0, 1, Variant::Integer(1)).is_err());
+        assert!(vm.set_cell_value(1, 0, Variant::Integer(1)).is_err());
+    }
+
+    #[test]
+    fn vba_cell_write_invalidates_formula_dependencies() {
+        let mut vm = Vm::new();
+        vm.set_cell_value(1, 1, Variant::Integer(1)).unwrap();
+        vm.set_cell_formula(1, 2, "=A1+1").unwrap();
+        assert_eq!(vm.get_cell(1, 2), Variant::Integer(2));
+
+        let program = parser::parse("Sub MySub()\n    Cells(1, 1).Value = 7\nEnd Sub\n").unwrap();
+        vm.run_sub(&program, "MySub").unwrap();
+        vm.recalculate_all().unwrap();
+        assert_eq!(vm.get_cell(1, 1), Variant::Integer(7));
+        assert_eq!(vm.get_cell(1, 2), Variant::Integer(8));
     }
 
     #[test]
@@ -10678,6 +19607,177 @@ mod tests {
     }
 
     #[test]
+    fn explicit_event_dispatch_honors_enable_events_and_reentry_guard() {
+        let program =
+            parser::parse("Sub Workbook_Open()\n    Cells(1,1).Value = 7\nEnd Sub\n").unwrap();
+        let mut vm = Vm::new();
+        assert!(vm.enable_events());
+        assert!(vm.run_event(&program, "workbook_open").unwrap());
+        assert_eq!(vm.get_cell(1, 1), Variant::Integer(7));
+
+        vm.set_enable_events(false);
+        assert!(!vm.run_event(&program, "Workbook_Open").unwrap());
+        vm.set_enable_events(true);
+        vm.event_dispatch_depth = 1;
+        assert!(!vm.run_event(&program, "Workbook_Open").unwrap());
+    }
+
+    #[test]
+    fn explicit_event_dispatch_rejects_target_bound_handlers() {
+        let program = parser::parse(
+            "Sub Worksheet_Change(Target As Range)\n    Cells(1,1).Value = 7\nEnd Sub\n",
+        )
+        .unwrap();
+        let mut vm = Vm::new();
+        let err = vm.run_event(&program, "Worksheet_Change").unwrap_err();
+        assert!(err.contains("Target binding is not implemented"), "{err:?}");
+    }
+
+    #[test]
+    fn run_sub_with_events_auto_dispatches_change_after_vba_cell_write() {
+        let program = parser::parse(
+            "Sub Main()\n    Cells(1,1).Value = 7\nEnd Sub\n\n\
+             Sub Worksheet_Change(Target As Range)\n    If Target.Value = 7 Then\n        Cells(1,2).Value = 8\n    End If\nEnd Sub\n",
+        )
+        .unwrap();
+        let mut vm = Vm::new();
+        vm.run_sub_with_events(&program, "Main").unwrap();
+        assert_eq!(vm.get_cell(1, 1), Variant::Integer(7));
+        assert_eq!(vm.get_cell(1, 2), Variant::Integer(8));
+    }
+
+    #[test]
+    fn run_sub_with_events_dispatches_the_full_range_for_range_writes() {
+        let program = parser::parse(
+            "Sub Main()\n    Range(\"A1:B1\").Value = 7\nEnd Sub\n\n\
+             Sub Worksheet_Change(Target As Range)\n    If Target.Columns.Count = 2 Then\n        Cells(1,3).Value = Target.Columns.Count\n    End If\nEnd Sub\n",
+        )
+        .unwrap();
+        let mut vm = Vm::new();
+        vm.run_sub_with_events(&program, "Main").unwrap();
+        assert_eq!(vm.get_cell(1, 1), Variant::Integer(7));
+        assert_eq!(vm.get_cell(1, 2), Variant::Integer(7));
+        assert_eq!(vm.get_cell(1, 3), Variant::Integer(2));
+    }
+
+    #[test]
+    fn worksheet_change_target_exposes_address_row_and_column() {
+        let program = parser::parse(
+            "Sub Main()\n    Range(\"C4:D5\").Value = 7\nEnd Sub\n\n\
+             Sub Worksheet_Change(Target As Range)\n    If Target.Address = \"$C$4:$D$5\" Then\n        Cells(1,1).Value = Target.Row\n        Cells(1,2).Value = Target.Column\n    End If\nEnd Sub\n",
+        )
+        .unwrap();
+        let mut vm = Vm::new();
+        vm.run_sub_with_events(&program, "Main").unwrap();
+        assert_eq!(vm.get_cell(1, 1), Variant::Integer(4));
+        assert_eq!(vm.get_cell(1, 2), Variant::Integer(3));
+    }
+
+    #[test]
+    fn worksheet_change_target_cells_count_matches_rectangle_dimensions() {
+        let program = parser::parse(
+            "Sub Main()\n    Range(\"C4:D5\").Value = 7\nEnd Sub\n\n\
+             Sub Worksheet_Change(Target As Range)\n    If Target.Cells.Count = 4 Then Cells(1,1).Value = 1\nEnd Sub\n",
+        )
+        .unwrap();
+        let mut vm = Vm::new();
+        vm.run_sub_with_events(&program, "Main").unwrap();
+        assert_eq!(vm.get_cell(1, 1), Variant::Integer(1));
+    }
+
+    #[test]
+    fn worksheet_change_target_parent_name_identifies_its_bound_sheet() {
+        let program = parser::parse(
+            "Sub Main()\n    Range(\"A1\").Value = 7\nEnd Sub\n\n\
+             Sub Worksheet_Change(Target As Range)\n    If Target.Parent.Name = \"Sheet1\" Then\n        Application.EnableEvents = False\n        Cells(1,1).Value = 1\n    End If\nEnd Sub\n",
+        )
+        .unwrap();
+        let mut vm = Vm::new();
+        vm.run_sub_with_events(&program, "Main").unwrap();
+        assert_eq!(vm.get_cell(1, 1), Variant::Integer(1));
+    }
+
+    #[test]
+    fn run_sub_with_events_auto_dispatches_after_formula_write() {
+        let program = parser::parse(
+            "Sub Main()\n    Range(\"A1\").Formula = \"=1+1\"\nEnd Sub\n\n\
+             Sub Worksheet_Change(Target As Range)\n    If Target.Value = 2 Then\n        Cells(1,2).Value = 3\n    End If\nEnd Sub\n",
+        )
+        .unwrap();
+        let mut vm = Vm::new();
+        vm.run_sub_with_events(&program, "Main").unwrap();
+        assert_eq!(vm.get_cell(1, 1), Variant::Integer(2));
+        assert_eq!(vm.get_cell(1, 2), Variant::Integer(3));
+    }
+
+    #[test]
+    fn run_sub_with_events_dispatches_one_full_target_for_formula_range_write() {
+        let program = parser::parse(
+            "Sub Main()\n    Range(\"A1:B1\").Formula = \"=1+1\"\nEnd Sub\n\n\
+             Sub Worksheet_Change(Target As Range)\n    If Target.Columns.Count = 2 Then\n        Cells(1,3).Value = Target.Columns.Count\n    End If\nEnd Sub\n",
+        )
+        .unwrap();
+        let mut vm = Vm::new();
+        vm.run_sub_with_events(&program, "Main").unwrap();
+        assert_eq!(vm.get_cell(1, 1), Variant::Integer(2));
+        assert_eq!(vm.get_cell(1, 2), Variant::Integer(2));
+        assert_eq!(vm.get_cell(1, 3), Variant::Integer(2));
+    }
+
+    #[test]
+    fn explicit_event_dispatch_rejects_duplicate_handlers_in_one_program() {
+        let program =
+            parser::parse("Sub Workbook_Open()\nEnd Sub\nSub Workbook_Open()\nEnd Sub\n").unwrap();
+        let mut vm = Vm::new();
+        let err = vm.run_event(&program, "Workbook_Open").unwrap_err();
+        assert!(err.contains("dispatch order is ambiguous"), "{err:?}");
+    }
+
+    #[test]
+    fn worksheet_change_binds_explicit_target_range() {
+        let program = parser::parse(
+            "Sub Worksheet_Change(Target As Range)\n    Target.Value = 11\nEnd Sub\n",
+        )
+        .unwrap();
+        let mut vm = Vm::new();
+        assert!(vm.run_worksheet_change(&program, "B2").unwrap());
+        assert_eq!(vm.get_cell(2, 2), Variant::Integer(11));
+    }
+
+    #[test]
+    fn worksheet_change_rejects_invalid_explicit_target_range() {
+        let program = parser::parse("Sub Worksheet_Change(Target As Range)\nEnd Sub\n").unwrap();
+        let mut vm = Vm::new();
+        let err = vm.run_worksheet_change(&program, "B0").unwrap_err();
+        assert!(err.contains("invalid target range"), "{err:?}");
+    }
+
+    #[test]
+    fn opt_in_workbook_open_runs_before_main_entrypoint() {
+        let program = parser::parse(
+            "Sub Workbook_Open()\n    Cells(1,1).Value = 7\nEnd Sub\n\
+             Sub Main()\n    Cells(1,2).Value = Cells(1,1).Value + 1\nEnd Sub\n",
+        )
+        .unwrap();
+        let mut vm = Vm::new();
+        vm.run_sub_with_events(&program, "Main").unwrap();
+        assert_eq!(vm.get_cell(1, 1), Variant::Integer(7));
+        assert_eq!(vm.get_cell(1, 2), Variant::Integer(8));
+    }
+
+    #[test]
+    fn opt_in_workbook_open_failure_stops_main_entrypoint() {
+        let program = parser::parse(
+            "Sub Workbook_Open()\n    Err.Raise 5\nEnd Sub\n\
+             Sub Main()\n    Cells(1,1).Value = 99\nEnd Sub\n",
+        )
+        .unwrap();
+        let mut vm = Vm::new();
+        assert!(vm.run_sub_with_events(&program, "Main").is_err());
+        assert_eq!(vm.get_cell(1, 1), Variant::Empty);
+    }
+
+    #[test]
     fn test_xl_constants() {
         let vm = run(
             "Sub MySub()\n    a = xlUp\n    b = xlDown\n    c = xlCalculationManual\nEnd Sub\n",
@@ -10780,6 +19880,50 @@ mod tests {
             "Sub MySub()\n    Cells(1,1).Value = \"a\"\n    Cells(2,1).Value = \"b\"\n    Cells(3,1).Value = \"c\"\n    pos = WorksheetFunction.Match(\"b\", Range(\"A1:A3\"), 0)\nEnd Sub\n",
         );
         assert_eq!(vm.variables["pos"], Variant::Integer(2));
+    }
+
+    #[test]
+    fn test_wsf_textjoin_flattens_ranges_and_skips_empty_values() {
+        let vm = run(
+            "Sub MySub()\n    Cells(1,1).Value = \"A\"\n    Cells(2,1).Value = \"\"\n    Cells(3,1).Value = \"C\"\n    s = WorksheetFunction.TextJoin(\",\", True, Range(\"A1:A3\"))\nEnd Sub\n",
+        );
+        assert_eq!(vm.variables["s"], Variant::Str("A,C".into()));
+    }
+
+    #[test]
+    fn test_wsf_xlookup_exact_and_reverse_search() {
+        let vm = run(
+            "Sub MySub()\n    Cells(1,1).Value = \"A\"\n    Cells(2,1).Value = \"B\"\n    Cells(3,1).Value = \"B\"\n    Cells(1,2).Value = 10\n    Cells(2,2).Value = 20\n    Cells(3,2).Value = 30\n    first = WorksheetFunction.XLookup(\"B\", Range(\"A1:A3\"), Range(\"B1:B3\"))\n    last = WorksheetFunction.XLookup(\"B\", Range(\"A1:A3\"), Range(\"B1:B3\"), -1, 0, -1)\nEnd Sub\n",
+        );
+        assert_eq!(vm.variables["first"], Variant::Integer(20));
+        assert_eq!(vm.variables["last"], Variant::Integer(30));
+    }
+
+    #[test]
+    fn test_wsf_xlookup_wildcard_and_binary_search() {
+        let vm = run(
+            "Sub MySub()\n    Cells(1,1).Value = \"alpha\"\n    Cells(2,1).Value = \"beta\"\n    Cells(3,1).Value = \"gamma\"\n    Cells(1,2).Value = 10\n    Cells(2,2).Value = 20\n    Cells(3,2).Value = 30\n    wildcard = WorksheetFunction.XLookup(\"b*\", Range(\"A1:A3\"), Range(\"B1:B3\"), \"NF\", 2)\n    binary = WorksheetFunction.XLookup(20, Range(\"B1:B3\"), Range(\"A1:A3\"), \"NF\", 0, 2)\nEnd Sub\n",
+        );
+        assert_eq!(vm.variables["wildcard"], Variant::Integer(20));
+        assert_eq!(vm.variables["binary"], Variant::Str("beta".into()));
+    }
+
+    #[test]
+    fn test_wsf_xmatch_exact_and_reverse_search() {
+        let vm = run(
+            "Sub MySub()\n    Cells(1,1).Value = \"A\"\n    Cells(2,1).Value = \"B\"\n    Cells(3,1).Value = \"B\"\n    first = WorksheetFunction.XMatch(\"B\", Range(\"A1:A3\"))\n    last = WorksheetFunction.XMatch(\"B\", Range(\"A1:A3\"), 0, -1)\nEnd Sub\n",
+        );
+        assert_eq!(vm.variables["first"], Variant::Integer(2));
+        assert_eq!(vm.variables["last"], Variant::Integer(3));
+    }
+
+    #[test]
+    fn test_wsf_xmatch_wildcard_and_binary_search() {
+        let vm = run(
+            "Sub MySub()\n    Cells(1,1).Value = \"alpha\"\n    Cells(2,1).Value = \"beta\"\n    Cells(3,1).Value = \"gamma\"\n    Cells(1,2).Value = 10\n    Cells(2,2).Value = 20\n    Cells(3,2).Value = 30\n    wildcard = WorksheetFunction.XMatch(\"g*\", Range(\"A1:A3\"), 2)\n    binary = WorksheetFunction.XMatch(20, Range(\"B1:B3\"), 0, 2)\nEnd Sub\n",
+        );
+        assert_eq!(vm.variables["wildcard"], Variant::Integer(3));
+        assert_eq!(vm.variables["binary"], Variant::Integer(2));
     }
 
     // ── Range("A1:A10").Value 多セル読み取り ─────────────────────────────────
@@ -11134,6 +20278,73 @@ mod tests {
     }
 
     #[test]
+    fn clear_contents_preserves_cell_metadata_but_clear_removes_it() {
+        let mut vm = Vm::new();
+        vm.cell_number_formats
+            .entry("sheet1".to_string())
+            .or_default()
+            .insert((1, 1), "0.00".to_string());
+        vm.comment_cells
+            .entry("sheet1".to_string())
+            .or_default()
+            .insert((1, 1));
+        vm.set_cell_value(1, 1, Variant::Integer(7)).unwrap();
+        let contents =
+            parser::parse("Sub MySub()\n    Range(\"A1\").ClearContents\nEnd Sub\n").unwrap();
+        vm.run_sub(&contents, "MySub").unwrap();
+        assert_eq!(vm.get_cell_number_format(1, 1), Some("0.00"));
+        assert!(vm.comment_cells["sheet1"].contains(&(1, 1)));
+
+        let clear = parser::parse("Sub MySub()\n    Range(\"A1\").Clear\nEnd Sub\n").unwrap();
+        vm.run_sub(&clear, "MySub").unwrap();
+        assert_eq!(vm.get_cell_number_format(1, 1), None);
+        assert!(!vm.comment_cells["sheet1"].contains(&(1, 1)));
+    }
+
+    #[test]
+    fn range_clear_invalidates_formula_dependencies_and_is_undoable() {
+        let mut vm = Vm::new();
+        vm.set_cell_value(1, 1, Variant::Integer(4)).unwrap();
+        vm.set_cell_formula(1, 2, "=A1+1").unwrap();
+        let program = parser::parse("Sub MySub()\n    Range(\"A1\").Clear\nEnd Sub\n").unwrap();
+        vm.run_sub(&program, "MySub").unwrap();
+        vm.recalculate_all().unwrap();
+        assert_eq!(vm.get_cell(1, 1), Variant::Empty);
+        assert_eq!(vm.get_cell(1, 2), Variant::Integer(1));
+        assert!(vm.undo_edit());
+        assert_eq!(vm.get_cell(1, 1), Variant::Integer(4));
+    }
+
+    #[test]
+    fn range_object_clear_uses_captured_sheet_and_shared_undo_path() {
+        let program = parser::parse(
+            "Sub MySub()\n    Set ws = Sheets(\"Sheet2\")\n    Set r = ws.Range(\"A1\")\n    \
+             r.Value = 8\n    Sheets(\"Sheet1\").Activate\n    r.ClearContents\nEnd Sub\n",
+        )
+        .unwrap();
+        let mut vm = Vm::new();
+        vm.ensure_sheet("sheet2");
+        vm.run_sub(&program, "MySub").unwrap();
+        assert_eq!(vm.active_sheet, "sheet1");
+        assert_eq!(vm.get_cell(1, 1), Variant::Empty);
+        assert_eq!(
+            vm.sheets
+                .get("sheet2")
+                .and_then(|cells| cells.get(&(1, 1)))
+                .map(|cell| cell.value.clone()),
+            None
+        );
+        assert!(vm.undo_edit());
+        assert_eq!(
+            vm.sheets
+                .get("sheet2")
+                .and_then(|cells| cells.get(&(1, 1)))
+                .map(|cell| cell.value.clone()),
+            Some(Variant::Integer(8))
+        );
+    }
+
+    #[test]
     fn test_range_write_multi_cell() {
         let vm = run("Sub MySub()\n    Range(\"A1:A3\").Value = 7\nEnd Sub\n");
         assert_eq!(vm.get_cell(1, 1), Variant::Integer(7));
@@ -11153,6 +20364,17 @@ mod tests {
     fn test_range_offset_write() {
         let vm = run("Sub MySub()\n    Range(\"A1\").Offset(2,0).Value = 99\nEnd Sub\n");
         assert_eq!(vm.get_cell(3, 1), Variant::Integer(99));
+    }
+
+    #[test]
+    fn range_offset_write_rejects_coordinates_before_row_one_or_column_one() {
+        let program =
+            parser::parse("Sub MySub()\n    Range(\"A1\").Offset(-1,0).Value = 99\nEnd Sub\n")
+                .unwrap();
+        let mut vm = Vm::new();
+        let err = vm.run_sub(&program, "MySub").unwrap_err();
+        assert!(err.starts_with("RangeOffsetWrite: offset resolves outside worksheet coordinates"));
+        assert_eq!(vm.get_cell(1, 1), Variant::Empty);
     }
 
     #[test]
@@ -12031,6 +21253,51 @@ mod tests {
     }
 
     #[test]
+    fn sheet_id_lookup_survives_rename_and_reorder() {
+        let mut vm = Vm::new();
+        vm.ensure_sheet("First");
+        vm.ensure_sheet("Second");
+        vm.worksheet_origins
+            .get_mut("first")
+            .unwrap()
+            .original_sheet_id = Some("7".to_string());
+
+        assert_eq!(vm.sheet_id("FIRST").unwrap(), Some("7".to_string()));
+        assert_eq!(vm.sheet_name_for_id("7").unwrap(), "first");
+
+        vm.rename_sheet("First", "Renamed").unwrap();
+        vm.move_sheet("Renamed", 2).unwrap();
+
+        assert_eq!(vm.sheet_id("Renamed").unwrap(), Some("7".to_string()));
+        assert_eq!(vm.sheet_name_for_id("7").unwrap(), "renamed");
+        assert_eq!(vm.sheet_id("Second").unwrap(), None);
+        assert!(
+            vm.sheet_name_for_id("missing")
+                .unwrap_err()
+                .contains("not found")
+        );
+    }
+
+    #[test]
+    fn sheet_name_for_id_rejects_duplicate_source_ids() {
+        let mut vm = Vm::new();
+        vm.ensure_sheet("Second");
+        vm.worksheet_origins
+            .get_mut("second")
+            .unwrap()
+            .original_sheet_id = Some("7".to_string());
+
+        vm.ensure_sheet("First");
+        vm.worksheet_origins
+            .get_mut("first")
+            .unwrap()
+            .original_sheet_id = Some("7".to_string());
+
+        let err = vm.sheet_name_for_id("7").unwrap_err();
+        assert!(err.contains("duplicated"), "{err}");
+    }
+
+    #[test]
     fn sheet_state_from_attr_maps_the_two_real_values() {
         assert_eq!(SheetState::from_attr(Some("hidden")), SheetState::Hidden);
         assert_eq!(
@@ -12068,6 +21335,8 @@ mod tests {
                 column_styles: Vec::new(),
                 tables: Vec::new(),
                 data_validations: Vec::new(),
+                conditional_format_ranges: Vec::new(),
+                comment_cells: Vec::new(),
                 autofilter: None,
             },
             WorkbookSheet {
@@ -12089,6 +21358,8 @@ mod tests {
                 column_styles: Vec::new(),
                 tables: Vec::new(),
                 data_validations: Vec::new(),
+                conditional_format_ranges: Vec::new(),
+                comment_cells: Vec::new(),
                 autofilter: None,
             },
         ];
@@ -12157,6 +21428,8 @@ mod tests {
             column_styles: Vec::new(),
             tables: Vec::new(),
             data_validations: Vec::new(),
+            conditional_format_ranges: Vec::new(),
+            comment_cells: Vec::new(),
             autofilter: None,
         }];
         let mut vm = Vm::new();
@@ -12186,6 +21459,8 @@ mod tests {
             column_styles: vec![(1, 2, 7u32)],
             tables: Vec::new(),
             data_validations: Vec::new(),
+            conditional_format_ranges: Vec::new(),
+            comment_cells: Vec::new(),
             autofilter: None,
         }];
         let mut vm = Vm::new();
@@ -12215,6 +21490,8 @@ mod tests {
             column_styles: Vec::new(),
             tables: Vec::new(),
             data_validations: Vec::new(),
+            conditional_format_ranges: Vec::new(),
+            comment_cells: Vec::new(),
             autofilter: None,
         }];
         let mut vm = Vm::new();
@@ -13708,25 +22985,1213 @@ mod tests {
     }
 
     #[test]
-    fn recalculate_all_skips_a_cross_sheet_formula_instead_of_erroring_the_whole_recalc() {
-        // Regression: a formula containing a sheet-qualified reference now
-        // PARSES successfully (0.14.0-A2), so it enters recalculate_all's
-        // formula-cell collection where it didn't before. evaluate() refuses
-        // to evaluate it (cross-sheet evaluation isn't supported), and
-        // recalculate_all must not let that failure abort the whole
-        // workbook's recalculation -- every other formula must still update.
+    fn recalculate_all_evaluates_cross_sheet_formulas_without_aborting_other_work() {
         let mut vm = Vm::new();
         vm.ensure_sheet("Other");
+        vm.set_active_sheet("Other").unwrap();
         vm.cells_mut().insert(
             (1, 1),
             CellContent {
-                formula: Some("=Other!A1".to_string()), // cross-sheet, left un-evaluated
+                formula: None,
+                value: Variant::Integer(5),
+            },
+        );
+        vm.set_active_sheet("sheet1").unwrap();
+        vm.cells_mut().insert(
+            (1, 1),
+            CellContent {
+                formula: Some("=Other!A1".to_string()),
                 value: Variant::Empty,
             },
         );
-        vm.set_cell_formula(2, 1, "=1+1").unwrap(); // ordinary, must still recalculate
+        vm.set_cell_formula(2, 1, "=1+1").unwrap();
         assert!(vm.recalculate_all().is_ok());
+        assert_eq!(vm.get_cell(1, 1), Variant::Integer(5));
         assert_eq!(vm.get_cell(2, 1), Variant::Integer(2));
+
+        vm.write_rect("Other", (1, 1), &[vec![Variant::Integer(8)]]);
+        vm.recalculate_all().unwrap();
+        assert_eq!(vm.get_cell(1, 1), Variant::Integer(8));
+    }
+
+    #[test]
+    fn plan_spill_for_value_reports_footprint_without_mutating_the_sheet() {
+        let vm = Vm::new();
+        let before = vm.cells().len();
+        let value = Variant::Array(vec![Variant::Integer(10), Variant::Integer(20)]);
+        let plan = vm.plan_spill_for_value(2, 3, &value).unwrap().unwrap();
+        assert_eq!(plan.shape, ArrayShape::new(1, 2));
+        assert_eq!(plan.cell_at(0, 1), Some((2, 4)));
+        assert_eq!(vm.cells().len(), before);
+    }
+
+    #[test]
+    fn plan_spill_for_value_rejects_nonempty_targets_but_allows_empty_cells() {
+        let mut vm = Vm::new();
+        vm.write_rect("sheet1", (2, 4), &[vec![Variant::Integer(99)]]);
+        let value = Variant::Array(vec![Variant::Integer(10), Variant::Integer(20)]);
+        let error = vm.plan_spill_for_value(2, 3, &value).unwrap_err();
+        assert!(error.contains("#SPILL!"));
+        assert!(error.contains("2:4"));
+
+        vm.write_rect("sheet1", (2, 4), &[vec![Variant::Empty]]);
+        assert!(vm.plan_spill_for_value(2, 3, &value).is_ok());
+        assert!(
+            vm.plan_spill_for_value(2, 3, &Variant::Integer(1))
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn apply_spill_for_value_is_atomic_and_preserves_the_anchor_formula() {
+        let mut vm = Vm::new();
+        vm.set_cell_formula(2, 3, "=SEQUENCE(1,2)").unwrap();
+        let value = Variant::Array(vec![Variant::Integer(10), Variant::Integer(20)]);
+        let rect = vm.apply_spill_for_value(2, 3, &value).unwrap();
+        assert_eq!(rect.shape, ArrayShape::new(1, 2));
+        assert_eq!(vm.get_cell(2, 3), Variant::Integer(10));
+        assert_eq!(vm.get_cell(2, 4), Variant::Integer(20));
+        assert_eq!(
+            vm.cells()
+                .get(&(2, 3))
+                .and_then(|cell| cell.formula.as_deref()),
+            Some("=SEQUENCE(1,2)")
+        );
+
+        vm.write_rect("sheet1", (2, 5), &[vec![Variant::Integer(99)]]);
+        let before = vm.read_rect("sheet1", 2, 3, 2, 5);
+        let larger = Variant::Array(vec![
+            Variant::Integer(10),
+            Variant::Integer(20),
+            Variant::Integer(30),
+        ]);
+        assert!(vm.apply_spill_for_value(2, 3, &larger).is_err());
+        assert_eq!(vm.read_rect("sheet1", 2, 3, 2, 5), before);
+    }
+
+    #[test]
+    fn applying_a_new_spill_reclaims_only_the_previous_spill_cells() {
+        let mut vm = Vm::new();
+        let first = Variant::Array(vec![Variant::Integer(10), Variant::Integer(20)]);
+        vm.apply_spill_for_value(2, 3, &first).unwrap();
+        let second = Variant::Array(vec![Variant::Integer(30)]);
+        vm.apply_spill_for_value(2, 3, &second).unwrap();
+        assert_eq!(vm.get_cell(2, 3), Variant::Integer(30));
+        assert_eq!(vm.get_cell(2, 4), Variant::Empty);
+        assert!(!vm.cells().contains_key(&(2, 4)));
+    }
+
+    #[test]
+    fn spill_ownership_is_restored_by_edit_undo() {
+        let mut vm = Vm::new();
+        let first = Variant::Array(vec![Variant::Integer(10), Variant::Integer(20)]);
+        vm.apply_spill_for_value(2, 3, &first).unwrap();
+        vm.apply_spill_for_value(2, 3, &Variant::Array(vec![Variant::Integer(30)]))
+            .unwrap();
+        assert!(vm.undo_edit());
+        assert_eq!(vm.get_cell(2, 4), Variant::Integer(20));
+        vm.apply_spill_for_value(2, 3, &Variant::Array(vec![Variant::Integer(40)]))
+            .unwrap();
+        assert_eq!(vm.get_cell(2, 4), Variant::Empty);
+    }
+
+    #[test]
+    fn editing_an_old_spill_cell_clears_the_entire_spill_ownership() {
+        let mut vm = Vm::new();
+        vm.apply_spill_for_value(
+            2,
+            3,
+            &Variant::Array(vec![Variant::Integer(10), Variant::Integer(20)]),
+        )
+        .unwrap();
+        vm.write_rect("sheet1", (2, 4), &[vec![Variant::Integer(99)]]);
+        assert_eq!(vm.get_cell(2, 3), Variant::Integer(10));
+        assert_eq!(vm.get_cell(2, 4), Variant::Integer(99));
+        assert!(
+            vm.plan_spill_for_value(
+                2,
+                3,
+                &Variant::Array(vec![Variant::Integer(1), Variant::Integer(2)])
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn replacing_an_anchor_formula_reclaims_its_old_spill_cells() {
+        let mut vm = Vm::new();
+        vm.set_cell_formula(2, 3, "=SEQUENCE(1,2)").unwrap();
+        vm.apply_spill_for_value(
+            2,
+            3,
+            &Variant::Array(vec![Variant::Integer(10), Variant::Integer(20)]),
+        )
+        .unwrap();
+        vm.set_cell_formula(2, 3, "=1").unwrap();
+        assert_eq!(vm.get_cell(2, 3), Variant::Integer(1));
+        assert_eq!(vm.get_cell(2, 4), Variant::Empty);
+        assert!(!vm.cells().contains_key(&(2, 4)));
+    }
+
+    #[test]
+    fn edit_history_undoes_and_redoes_values_and_formulas_with_cache_state() {
+        let mut vm = Vm::new();
+        vm.write_rect("sheet1", (1, 1), &[vec![Variant::Integer(2)]]);
+        vm.set_cell_formula(1, 2, "=A1+1").unwrap();
+        vm.recalculate_all().unwrap();
+
+        vm.write_rect("sheet1", (1, 1), &[vec![Variant::Integer(9)]]);
+        vm.recalculate_all().unwrap();
+        assert_eq!(vm.get_cell(1, 2), Variant::Integer(10));
+        assert!(vm.can_undo_edit());
+
+        assert!(vm.undo_edit());
+        vm.recalculate_all().unwrap();
+        assert_eq!(vm.get_cell(1, 1), Variant::Integer(2));
+        assert_eq!(vm.get_cell(1, 2), Variant::Integer(3));
+        assert!(vm.can_redo_edit());
+
+        assert!(vm.redo_edit());
+        vm.recalculate_all().unwrap();
+        assert_eq!(vm.get_cell(1, 1), Variant::Integer(9));
+        assert_eq!(vm.get_cell(1, 2), Variant::Integer(10));
+    }
+
+    #[test]
+    fn a_new_edit_clears_redo_history() {
+        let mut vm = Vm::new();
+        vm.write_rect("sheet1", (1, 1), &[vec![Variant::Integer(1)]]);
+        vm.write_rect("sheet1", (1, 1), &[vec![Variant::Integer(2)]]);
+        assert!(vm.undo_edit());
+        assert!(vm.can_redo_edit());
+        vm.write_rect("sheet1", (1, 2), &[vec![Variant::Integer(3)]]);
+        assert!(!vm.can_redo_edit());
+    }
+
+    #[test]
+    fn edit_transaction_abort_restores_multiple_edits_and_prior_history() {
+        let mut vm = Vm::new();
+        vm.write_rect("sheet1", (1, 1), &[vec![Variant::Integer(1)]]);
+        assert!(vm.can_undo_edit());
+        vm.begin_edit_transaction().unwrap();
+        vm.write_rect("sheet1", (1, 1), &[vec![Variant::Integer(7)]]);
+        vm.set_cell_formula(1, 2, "=A1+1").unwrap();
+        assert!(vm.commit_edit_transaction());
+        vm.begin_edit_transaction().unwrap();
+        vm.write_rect("sheet1", (1, 1), &[vec![Variant::Integer(9)]]);
+        vm.set_cell_formula(1, 3, "=A1+2").unwrap();
+        assert!(vm.abort_edit_transaction());
+        assert_eq!(vm.get_cell(1, 1), Variant::Integer(7));
+        assert_eq!(vm.get_cell(1, 2), Variant::Integer(8));
+        assert_eq!(vm.get_cell(1, 3), Variant::Empty);
+        assert!(vm.can_undo_edit());
+        assert!(!vm.can_redo_edit());
+    }
+
+    #[test]
+    fn committed_edit_transaction_is_one_undoable_unit() {
+        let mut vm = Vm::new();
+        vm.begin_edit_transaction().unwrap();
+        vm.write_rect("sheet1", (1, 1), &[vec![Variant::Integer(7)]]);
+        vm.write_rect("sheet1", (1, 2), &[vec![Variant::Integer(8)]]);
+        assert!(vm.commit_edit_transaction());
+
+        assert_eq!(vm.get_cell(1, 1), Variant::Integer(7));
+        assert_eq!(vm.get_cell(1, 2), Variant::Integer(8));
+        assert!(vm.undo_edit());
+        assert_eq!(vm.get_cell(1, 1), Variant::Empty);
+        assert_eq!(vm.get_cell(1, 2), Variant::Empty);
+        assert!(!vm.can_undo_edit());
+        assert!(vm.redo_edit());
+        assert_eq!(vm.get_cell(1, 1), Variant::Integer(7));
+        assert_eq!(vm.get_cell(1, 2), Variant::Integer(8));
+    }
+
+    #[test]
+    fn aborted_edit_transaction_preserves_existing_redo_history() {
+        let mut vm = Vm::new();
+        vm.write_rect("sheet1", (1, 1), &[vec![Variant::Integer(1)]]);
+        vm.write_rect("sheet1", (1, 1), &[vec![Variant::Integer(2)]]);
+        assert!(vm.undo_edit());
+        assert!(vm.can_redo_edit());
+
+        vm.begin_edit_transaction().unwrap();
+        vm.write_rect("sheet1", (1, 2), &[vec![Variant::Integer(3)]]);
+        assert!(vm.abort_edit_transaction());
+
+        assert_eq!(vm.get_cell(1, 2), Variant::Empty);
+        assert!(vm.can_redo_edit());
+        assert!(vm.redo_edit());
+        assert_eq!(vm.get_cell(1, 1), Variant::Integer(2));
+    }
+
+    #[test]
+    fn nested_edit_transactions_are_rejected_without_changing_state() {
+        let mut vm = Vm::new();
+        vm.begin_edit_transaction().unwrap();
+        assert!(vm.begin_edit_transaction().is_err());
+        assert!(vm.abort_edit_transaction());
+        assert!(!vm.abort_edit_transaction());
+    }
+
+    #[test]
+    fn dirty_formula_recalculation_propagates_through_direct_dependencies() {
+        let mut vm = Vm::new();
+        vm.set_cell_formula(1, 2, "=A1+1").unwrap();
+        vm.set_cell_formula(1, 3, "=B1+1").unwrap();
+        vm.recalculate_all().unwrap();
+
+        vm.write_rect("sheet1", (1, 1), &[vec![Variant::Integer(10)]]);
+        vm.recalculate_all().unwrap();
+
+        assert_eq!(vm.get_cell(1, 2), Variant::Integer(11));
+        assert_eq!(vm.get_cell(1, 3), Variant::Integer(12));
+    }
+
+    #[test]
+    fn dirty_formula_recalculation_keeps_range_dependencies_correct() {
+        let mut vm = Vm::new();
+        vm.write_rect(
+            "sheet1",
+            (1, 1),
+            &[vec![Variant::Integer(1), Variant::Integer(2)]],
+        );
+        vm.set_cell_formula(1, 3, "=SUM(A1:B1)").unwrap();
+        vm.recalculate_all().unwrap();
+
+        vm.write_rect("sheet1", (1, 2), &[vec![Variant::Integer(5)]]);
+        vm.recalculate_all().unwrap();
+
+        assert_eq!(vm.get_cell(1, 3), Variant::Integer(6));
+    }
+
+    #[test]
+    fn dirty_recalculation_matches_a_forced_full_formula_rescan() {
+        let mut dirty = Vm::new();
+        dirty.write_rect(
+            "sheet1",
+            (1, 1),
+            &[vec![Variant::Integer(2), Variant::Integer(3)]],
+        );
+        dirty.set_cell_formula(1, 3, "=A1+B1").unwrap();
+        dirty.set_cell_formula(1, 4, "=C1*2").unwrap();
+        dirty.set_cell_formula(1, 5, "=SUM(A1:D1)").unwrap();
+        dirty.recalculate_all().unwrap();
+
+        let mut full = dirty.clone();
+        dirty.write_rect("sheet1", (1, 1), &[vec![Variant::Integer(10)]]);
+        full.write_rect("sheet1", (1, 1), &[vec![Variant::Integer(10)]]);
+
+        // Reassigning the existing formula invalidates the persistent plan without
+        // changing the formula graph, providing a deterministic full-rescan oracle.
+        full.set_cell_formula(1, 5, "=SUM(A1:D1)").unwrap();
+        dirty.recalculate_all().unwrap();
+        full.recalculate_all().unwrap();
+
+        for col in 1..=5 {
+            assert_eq!(
+                dirty.get_cell(1, col),
+                full.get_cell(1, col),
+                "dirty/full mismatch at column {col}"
+            );
+        }
+    }
+
+    #[test]
+    fn dirty_formula_recalculation_respects_manual_to_automatic_transition() {
+        let mut vm = Vm::new();
+        vm.set_cell_formula(1, 2, "=A1+1").unwrap();
+        vm.recalculate_all().unwrap();
+        vm.set_calc_mode(CalculationMode::Manual).unwrap();
+        vm.write_rect("sheet1", (1, 1), &[vec![Variant::Integer(10)]]);
+        assert_eq!(vm.get_cell(1, 2), Variant::Integer(1));
+        vm.set_calc_mode(CalculationMode::Automatic).unwrap();
+        assert_eq!(vm.get_cell(1, 2), Variant::Integer(11));
+    }
+
+    #[test]
+    fn dirty_formula_recalculation_preserves_best_effort_cycle_behavior() {
+        let mut vm = Vm::new();
+        vm.set_cell_formula(1, 1, "=B1+1").unwrap();
+        vm.set_cell_formula(1, 2, "=A1+1").unwrap();
+        assert!(vm.recalculate_all().is_ok());
+    }
+
+    #[test]
+    fn range_dependencies_order_only_formula_cells_inside_the_range() {
+        let cells = vec![
+            (1, 1, formula::parse("=1+1").unwrap()),
+            (1, 2, formula::parse("=SUM(A1:A100000)").unwrap()),
+            (1, 3, formula::parse("=3+3").unwrap()),
+        ];
+        let order = topo_sort_formulas(&cells, None).unwrap();
+        let a1 = order.iter().position(|&index| index == 0).unwrap();
+        let b1 = order.iter().position(|&index| index == 1).unwrap();
+        assert!(a1 < b1);
+    }
+
+    #[test]
+    fn range_dependencies_preserve_both_edges_of_a_real_multi_cell_cycle() {
+        let cells = vec![
+            (1, 1, formula::parse("=SUM(A2:A100000)").unwrap()),
+            (2, 1, formula::parse("=A1").unwrap()),
+        ];
+        let positions: HashMap<(u32, u32), usize> =
+            [((1, 1), 0), ((2, 1), 1)].into_iter().collect();
+        let positions_by_row: BTreeMap<u32, BTreeMap<u32, usize>> = [
+            (1, [(1, 0)].into_iter().collect()),
+            (2, [(1, 1)].into_iter().collect()),
+        ]
+        .into_iter()
+        .collect();
+        let mut first = HashSet::new();
+        collect_formula_dependencies(&cells[0].2, &positions, &positions_by_row, None, &mut first);
+        let mut second = HashSet::new();
+        collect_formula_dependencies(
+            &cells[1].2,
+            &positions,
+            &positions_by_row,
+            None,
+            &mut second,
+        );
+        assert_eq!(first, [1].into_iter().collect());
+        assert_eq!(second, [0].into_iter().collect());
+        assert_eq!(topo_sort_formulas(&cells, None).unwrap().len(), 2);
+    }
+
+    #[test]
+    fn spill_cell_dependencies_are_ordered_after_their_anchor_formula() {
+        let cells = vec![
+            (1, 3, formula::parse("=B1+1").unwrap()),
+            (1, 1, formula::parse("=1+1").unwrap()),
+        ];
+        let spill = SpillRect::new(1, 1, ArrayShape::new(1, 2)).unwrap();
+        let spill_rects = [((1, 1), spill)].into_iter().collect();
+        let order = topo_sort_formulas(&cells, Some(&spill_rects)).unwrap();
+        let dependent = order.iter().position(|&index| index == 0).unwrap();
+        let anchor = order.iter().position(|&index| index == 1).unwrap();
+        assert!(anchor < dependent);
+    }
+
+    #[test]
+    fn recalculate_all_with_spills_materializes_array_values_for_dependents() {
+        let mut vm = Vm::new();
+        vm.set_cell_formula(1, 1, "=SEQUENCE(1,2)").unwrap();
+        vm.set_cell_formula(1, 3, "=B1+1").unwrap();
+        vm.recalculate_all_with_spills().unwrap();
+        assert_eq!(vm.get_cell(1, 1), Variant::Integer(1));
+        assert_eq!(vm.get_cell(1, 2), Variant::Integer(2));
+        assert_eq!(vm.get_cell(1, 3), Variant::Integer(3));
+    }
+
+    #[test]
+    fn recalculate_all_with_spills_uses_formula_shape_for_two_dimensional_arrays() {
+        let mut vm = Vm::new();
+        vm.set_cell_formula(2, 2, "=SEQUENCE(2,3)").unwrap();
+        vm.recalculate_all_with_spills().unwrap();
+        assert_eq!(vm.get_cell(2, 2), Variant::Integer(1));
+        assert_eq!(vm.get_cell(2, 4), Variant::Integer(3));
+        assert_eq!(vm.get_cell(3, 2), Variant::Integer(4));
+        assert_eq!(vm.get_cell(3, 4), Variant::Integer(6));
+        let rect = vm
+            .spill_rects
+            .get("sheet1")
+            .and_then(|anchors| anchors.get(&(2, 2)))
+            .copied()
+            .unwrap();
+        assert_eq!(rect.shape, ArrayShape::new(2, 3));
+    }
+
+    #[test]
+    fn recalculate_all_with_spills_uses_regression_stats_shape() {
+        let mut vm = Vm::new();
+        for (row, values) in [
+            (1, [10, 1, 1]),
+            (2, [12, 2, 1]),
+            (3, [13, 1, 2]),
+            (4, [15, 2, 2]),
+            (5, [14, 3, 1]),
+            (6, [16, 1, 3]),
+        ] {
+            for (column, value) in values.into_iter().enumerate() {
+                vm.cells_mut().insert(
+                    (row, column as u32 + 1),
+                    CellContent {
+                        formula: None,
+                        value: Variant::Integer(value),
+                    },
+                );
+            }
+        }
+        vm.set_cell_formula(1, 5, "=LINEST(A1:A6,B1:C6,TRUE,TRUE)")
+            .unwrap();
+        vm.set_cell_formula(1, 10, "=TREND(A1:A6,B1:C6,B1:C2)")
+            .unwrap();
+        vm.recalculate_all_with_spills().unwrap();
+        let rect = vm
+            .spill_rects
+            .get("sheet1")
+            .and_then(|anchors| anchors.get(&(1, 5)))
+            .copied()
+            .unwrap();
+        assert_eq!(rect.shape, ArrayShape::new(5, 3));
+        match vm.get_cell(1, 5) {
+            Variant::Float(value) => assert!((value - 3.0).abs() < 1e-9),
+            other => panic!("unexpected LINEST coefficient: {other:?}"),
+        }
+        let trend_rect = vm
+            .spill_rects
+            .get("sheet1")
+            .and_then(|anchors| anchors.get(&(1, 10)))
+            .copied()
+            .unwrap();
+        assert_eq!(trend_rect.shape, ArrayShape::new(2, 1));
+    }
+
+    #[test]
+    fn recalculate_all_with_spills_uses_frequency_vertical_shape() {
+        let mut vm = Vm::new();
+        for (row, value) in [1, 2, 2, 3, 4, 5, 100, 3].into_iter().enumerate() {
+            vm.cells_mut().insert(
+                (row as u32 + 1, 1),
+                CellContent {
+                    formula: None,
+                    value: Variant::Integer(value),
+                },
+            );
+        }
+        for (row, value) in [2, 3, 5].into_iter().enumerate() {
+            vm.cells_mut().insert(
+                (row as u32 + 1, 2),
+                CellContent {
+                    formula: None,
+                    value: Variant::Integer(value),
+                },
+            );
+        }
+        vm.set_cell_formula(1, 4, "=FREQUENCY(A1:A8,B1:B3)")
+            .unwrap();
+        vm.recalculate_all_with_spills().unwrap();
+        let rect = vm
+            .spill_rects
+            .get("sheet1")
+            .and_then(|anchors| anchors.get(&(1, 4)))
+            .copied()
+            .unwrap();
+        assert_eq!(rect.shape, ArrayShape::new(4, 1));
+        assert_eq!(vm.get_cell(4, 4), Variant::Integer(1));
+    }
+
+    #[test]
+    fn recalculate_all_with_spills_uses_mode_mult_vertical_shape() {
+        let mut vm = Vm::new();
+        for (row, value) in [1, 1, 2, 2, 3].into_iter().enumerate() {
+            vm.cells_mut().insert(
+                (row as u32 + 1, 1),
+                CellContent {
+                    formula: None,
+                    value: Variant::Integer(value),
+                },
+            );
+        }
+        vm.set_cell_formula(1, 3, "=MODE.MULT(A1:A5)").unwrap();
+        vm.recalculate_all_with_spills().unwrap();
+        let rect = vm
+            .spill_rects
+            .get("sheet1")
+            .and_then(|anchors| anchors.get(&(1, 3)))
+            .copied()
+            .unwrap();
+        assert_eq!(rect.shape, ArrayShape::new(2, 1));
+        assert_eq!(vm.get_cell(1, 3), Variant::Integer(1));
+        assert_eq!(vm.get_cell(2, 3), Variant::Integer(2));
+    }
+
+    #[test]
+    fn recalculate_all_with_spills_uses_transpose_shape_for_range_arrays() {
+        let mut vm = Vm::new();
+        vm.cells_mut().insert(
+            (1, 1),
+            CellContent {
+                formula: None,
+                value: Variant::Integer(10),
+            },
+        );
+        vm.cells_mut().insert(
+            (1, 2),
+            CellContent {
+                formula: None,
+                value: Variant::Integer(20),
+            },
+        );
+        vm.set_cell_formula(2, 2, "=TRANSPOSE(A1:B1)").unwrap();
+        vm.recalculate_all_with_spills().unwrap();
+        assert_eq!(vm.get_cell(2, 2), Variant::Integer(10));
+        assert_eq!(vm.get_cell(3, 2), Variant::Integer(20));
+        let rect = vm
+            .spill_rects
+            .get("sheet1")
+            .and_then(|anchors| anchors.get(&(2, 2)))
+            .copied()
+            .unwrap();
+        assert_eq!(rect.shape, ArrayShape::new(2, 1));
+    }
+
+    #[test]
+    fn recalculate_all_with_spills_uses_textsplit_row_shape() {
+        let mut vm = Vm::new();
+        vm.set_cell_formula(2, 2, "=TEXTSPLIT(\"a,b;c,d\",\",\",\";\")")
+            .unwrap();
+        vm.recalculate_all_with_spills().unwrap();
+        assert_eq!(vm.get_cell(2, 2), Variant::Str("a".into()));
+        assert_eq!(vm.get_cell(2, 3), Variant::Str("b".into()));
+        assert_eq!(vm.get_cell(3, 2), Variant::Str("c".into()));
+        assert_eq!(vm.get_cell(3, 3), Variant::Str("d".into()));
+        let rect = vm
+            .spill_rects
+            .get("sheet1")
+            .and_then(|anchors| anchors.get(&(2, 2)))
+            .copied()
+            .unwrap();
+        assert_eq!(rect.shape, ArrayShape::new(2, 2));
+    }
+
+    #[test]
+    fn recalculate_all_with_spills_uses_groupby_composite_key_shape() {
+        let mut vm = Vm::new();
+        for (row, (first, second, value)) in
+            [(1, ("a", "x", 1)), (2, ("a", "y", 2)), (3, ("b", "x", 3))]
+        {
+            vm.set_cell_value(row, 1, Variant::Str(first.into()))
+                .unwrap();
+            vm.set_cell_value(row, 2, Variant::Str(second.into()))
+                .unwrap();
+            vm.set_cell_value(row, 3, Variant::Integer(value)).unwrap();
+        }
+        vm.set_cell_formula(1, 5, "=GROUPBY(A1:B3,C1:C3,\"SUM\")")
+            .unwrap();
+        vm.recalculate_all().unwrap();
+        vm.recalculate_all_with_spills().unwrap();
+        assert_eq!(vm.get_cell(1, 5), Variant::Str("a".into()));
+        assert_eq!(vm.get_cell(1, 6), Variant::Str("x".into()));
+        assert_eq!(vm.get_cell(1, 7), Variant::Integer(1));
+        assert_eq!(vm.get_cell(3, 5), Variant::Str("b".into()));
+        assert_eq!(vm.get_cell(3, 7), Variant::Integer(3));
+        let rect = vm
+            .spill_rects
+            .get("sheet1")
+            .and_then(|anchors| anchors.get(&(1, 5)))
+            .copied()
+            .unwrap();
+        assert_eq!(rect.shape, ArrayShape::new(3, 3));
+    }
+
+    #[test]
+    fn recalculate_all_with_spills_uses_groupby_reducer_vector_shape() {
+        let mut vm = Vm::new();
+        for (row, (key, value)) in [(1, ("a", 1)), (2, ("a", 3)), (3, ("b", 5))] {
+            vm.set_cell_value(row, 1, Variant::Str(key.into())).unwrap();
+            vm.set_cell_value(row, 2, Variant::Integer(value)).unwrap();
+        }
+        vm.set_cell_formula(1, 4, "=GROUPBY(A1:A3,B1:B3,HSTACK(SUM,AVERAGE))")
+            .unwrap();
+        vm.recalculate_all_with_spills().unwrap();
+        assert_eq!(vm.get_cell(1, 4), Variant::Str("a".into()));
+        assert_eq!(vm.get_cell(1, 5), Variant::Integer(4));
+        assert_eq!(vm.get_cell(1, 6), Variant::Float(2.0));
+        assert_eq!(vm.get_cell(2, 4), Variant::Str("b".into()));
+        assert_eq!(vm.get_cell(2, 5), Variant::Integer(5));
+        assert_eq!(vm.get_cell(2, 6), Variant::Float(5.0));
+        let rect = vm
+            .spill_rects
+            .get("sheet1")
+            .and_then(|anchors| anchors.get(&(1, 4)))
+            .copied()
+            .unwrap();
+        assert_eq!(rect.shape, ArrayShape::new(2, 3));
+    }
+
+    #[test]
+    fn recalculate_all_with_spills_uses_pivotby_multi_value_shape() {
+        let mut vm = Vm::new();
+        for (row, (row_key, col_key, first, second)) in [
+            (1, ("a", "x", 1, 10)),
+            (2, ("a", "y", 2, 20)),
+            (3, ("b", "x", 3, 30)),
+            (4, ("b", "y", 4, 40)),
+        ] {
+            vm.set_cell_value(row, 1, Variant::Str(row_key.into()))
+                .unwrap();
+            vm.set_cell_value(row, 2, Variant::Str(col_key.into()))
+                .unwrap();
+            vm.set_cell_value(row, 3, Variant::Integer(first)).unwrap();
+            vm.set_cell_value(row, 4, Variant::Integer(second)).unwrap();
+        }
+        vm.set_cell_formula(1, 6, "=PIVOTBY(A1:A4,B1:B4,C1:D4,\"SUM\")")
+            .unwrap();
+        vm.recalculate_all_with_spills().unwrap();
+        assert_eq!(vm.get_cell(1, 6), Variant::Empty);
+        assert_eq!(vm.get_cell(1, 7), Variant::Str("x".into()));
+        assert_eq!(vm.get_cell(1, 8), Variant::Str("x".into()));
+        assert_eq!(vm.get_cell(1, 9), Variant::Str("y".into()));
+        assert_eq!(vm.get_cell(1, 10), Variant::Str("y".into()));
+        assert_eq!(vm.get_cell(2, 6), Variant::Str("a".into()));
+        assert_eq!(vm.get_cell(2, 7), Variant::Integer(1));
+        assert_eq!(vm.get_cell(2, 8), Variant::Integer(10));
+        let rect = vm
+            .spill_rects
+            .get("sheet1")
+            .and_then(|anchors| anchors.get(&(1, 6)))
+            .copied()
+            .unwrap();
+        assert_eq!(rect.shape, ArrayShape::new(3, 5));
+    }
+
+    #[test]
+    fn recalculate_all_with_spills_uses_pivotby_reducer_vector_shape() {
+        let mut vm = Vm::new();
+        for (row, (row_key, col_key, value)) in [
+            (1, ("a", "x", 1)),
+            (2, ("a", "y", 2)),
+            (3, ("b", "x", 3)),
+            (4, ("b", "y", 4)),
+        ] {
+            vm.set_cell_value(row, 1, Variant::Str(row_key.into()))
+                .unwrap();
+            vm.set_cell_value(row, 2, Variant::Str(col_key.into()))
+                .unwrap();
+            vm.set_cell_value(row, 3, Variant::Integer(value)).unwrap();
+        }
+        vm.set_cell_formula(1, 5, "=PIVOTBY(A1:A4,B1:B4,C1:C4,HSTACK(SUM,AVERAGE))")
+            .unwrap();
+        vm.recalculate_all_with_spills().unwrap();
+        assert_eq!(vm.get_cell(1, 5), Variant::Empty);
+        assert_eq!(vm.get_cell(1, 6), Variant::Str("x".into()));
+        assert_eq!(vm.get_cell(1, 7), Variant::Str("x".into()));
+        assert_eq!(vm.get_cell(1, 8), Variant::Str("y".into()));
+        assert_eq!(vm.get_cell(1, 9), Variant::Str("y".into()));
+        let rect = vm
+            .spill_rects
+            .get("sheet1")
+            .and_then(|anchors| anchors.get(&(1, 5)))
+            .copied()
+            .unwrap();
+        assert_eq!(rect.shape, ArrayShape::new(3, 5));
+    }
+
+    #[test]
+    fn recalculate_all_with_spills_uses_pivotby_vertical_reducer_shape() {
+        let mut vm = Vm::new();
+        for (row, (row_key, col_key, value)) in [
+            (1, ("a", "x", 1)),
+            (2, ("a", "y", 2)),
+            (3, ("b", "x", 3)),
+            (4, ("b", "y", 4)),
+        ] {
+            vm.set_cell_value(row, 1, Variant::Str(row_key.into()))
+                .unwrap();
+            vm.set_cell_value(row, 2, Variant::Str(col_key.into()))
+                .unwrap();
+            vm.set_cell_value(row, 3, Variant::Integer(value)).unwrap();
+        }
+        vm.set_cell_formula(1, 5, "=PIVOTBY(A1:A4,B1:B4,C1:C4,VSTACK(SUM,AVERAGE))")
+            .unwrap();
+        vm.recalculate_all_with_spills().unwrap();
+        assert_eq!(vm.get_cell(1, 5), Variant::Empty);
+        assert_eq!(vm.get_cell(1, 6), Variant::Str("x".into()));
+        assert_eq!(vm.get_cell(1, 7), Variant::Str("y".into()));
+        assert_eq!(vm.get_cell(2, 5), Variant::Str("a".into()));
+        assert_eq!(vm.get_cell(3, 5), Variant::Str("a".into()));
+        let rect = vm
+            .spill_rects
+            .get("sheet1")
+            .and_then(|anchors| anchors.get(&(1, 5)))
+            .copied()
+            .unwrap();
+        assert_eq!(rect.shape, ArrayShape::new(5, 3));
+    }
+
+    #[test]
+    fn recalculate_all_with_spills_uses_pivotby_input_header_shape() {
+        let mut vm = Vm::new();
+        for (row, (row_key, col_key, value)) in [
+            (1, ("Category", "Year", "Amount")),
+            (2, ("a", "x", "1")),
+            (3, ("a", "y", "2")),
+            (4, ("b", "x", "3")),
+            (5, ("b", "y", "4")),
+        ] {
+            vm.set_cell_value(row, 1, Variant::Str(row_key.into()))
+                .unwrap();
+            vm.set_cell_value(row, 2, Variant::Str(col_key.into()))
+                .unwrap();
+            vm.set_cell_value(
+                row,
+                3,
+                if row == 1 {
+                    Variant::Str(value.into())
+                } else {
+                    Variant::Integer(value.parse().unwrap())
+                },
+            )
+            .unwrap();
+        }
+        vm.set_cell_formula(1, 5, "=PIVOTBY(A1:A5,B1:B5,C1:C5,SUM,1)")
+            .unwrap();
+        vm.recalculate_all_with_spills().unwrap();
+        assert_eq!(vm.get_cell(1, 5), Variant::Str("a".into()));
+        assert_eq!(vm.get_cell(2, 5), Variant::Str("b".into()));
+        let rect = vm
+            .spill_rects
+            .get("sheet1")
+            .and_then(|anchors| anchors.get(&(1, 5)))
+            .copied()
+            .unwrap();
+        assert_eq!(rect.shape, ArrayShape::new(2, 3));
+        vm.set_cell_formula(10, 5, "=PIVOTBY(A1:A5,B1:B5,C1:C5,SUM)")
+            .unwrap();
+        vm.recalculate_all_with_spills().unwrap();
+        assert_eq!(vm.get_cell(10, 5), Variant::Str("a".into()));
+        let automatic_rect = vm
+            .spill_rects
+            .get("sheet1")
+            .and_then(|anchors| anchors.get(&(10, 5)))
+            .copied()
+            .unwrap();
+        assert_eq!(automatic_rect.shape, ArrayShape::new(2, 3));
+    }
+
+    #[test]
+    fn recalculate_all_with_spills_uses_pivotby_composite_field_shape() {
+        let mut vm = Vm::new();
+        for (row, (first, second, col_key, value)) in [
+            (1, ("a", "x", "x", 10)),
+            (2, ("a", "y", "y", 20)),
+            (3, ("b", "x", "x", 30)),
+            (4, ("b", "y", "y", 40)),
+        ] {
+            vm.set_cell_value(row, 1, Variant::Str(first.into()))
+                .unwrap();
+            vm.set_cell_value(row, 2, Variant::Str(second.into()))
+                .unwrap();
+            vm.set_cell_value(row, 3, Variant::Str(col_key.into()))
+                .unwrap();
+            vm.set_cell_value(row, 4, Variant::Integer(value)).unwrap();
+        }
+        vm.set_cell_formula(1, 6, "=PIVOTBY(A1:B4,C1:C4,D1:D4,\"SUM\")")
+            .unwrap();
+        vm.recalculate_all_with_spills().unwrap();
+        assert_eq!(vm.get_cell(1, 6), Variant::Empty);
+        assert_eq!(vm.get_cell(1, 7), Variant::Empty);
+        assert_eq!(vm.get_cell(1, 8), Variant::Str("x".into()));
+        assert_eq!(vm.get_cell(1, 9), Variant::Str("y".into()));
+        let rect = vm
+            .spill_rects
+            .get("sheet1")
+            .and_then(|anchors| anchors.get(&(1, 6)))
+            .copied()
+            .unwrap();
+        assert_eq!(rect.shape, ArrayShape::new(5, 4));
+    }
+
+    #[test]
+    fn recalculate_all_with_spills_uses_pivotby_row_subtotal_shape() {
+        let mut vm = Vm::new();
+        for (row, (first, second, col_key, value)) in [
+            (1, ("a", "x", "x", 10)),
+            (2, ("a", "y", "y", 20)),
+            (3, ("b", "x", "x", 30)),
+            (4, ("b", "y", "y", 40)),
+        ] {
+            vm.set_cell_value(row, 1, Variant::Str(first.into()))
+                .unwrap();
+            vm.set_cell_value(row, 2, Variant::Str(second.into()))
+                .unwrap();
+            vm.set_cell_value(row, 3, Variant::Str(col_key.into()))
+                .unwrap();
+            vm.set_cell_value(row, 4, Variant::Integer(value)).unwrap();
+        }
+        vm.set_cell_formula(1, 6, "=PIVOTBY(A1:B4,C1:C4,D1:D4,\"SUM\",0,2,1,0)")
+            .unwrap();
+        vm.recalculate_all_with_spills().unwrap();
+        assert_eq!(vm.get_cell(3, 6), Variant::Str("a".into()));
+        assert_eq!(vm.get_cell(3, 7), Variant::Str("Subtotal".into()));
+        let rect = vm
+            .spill_rects
+            .get("sheet1")
+            .and_then(|anchors| anchors.get(&(1, 6)))
+            .copied()
+            .unwrap();
+        assert_eq!(rect.shape, ArrayShape::new(6, 5));
+    }
+
+    #[test]
+    fn recalculate_all_with_spills_uses_pivotby_column_subtotal_shape() {
+        let mut vm = Vm::new();
+        for (row, (row_key, parent, child, value)) in [
+            (1, ("a", "p", "x", 1)),
+            (2, ("a", "p", "y", 2)),
+            (3, ("a", "q", "x", 3)),
+            (4, ("a", "q", "y", 4)),
+        ] {
+            vm.set_cell_value(row, 1, Variant::Str(row_key.into()))
+                .unwrap();
+            vm.set_cell_value(row, 2, Variant::Str(parent.into()))
+                .unwrap();
+            vm.set_cell_value(row, 3, Variant::Str(child.into()))
+                .unwrap();
+            vm.set_cell_value(row, 4, Variant::Integer(value)).unwrap();
+        }
+        vm.set_cell_formula(1, 6, "=PIVOTBY(A1:A4,B1:C4,D1:D4,\"SUM\",0,0,1,2)")
+            .unwrap();
+        vm.recalculate_all_with_spills().unwrap();
+        let rect = vm
+            .spill_rects
+            .get("sheet1")
+            .and_then(|anchors| anchors.get(&(1, 6)))
+            .copied()
+            .unwrap();
+        assert_eq!(rect.shape, ArrayShape::new(2, 8));
+    }
+
+    #[test]
+    fn recalculate_all_with_spills_propagates_vstack_shapes() {
+        let mut vm = Vm::new();
+        vm.set_cell_formula(1, 1, "=VSTACK(SEQUENCE(2,2),SEQUENCE(2,2))")
+            .unwrap();
+        vm.recalculate_all_with_spills().unwrap();
+        assert_eq!(vm.get_cell(1, 1), Variant::Integer(1));
+        assert_eq!(vm.get_cell(2, 2), Variant::Integer(4));
+        assert_eq!(vm.get_cell(3, 1), Variant::Integer(1));
+        assert_eq!(vm.get_cell(4, 2), Variant::Integer(4));
+        let rect = vm
+            .spill_rects
+            .get("sheet1")
+            .and_then(|anchors| anchors.get(&(1, 1)))
+            .copied()
+            .unwrap();
+        assert_eq!(rect.shape, ArrayShape::new(4, 2));
+
+        let mut vm = Vm::new();
+        vm.set_cell_formula(1, 1, "=HSTACK(SEQUENCE(2,1),SEQUENCE(2,1))")
+            .unwrap();
+        vm.recalculate_all_with_spills().unwrap();
+        assert_eq!(vm.get_cell(1, 1), Variant::Integer(1));
+        assert_eq!(vm.get_cell(1, 2), Variant::Integer(1));
+        assert_eq!(vm.get_cell(2, 1), Variant::Integer(2));
+        assert_eq!(vm.get_cell(2, 2), Variant::Integer(2));
+        let rect = vm
+            .spill_rects
+            .get("sheet1")
+            .and_then(|anchors| anchors.get(&(1, 1)))
+            .copied()
+            .unwrap();
+        assert_eq!(rect.shape, ArrayShape::new(2, 2));
+    }
+
+    #[test]
+    fn recalculate_all_with_spills_uses_filter_source_width() {
+        let mut vm = Vm::new();
+        for (position, value) in [
+            ((1, 1), Variant::Integer(1)),
+            ((1, 2), Variant::Str("a".into())),
+            ((2, 1), Variant::Integer(2)),
+            ((2, 2), Variant::Str("b".into())),
+            ((3, 1), Variant::Integer(3)),
+            ((3, 2), Variant::Str("c".into())),
+        ] {
+            vm.cells_mut().insert(
+                position,
+                CellContent {
+                    formula: None,
+                    value,
+                },
+            );
+        }
+        vm.set_cell_formula(1, 4, "=FILTER(A1:B3,A1:A3>1)").unwrap();
+        vm.recalculate_all_with_spills().unwrap();
+        assert_eq!(vm.get_cell(1, 4), Variant::Integer(2));
+        assert_eq!(vm.get_cell(1, 5), Variant::Str("b".into()));
+        assert_eq!(vm.get_cell(2, 4), Variant::Integer(3));
+        assert_eq!(vm.get_cell(2, 5), Variant::Str("c".into()));
+        let rect = vm
+            .spill_rects
+            .get("sheet1")
+            .and_then(|anchors| anchors.get(&(1, 4)))
+            .copied()
+            .unwrap();
+        assert_eq!(rect.shape, ArrayShape::new(2, 2));
+    }
+
+    #[test]
+    fn recalculate_all_with_spills_restores_generated_filter_column_shape() {
+        let mut vm = Vm::new();
+        vm.set_cell_formula(1, 1, "=FILTER(SEQUENCE(2,3),SEQUENCE(1,3))")
+            .unwrap();
+        vm.recalculate_all_with_spills().unwrap();
+        assert_eq!(vm.get_cell(1, 1), Variant::Integer(1));
+        assert_eq!(vm.get_cell(1, 3), Variant::Integer(3));
+        assert_eq!(vm.get_cell(2, 1), Variant::Integer(4));
+        assert_eq!(vm.get_cell(2, 3), Variant::Integer(6));
+        let rect = vm
+            .spill_rects
+            .get("sheet1")
+            .and_then(|anchors| anchors.get(&(1, 1)))
+            .copied()
+            .unwrap();
+        assert_eq!(rect.shape, ArrayShape::new(2, 3));
+    }
+
+    #[test]
+    fn recalculate_all_with_spills_keeps_one_column_take_and_drop_vertical() {
+        let mut vm = Vm::new();
+        vm.set_cell_formula(1, 1, "=TAKE(SEQUENCE(5),3)").unwrap();
+        vm.set_cell_formula(1, 3, "=DROP(SEQUENCE(5),2)").unwrap();
+        vm.recalculate_all_with_spills().unwrap();
+        assert_eq!(vm.get_cell(1, 1), Variant::Integer(1));
+        assert_eq!(vm.get_cell(3, 1), Variant::Integer(3));
+        assert_eq!(vm.get_cell(1, 3), Variant::Integer(3));
+        assert_eq!(vm.get_cell(3, 3), Variant::Integer(5));
+        assert_eq!(
+            vm.spill_rects
+                .get("sheet1")
+                .and_then(|anchors| anchors.get(&(1, 1)))
+                .copied()
+                .unwrap()
+                .shape,
+            ArrayShape::new(3, 1)
+        );
+        assert_eq!(
+            vm.spill_rects
+                .get("sheet1")
+                .and_then(|anchors| anchors.get(&(1, 3)))
+                .copied()
+                .unwrap()
+                .shape,
+            ArrayShape::new(3, 1)
+        );
+    }
+
+    #[test]
+    fn recalculate_all_with_spills_restores_unique_sort_and_flatten_axes() {
+        let mut vm = Vm::new();
+        vm.set_cell_formula(1, 1, "=UNIQUE(SEQUENCE(3))").unwrap();
+        vm.set_cell_formula(1, 3, "=SORT(SEQUENCE(3))").unwrap();
+        vm.set_cell_formula(1, 5, "=TOCOL(SEQUENCE(2,2))").unwrap();
+        vm.set_cell_formula(1, 7, "=TOROW(SEQUENCE(2,2))").unwrap();
+        vm.recalculate_all_with_spills().unwrap();
+        assert_eq!(vm.get_cell(3, 1), Variant::Integer(3));
+        assert_eq!(vm.get_cell(3, 3), Variant::Integer(3));
+        assert_eq!(vm.get_cell(4, 5), Variant::Integer(4));
+        assert_eq!(vm.get_cell(1, 10), Variant::Integer(4));
+        assert_eq!(
+            vm.spill_rects
+                .get("sheet1")
+                .and_then(|anchors| anchors.get(&(1, 1)))
+                .copied()
+                .unwrap()
+                .shape,
+            ArrayShape::new(3, 1)
+        );
+        assert_eq!(
+            vm.spill_rects
+                .get("sheet1")
+                .and_then(|anchors| anchors.get(&(1, 7)))
+                .copied()
+                .unwrap()
+                .shape,
+            ArrayShape::new(1, 4)
+        );
+    }
+
+    #[test]
+    fn recalculate_all_with_spills_restores_index_array_shapes() {
+        let mut vm = Vm::new();
+        for (position, value) in [
+            ((1, 1), Variant::Integer(1)),
+            ((1, 2), Variant::Integer(2)),
+            ((2, 1), Variant::Integer(3)),
+            ((2, 2), Variant::Integer(4)),
+        ] {
+            vm.cells_mut().insert(
+                position,
+                CellContent {
+                    formula: None,
+                    value,
+                },
+            );
+        }
+        vm.set_cell_formula(1, 4, "=INDEX(A1:B2,0,0)").unwrap();
+        vm.set_cell_formula(1, 7, "=INDEX(A1:B2,0,2)").unwrap();
+        vm.set_cell_formula(1, 9, "=INDEX(A1:B2,2,0)").unwrap();
+        vm.recalculate_all_with_spills().unwrap();
+        assert_eq!(vm.get_cell(2, 4), Variant::Integer(3));
+        assert_eq!(vm.get_cell(2, 5), Variant::Integer(4));
+        assert_eq!(vm.get_cell(1, 7), Variant::Integer(2));
+        assert_eq!(vm.get_cell(2, 7), Variant::Integer(4));
+        assert_eq!(vm.get_cell(1, 9), Variant::Integer(3));
+        assert_eq!(vm.get_cell(1, 10), Variant::Integer(4));
+        assert_eq!(
+            vm.spill_rects
+                .get("sheet1")
+                .and_then(|anchors| anchors.get(&(1, 4)))
+                .copied()
+                .unwrap()
+                .shape,
+            ArrayShape::new(2, 2)
+        );
+    }
+
+    #[test]
+    fn recalculate_all_with_spills_restores_choose_axes_for_two_dimensional_arrays() {
+        let mut vm = Vm::new();
+        vm.set_cell_formula(1, 1, "=CHOOSECOLS(SEQUENCE(2,3),3,1)")
+            .unwrap();
+        vm.set_cell_formula(1, 5, "=CHOOSEROWS(SEQUENCE(2,3),2)")
+            .unwrap();
+        vm.recalculate_all_with_spills().unwrap();
+        assert_eq!(vm.get_cell(1, 1), Variant::Integer(3));
+        assert_eq!(vm.get_cell(1, 2), Variant::Integer(1));
+        assert_eq!(vm.get_cell(2, 1), Variant::Integer(6));
+        assert_eq!(vm.get_cell(2, 2), Variant::Integer(4));
+        assert_eq!(vm.get_cell(1, 5), Variant::Integer(4));
+        assert_eq!(vm.get_cell(1, 7), Variant::Integer(6));
+        assert_eq!(
+            vm.spill_rects
+                .get("sheet1")
+                .and_then(|anchors| anchors.get(&(1, 1)))
+                .copied()
+                .unwrap()
+                .shape,
+            ArrayShape::new(2, 2)
+        );
+        assert_eq!(
+            vm.spill_rects
+                .get("sheet1")
+                .and_then(|anchors| anchors.get(&(1, 5)))
+                .copied()
+                .unwrap()
+                .shape,
+            ArrayShape::new(1, 3)
+        );
+    }
+
+    #[test]
+    fn recalculate_all_with_spills_rejects_overlapping_array_anchors_before_writing() {
+        let mut vm = Vm::new();
+        vm.set_cell_formula(1, 1, "=SEQUENCE(1,2)").unwrap();
+        vm.set_cell_formula(1, 2, "=SEQUENCE(1,2)").unwrap();
+        let before = vm.cells().len();
+        let error = vm.recalculate_all_with_spills().unwrap_err();
+        assert!(error.contains("#SPILL!"));
+        assert_eq!(vm.cells().len(), before);
+    }
+
+    #[test]
+    fn recalculate_all_with_spills_rolls_back_prior_sheets_on_later_collision() {
+        let mut vm = Vm::new();
+        vm.set_cell_formula(1, 1, "=SEQUENCE(1,2)").unwrap();
+        vm.ensure_sheet("Other");
+        vm.set_active_sheet("Other").unwrap();
+        vm.set_cell_formula(1, 1, "=SEQUENCE(1,2)").unwrap();
+        vm.write_rect("Other", (1, 2), &[vec![Variant::Integer(99)]]);
+        vm.set_active_sheet("sheet1").unwrap();
+
+        let error = vm.recalculate_all_with_spills().unwrap_err();
+        assert!(error.contains("#SPILL!"));
+        assert_eq!(vm.active_sheet, "sheet1");
+        // The formula's cached array value exists before materialization; the
+        // rollback contract is that only the derived spill cells disappear.
+        assert_eq!(
+            vm.get_cell(1, 1),
+            Variant::Array(vec![Variant::Integer(1), Variant::Integer(2)])
+        );
+        assert_eq!(vm.get_cell(1, 2), Variant::Empty);
+        assert_eq!(
+            vm.get_sheet_cells("other")
+                .unwrap()
+                .get(&(1, 2))
+                .map(|cell| &cell.value),
+            Some(&Variant::Integer(99))
+        );
+        assert!(vm.spill_rects.values().all(HashMap::is_empty));
+    }
+
+    #[test]
+    fn recalculate_all_with_spills_materializes_each_sheet_and_restores_active_sheet() {
+        let mut vm = Vm::new();
+        vm.ensure_sheet("Other");
+        vm.set_active_sheet("other").unwrap();
+        vm.set_cell_formula(1, 1, "=SEQUENCE(1,2)").unwrap();
+        vm.set_active_sheet("sheet1").unwrap();
+        vm.set_cell_formula(1, 1, "=SEQUENCE(1,2)").unwrap();
+
+        vm.recalculate_all_with_spills().unwrap();
+        assert_eq!(vm.active_sheet, "sheet1");
+        assert_eq!(vm.get_cell(1, 2), Variant::Integer(2));
+        assert_eq!(
+            vm.get_sheet_cells("other")
+                .unwrap()
+                .get(&(1, 2))
+                .map(|cell| &cell.value),
+            Some(&Variant::Integer(2))
+        );
+    }
+
+    #[test]
+    fn apply_spill_matrix_preserves_two_dimensional_shape_and_anchor_formula() {
+        let mut vm = Vm::new();
+        vm.set_cell_formula(2, 2, "=TRANSPOSE(A1:B1)").unwrap();
+        let matrix = vec![vec![Variant::Integer(10)], vec![Variant::Integer(20)]];
+        let rect = vm.apply_spill_matrix(2, 2, &matrix).unwrap();
+        assert_eq!(rect.shape, ArrayShape::new(2, 1));
+        assert_eq!(vm.get_cell(2, 2), Variant::Integer(10));
+        assert_eq!(vm.get_cell(3, 2), Variant::Integer(20));
+        assert_eq!(
+            vm.cells()
+                .get(&(2, 2))
+                .and_then(|cell| cell.formula.as_deref()),
+            Some("=TRANSPOSE(A1:B1)")
+        );
+    }
+
+    #[test]
+    fn apply_spill_matrix_rejects_ragged_input_before_mutation() {
+        let mut vm = Vm::new();
+        let before = vm.cells().len();
+        let matrix = vec![
+            vec![Variant::Integer(1)],
+            vec![Variant::Integer(2), Variant::Integer(3)],
+        ];
+        assert!(vm.apply_spill_matrix(1, 1, &matrix).is_err());
+        assert_eq!(vm.cells().len(), before);
+    }
+
+    #[test]
+    fn formula_ast_cache_refreshes_after_a_direct_formula_text_change() {
+        let mut vm = Vm::new();
+        vm.set_cell_formula(1, 1, "=1+1").unwrap();
+        vm.recalculate_all().unwrap();
+        assert_eq!(vm.get_cell(1, 1), Variant::Integer(2));
+
+        vm.cells_mut().get_mut(&(1, 1)).unwrap().formula = Some("=2+2".to_string());
+        vm.recalculate_all().unwrap();
+        assert_eq!(vm.get_cell(1, 1), Variant::Integer(4));
+        assert_eq!(
+            vm.formula_ast_cache["sheet1"][&(1, 1)].0,
+            "=2+2".to_string()
+        );
+    }
+
+    #[test]
+    fn formula_ast_cache_drops_entries_when_formula_cells_are_removed() {
+        let mut vm = Vm::new();
+        vm.set_cell_formula(1, 1, "=1+1").unwrap();
+        assert!(vm.formula_ast_cache["sheet1"].contains_key(&(1, 1)));
+        vm.cells_mut().remove(&(1, 1));
+        vm.recalculate_all().unwrap();
+        assert!(!vm.formula_ast_cache["sheet1"].contains_key(&(1, 1)));
     }
 
     // ── P1 remainder: sort_range_on_sheet (extracted from Stmt::RangeSort) ──
@@ -14188,6 +24653,55 @@ mod tests {
     }
 
     #[test]
+    fn test_module_qualified_udt_resolution() {
+        let program = parser::parse(concat!(
+            "Attribute VB_Name = \"Types\"\n",
+            "Type Point\n",
+            "    X As Integer\n",
+            "End Type\n",
+            "Sub MySub()\n",
+            "    Dim p As Types.Point\n",
+            "    p.X = 7\n",
+            "    result = p.X\n",
+            "End Sub\n",
+        ))
+        .unwrap();
+        let mut vm = Vm::new();
+        vm.run_sub(&program, "MySub").unwrap();
+        assert_eq!(vm.variables["result"], Variant::Integer(7));
+    }
+
+    #[test]
+    fn test_module_qualified_udt_resolution_across_modules() {
+        let types = parser::parse(concat!(
+            "Attribute VB_Name = \"Types\"\n",
+            "Type Point\n",
+            "    X As Integer\n",
+            "End Type\n",
+        ))
+        .unwrap();
+        let main = parser::parse(concat!(
+            "Attribute VB_Name = \"MainModule\"\n",
+            "Sub Main()\n",
+            "    Dim p As Types.Point\n",
+            "    p.X = 9\n",
+            "    result = p.X\n",
+            "End Sub\n",
+        ))
+        .unwrap();
+        let mut vm = Vm::new();
+        vm.run_sub_multi(
+            &[
+                ("Types".to_string(), types),
+                ("MainModule".to_string(), main),
+            ],
+            "Main",
+        )
+        .unwrap();
+        assert_eq!(vm.variables["result"], Variant::Integer(9));
+    }
+
+    #[test]
     fn test_dim_multi_declarator_end_to_end() {
         // `Dim a As Integer, b As Person` — a comma-separated multi-declarator
         // Dim mixing a built-in type with a user-defined type. Previously
@@ -14491,6 +25005,10 @@ mod tests {
         // Spec: messages reflects every MsgBox the macro attempted to show,
         // even ones that are then treated as a blocking error.
         assert_eq!(vm.take_messages(), vec!["blocked".to_string()]);
+        assert_eq!(
+            vm.take_runtime_failure(),
+            Some(RuntimeFailureKind::MsgBoxBlocked)
+        );
     }
 
     #[test]
@@ -14609,6 +25127,139 @@ mod tests {
     }
 
     #[test]
+    fn run_sub_multi_with_events_dispatches_unique_workbook_open_first() {
+        let modules = vec![
+            module(
+                "thisworkbook",
+                "Sub Workbook_Open()\n    Cells(1,1).Value = 3\nEnd Sub\n",
+            ),
+            module(
+                "module1",
+                "Sub Main()\n    Cells(1,2).Value = Cells(1,1).Value + 4\nEnd Sub\n",
+            ),
+        ];
+        let mut vm = Vm::new();
+        vm.run_sub_multi_with_events(&modules, "module1.Main")
+            .unwrap();
+        assert_eq!(vm.get_cell(1, 1), Variant::Integer(3));
+        assert_eq!(vm.get_cell(1, 2), Variant::Integer(7));
+    }
+
+    #[test]
+    fn run_sub_multi_with_events_rejects_duplicate_workbook_open() {
+        let modules = vec![
+            module("thisworkbook", "Sub Workbook_Open()\nEnd Sub\n"),
+            module("module1", "Sub Workbook_Open()\nEnd Sub\n"),
+        ];
+        let mut vm = Vm::new();
+        let err = vm
+            .run_sub_multi_with_events(&modules, "module1.Workbook_Open")
+            .unwrap_err();
+        assert!(err.contains("duplicate Workbook_Open"), "{err:?}");
+    }
+
+    #[test]
+    fn run_sub_multi_with_events_auto_dispatches_unique_change_handler() {
+        let modules = vec![
+            module(
+                "module1",
+                "Sub Main()\n    Range(\"A1:B1\").Value = 7\nEnd Sub\n",
+            ),
+            module(
+                "sheet1",
+                "Sub Worksheet_Change(Target As Range)\n    If Target.Columns.Count = 2 Then\n        Cells(1,3).Value = Target.Columns.Count\n    End If\nEnd Sub\n",
+            ),
+        ];
+        let mut vm = Vm::new();
+        vm.run_sub_multi_with_events(&modules, "module1.Main")
+            .unwrap();
+        assert_eq!(vm.get_cell(1, 3), Variant::Integer(2));
+    }
+
+    #[test]
+    fn run_sub_multi_with_events_selects_change_handler_named_for_active_sheet() {
+        let modules = vec![
+            module(
+                "module1",
+                r#"Sub Main()
+    Range("A1").Value = 7
+End Sub
+"#,
+            ),
+            module(
+                "Sheet1",
+                r#"Sub Worksheet_Change(Target As Range)
+    If Target.Address = "$A$1" Then Cells(1,3).Value = Target.Value
+End Sub
+"#,
+            ),
+            module(
+                "Sheet2",
+                r#"Sub Worksheet_Change(Target As Range)
+    Cells(1,4).Value = Target.Value
+End Sub
+"#,
+            ),
+        ];
+        let mut vm = Vm::new();
+        vm.run_sub_multi_with_events(&modules, "module1.Main")
+            .unwrap();
+        assert_eq!(vm.get_cell(1, 3), Variant::Integer(7));
+        assert_eq!(vm.get_cell(1, 4), Variant::Empty);
+    }
+
+    #[test]
+    fn run_sub_multi_with_events_selects_change_handler_by_sheet_code_name() {
+        let modules = vec![
+            module(
+                "SheetModule",
+                "Sub Worksheet_Change(Target As Range)\n    If Target.Address = \"$A$1\" Then Cells(1,3).Value = 9\nEnd Sub\n",
+            ),
+            module(
+                "OtherModule",
+                "Sub Main()\n    Cells(1,1).Value = 1\nEnd Sub\nSub Worksheet_Change(Target As Range)\n    Cells(1,4).Value = 8\nEnd Sub\n",
+            ),
+        ];
+        let mut vm = Vm::new();
+        vm.ensure_sheet("Input");
+        vm.set_active_sheet("Input").unwrap();
+        vm.sheet_code_names
+            .insert("input".to_string(), "SheetModule".to_string());
+        vm.run_sub_multi_with_events(&modules, "OtherModule.Main")
+            .unwrap();
+        assert_eq!(vm.get_cell(1, 3), Variant::Integer(9));
+        assert_eq!(vm.get_cell(1, 4), Variant::Empty);
+    }
+
+    #[test]
+    fn run_sub_with_events_drains_bounded_worksheet_change_chain() {
+        let program = parser::parse(
+            "Sub Main()\n    Range(\"A1\").Value = 7\nEnd Sub\n\n\
+             Sub Worksheet_Change(Target As Range)\n    If Target.Value = 7 Then\n        Range(\"B1\").Value = 8\n    End If\nEnd Sub\n",
+        )
+        .unwrap();
+        let mut vm = Vm::new();
+        vm.run_sub_with_events(&program, "Main").unwrap();
+        assert_eq!(vm.get_cell(1, 1), Variant::Integer(7));
+        assert_eq!(vm.get_cell(1, 2), Variant::Integer(8));
+    }
+
+    #[test]
+    fn run_sub_with_events_rejects_an_unbounded_worksheet_change_chain() {
+        let program = parser::parse(
+            "Sub Main()\n    Range(\"A1\").Value = 7\nEnd Sub\n\n\
+             Sub Worksheet_Change(Target As Range)\n    Range(\"B1\").Value = Target.Value\nEnd Sub\n",
+        )
+        .unwrap();
+        let mut vm = Vm::new();
+        let error = vm.run_sub_with_events(&program, "Main").unwrap_err();
+        assert!(
+            error.contains("event chain exceeded 64 dispatches"),
+            "{error:?}"
+        );
+    }
+
+    #[test]
     fn run_sub_multi_resolves_unique_bare_name_across_modules() {
         let modules = vec![
             module("module1", "Sub Helper()\n    y = 1\nEnd Sub\n"),
@@ -14671,6 +25322,25 @@ mod tests {
     }
 
     #[test]
+    fn run_sub_multi_resolves_bare_udts_in_their_own_module_scope() {
+        let modules = vec![
+            module(
+                "module1",
+                "Type Point\n    X As Long\nEnd Type\nSub Main()\n    Dim p As Point\n    p.X = 11\n    x = p.X\nEnd Sub\n",
+            ),
+            module(
+                "module2",
+                "Type point\n    Y As Long\nEnd Type\nSub Other()\n    Dim p As point\n    p.Y = 22\n    y = p.Y\nEnd Sub\n",
+            ),
+        ];
+        let mut vm = Vm::new();
+        vm.run_sub_multi(&modules, "Module1.Main").unwrap();
+        assert_eq!(vm.variables["x"], Variant::Integer(11));
+        vm.run_sub_multi(&modules, "Module2.Other").unwrap();
+        assert_eq!(vm.variables["y"], Variant::Integer(22));
+    }
+
+    #[test]
     fn run_sub_multi_entrypoint_not_found() {
         let modules = vec![module("module1", "Sub Main()\n    x = 1\nEnd Sub\n")];
         let mut vm = Vm::new();
@@ -14726,6 +25396,71 @@ mod tests {
     }
 
     #[test]
+    fn load_workbook_file_propagates_date1904_metadata_to_vm() {
+        // Start from a valid workbook produced by the project writer, then
+        // add the standard workbookPr flag while preserving every other ZIP
+        // part. This exercises the same path used by real .xlsx files.
+        use std::io::{Cursor, Read, Write};
+        use zip::write::SimpleFileOptions;
+
+        let base_path = std::env::temp_dir().join(format!(
+            "elixcee_vm_date1904_base_{}.xlsx",
+            std::process::id()
+        ));
+        let out_path =
+            std::env::temp_dir().join(format!("elixcee_vm_date1904_{}.xlsx", std::process::id()));
+        let roundtrip_path = std::env::temp_dir().join(format!(
+            "elixcee_vm_date1904_roundtrip_{}.xlsx",
+            std::process::id()
+        ));
+        let mut source_vm = Vm::new();
+        source_vm.cells_mut().insert(
+            (1, 1),
+            CellContent {
+                formula: None,
+                value: Variant::Integer(42),
+            },
+        );
+        crate::save_workbook(&source_vm, base_path.to_str().unwrap()).unwrap();
+
+        let input = std::fs::read(&base_path).unwrap();
+        let mut archive = zip::ZipArchive::new(Cursor::new(input)).unwrap();
+        let mut writer = zip::ZipWriter::new(Cursor::new(Vec::new()));
+        for index in 0..archive.len() {
+            let mut entry = archive.by_index(index).unwrap();
+            let name = entry.name().to_string();
+            let mut bytes = Vec::new();
+            entry.read_to_end(&mut bytes).unwrap();
+            if name == "xl/workbook.xml" {
+                let xml = String::from_utf8(bytes).unwrap();
+                let marker = xml.find('>').unwrap();
+                let mut updated = String::with_capacity(xml.len() + 32);
+                updated.push_str(&xml[..=marker]);
+                updated.push_str("<workbookPr date1904=\"1\"/>");
+                updated.push_str(&xml[marker + 1..]);
+                bytes = updated.into_bytes();
+            }
+            writer
+                .start_file(name, SimpleFileOptions::default())
+                .unwrap();
+            writer.write_all(&bytes).unwrap();
+        }
+        let rewritten = writer.finish().unwrap().into_inner();
+        std::fs::write(&out_path, rewritten).unwrap();
+
+        let mut vm = Vm::new();
+        vm.load_workbook_file(out_path.to_str().unwrap()).unwrap();
+        assert!(vm.workbook_date1904());
+        assert!(vm.fork().workbook_date1904());
+        crate::save_workbook(&vm, roundtrip_path.to_str().unwrap()).unwrap();
+        assert!(reader::xlsx_date1904_for_path(roundtrip_path.to_str().unwrap()).unwrap());
+
+        std::fs::remove_file(&base_path).unwrap();
+        std::fs::remove_file(&out_path).unwrap();
+        std::fs::remove_file(&roundtrip_path).unwrap();
+    }
+
+    #[test]
     fn populate_from_sheets_lowercases_a_mixed_case_sheet_name() {
         // Regression test for the bug found while extracting
         // `load_workbook_file` out of main.rs: real Excel files commonly
@@ -14756,6 +25491,8 @@ mod tests {
             column_styles: Vec::new(),
             tables: Vec::new(),
             data_validations: Vec::new(),
+            conditional_format_ranges: Vec::new(),
+            comment_cells: Vec::new(),
             autofilter: None,
         }];
 
@@ -14800,6 +25537,8 @@ mod tests {
                 column_styles: Vec::new(),
                 tables: Vec::new(),
                 data_validations: Vec::new(),
+                conditional_format_ranges: Vec::new(),
+                comment_cells: Vec::new(),
                 autofilter: None,
             },
             WorkbookSheet {
@@ -14821,6 +25560,8 @@ mod tests {
                 column_styles: Vec::new(),
                 tables: Vec::new(),
                 data_validations: Vec::new(),
+                conditional_format_ranges: Vec::new(),
+                comment_cells: Vec::new(),
                 autofilter: None,
             },
         ];
@@ -14864,6 +25605,8 @@ mod tests {
             column_styles: Vec::new(),
             tables: Vec::new(),
             data_validations: Vec::new(),
+            conditional_format_ranges: Vec::new(),
+            comment_cells: Vec::new(),
             autofilter: None,
         }];
 
@@ -14881,6 +25624,19 @@ mod tests {
             .load_workbook_file("/nonexistent/path/does_not_exist.xlsx")
             .unwrap_err();
         assert!(err.starts_with("cannot read"), "{:?}", err);
+    }
+
+    #[test]
+    fn load_workbook_file_preserves_the_safe_unsupported_extension_error() {
+        let mut vm = Vm::new();
+        let err = vm
+            .load_workbook_file("/sensitive/input/location/workbook.xlsb")
+            .unwrap_err();
+        assert_eq!(
+            err,
+            "unsupported input extension; use .xlsx, .xlsm, or .ods"
+        );
+        assert!(!err.contains("sensitive/input/location"));
     }
 
     #[test]
@@ -14912,6 +25668,120 @@ mod tests {
         .unwrap();
         vm.run_sub(&prog, "mysub").unwrap();
         assert_eq!(vm.variables["n"], Variant::Integer(2000));
+    }
+
+    #[test]
+    fn instruction_budget_stops_execution_deterministically() {
+        let mut vm = Vm::new();
+        vm.max_instructions = Some(1);
+        let prog = parser::parse("Sub MySub()\n    first = 1\n    second = 2\nEnd Sub\n").unwrap();
+        let err = vm.run_sub(&prog, "mysub").unwrap_err();
+        assert!(err.starts_with("BUDGET:"), "{err:?}");
+        assert_eq!(vm.variables["first"], Variant::Integer(1));
+        assert!(!vm.variables.contains_key("second"));
+    }
+
+    #[test]
+    fn call_depth_budget_stops_recursive_subs() {
+        let mut vm = Vm::new();
+        vm.max_call_depth = Some(2);
+        let prog = parser::parse("Sub Main()\n    Call Main()\nEnd Sub\n").unwrap();
+        let err = vm.run_sub(&prog, "main").unwrap_err();
+        assert!(err.starts_with("BUDGET: VBA call depth"), "{err:?}");
+    }
+
+    #[test]
+    fn value_budgets_stop_oversized_strings_and_arrays() {
+        let mut vm = Vm::new();
+        vm.max_string_bytes = Some(4);
+        let prog = parser::parse("Sub MySub()\n    value = \"hello\"\nEnd Sub\n").unwrap();
+        let err = vm.run_sub(&prog, "mysub").unwrap_err();
+        assert!(err.starts_with("BUDGET: VBA string size"), "{err:?}");
+        assert!(!vm.variables.contains_key("value"));
+
+        let mut vm = Vm::new();
+        vm.max_array_elements = Some(1);
+        let prog = parser::parse("Sub MySub()\n    value = Array(1, 2)\nEnd Sub\n").unwrap();
+        let err = vm.run_sub(&prog, "mysub").unwrap_err();
+        assert!(err.starts_with("BUDGET: VBA array element"), "{err:?}");
+    }
+
+    #[test]
+    fn native_values_are_budget_checked_once_before_execution() {
+        let mut vm = Vm::new();
+        vm.max_string_bytes = Some(4);
+        vm.variables
+            .insert("native".into(), Variant::Str("hello".into()));
+        let prog = parser::parse("Sub MySub()\n    reached = 1\nEnd Sub\n").unwrap();
+        let err = vm.run_sub(&prog, "mysub").unwrap_err();
+        assert!(err.starts_with("BUDGET: VBA string size"), "{err:?}");
+        assert!(!vm.variables.contains_key("reached"));
+    }
+
+    #[test]
+    fn array_element_assignment_is_checked_at_the_mutation_boundary() {
+        let mut vm = Vm::new();
+        vm.max_string_bytes = Some(4);
+        let prog =
+            parser::parse("Sub MySub()\n    Dim items(0)\n    items(0) = \"hello\"\nEnd Sub\n")
+                .unwrap();
+        let err = vm.run_sub(&prog, "mysub").unwrap_err();
+        assert!(err.starts_with("BUDGET: VBA string size"), "{err:?}");
+        assert_eq!(
+            vm.variables["items"],
+            Variant::VbaArray(VbaArray {
+                bounds: vec![ArrayBound { lower: 0, upper: 0 }],
+                elements: vec![Variant::Empty],
+            })
+        );
+    }
+
+    #[test]
+    fn cell_budget_stops_workbook_growth() {
+        let mut vm = Vm::new();
+        vm.max_cells = Some(1);
+        let prog = parser::parse(
+            "Sub MySub()\n    Cells(1, 1).Value = 1\n    Cells(1, 2).Value = 2\nEnd Sub\n",
+        )
+        .unwrap();
+        let err = vm.run_sub(&prog, "mysub").unwrap_err();
+        assert!(err.starts_with("BUDGET: VBA cell count"), "{err:?}");
+    }
+
+    #[test]
+    fn blocked_external_effects_fail_even_with_resume_next() {
+        let mut vm = Vm::new();
+        let prog = parser::parse(
+            "Sub MySub()\n    On Error Resume Next\n    Set d = CreateObject(\"Scripting.Dictionary\")\n    done = 1\nEnd Sub\n",
+        )
+        .unwrap();
+        let err = vm.run_sub(&prog, "mysub").unwrap_err();
+        assert!(
+            err.starts_with("SECURITY: blocked external VBA effect"),
+            "{err:?}"
+        );
+        assert_eq!(
+            vm.take_runtime_failure(),
+            Some(RuntimeFailureKind::SecurityBlockedExternalEffect)
+        );
+        assert!(!vm.variables.contains_key("done"));
+    }
+
+    #[test]
+    fn workbook_save_and_close_are_blocked_as_external_effects() {
+        let mut vm = Vm::new();
+        let prog =
+            parser::parse("Sub MySub()\n    ThisWorkbook.Save\n    ThisWorkbook.Close\nEnd Sub\n")
+                .unwrap();
+        let err = vm.run_sub(&prog, "mysub").unwrap_err();
+        assert!(
+            err.starts_with("SECURITY: blocked external VBA effect"),
+            "{err:?}"
+        );
+        assert_eq!(
+            vm.take_runtime_failure(),
+            Some(RuntimeFailureKind::SecurityBlockedExternalEffect)
+        );
     }
 
     #[test]
@@ -15350,7 +26220,7 @@ mod tests {
         assert!(err.contains("out of range"), "{:?}", err);
     }
 
-    // ── Milestone B7c item 4: SpecialCells(xlCellTypeVisible) ────────────────
+    // ── Range.SpecialCells ──────────────────────────────────────────────────
 
     #[test]
     fn specialcells_visible_excludes_a_hidden_row() {
@@ -15380,6 +26250,100 @@ mod tests {
              n = vis.Areas.Count\nEnd Sub\n",
         );
         assert_eq!(vm.variables["n"], Variant::Integer(1));
+    }
+
+    #[test]
+    fn specialcells_constants_and_formulas_honor_the_value_type_mask() {
+        let vm = run(
+            "Sub MySub()\n    Cells(1,1).Value = 10\n    Cells(2,1).Value = \"text\"\n    \
+             Cells(3,1).Value = True\n    Range(\"A4\").Formula = \"=1+1\"\n    \
+             Set constants = Range(\"A1:A4\").SpecialCells(xlCellTypeConstants, xlNumbers + xlLogical)\n    \
+             Set formulas = Range(\"A1:A4\").SpecialCells(xlCellTypeFormulas, xlNumbers)\n    \
+             constantAreas = constants.Areas.Count\n    formulaValue = formulas.Value\nEnd Sub\n",
+        );
+        assert_eq!(vm.variables["constantareas"], Variant::Integer(2));
+        assert_eq!(vm.variables["formulavalue"], Variant::Integer(2));
+    }
+
+    #[test]
+    fn specialcells_blanks_coalesces_adjacent_blank_cells() {
+        let vm = run(
+            "Sub MySub()\n    Cells(1,1).Value = 1\n    Cells(4,1).Value = 4\n    \
+             Set blanks = Range(\"A1:A4\").SpecialCells(xlCellTypeBlanks)\n    \
+             n = blanks.Areas.Count\nEnd Sub\n",
+        );
+        assert_eq!(vm.variables["n"], Variant::Integer(1));
+        let ObjectRef::Range(blanks) = &vm.object_variables["blanks"] else {
+            panic!("expected range");
+        };
+        assert_eq!(blanks.areas[0].start_row, 2);
+        assert_eq!(blanks.areas[0].end_row, 3);
+    }
+
+    #[test]
+    fn specialcells_last_cell_returns_the_used_range_bottom_right_cell() {
+        let vm = run(
+            "Sub MySub()\n    Cells(2,2).Value = 1\n    Cells(7,5).Value = 9\n    \
+             Set last = Range(\"A1:J10\").SpecialCells(xlCellTypeLastCell)\n    \
+             x = last.Value\nEnd Sub\n",
+        );
+        assert_eq!(vm.variables["x"], Variant::Integer(9));
+    }
+
+    #[test]
+    fn specialcells_validation_format_conditions_and_comments_use_loaded_metadata() {
+        let mut vm = Vm::new();
+        let mut same = sample_dv_rule(vec![((1, 1), (1, 1)), ((3, 1), (3, 1))]);
+        same.raw_span.clear();
+        let mut different = sample_dv_rule(vec![((2, 1), (2, 1))]);
+        different.validation_type = "whole".to_string();
+        vm.data_validations
+            .insert("sheet1".to_string(), vec![same, different]);
+        vm.conditional_format_ranges.insert(
+            "sheet1".to_string(),
+            vec![
+                vec![((1, 1), (1, 1)), ((3, 1), (3, 1))],
+                vec![((2, 1), (2, 1))],
+            ],
+        );
+        vm.comment_cells
+            .insert("sheet1".to_string(), HashSet::from([(2, 1), (3, 1)]));
+        let prog = parser::parse(
+            "Sub MySub()\n    Set allDv = Range(\"A1:A3\").SpecialCells(xlCellTypeAllValidation)\n    \
+             Set sameDv = Range(\"A1:A3\").SpecialCells(xlCellTypeSameValidation)\n    \
+             Set allCf = Range(\"A1:A3\").SpecialCells(xlCellTypeAllFormatConditions)\n    \
+             Set sameCf = Range(\"A1:A3\").SpecialCells(xlCellTypeSameFormatConditions)\n    \
+             Set notes = Range(\"A1:A3\").SpecialCells(xlCellTypeComments)\n    \
+             allDvN = allDv.Areas.Count\n    sameDvN = sameDv.Areas.Count\n    \
+             allCfN = allCf.Areas.Count\n    sameCfN = sameCf.Areas.Count\n    noteN = notes.Areas.Count\nEnd Sub\n",
+        )
+        .unwrap();
+        vm.run_sub(&prog, "mysub").unwrap();
+        assert_eq!(vm.variables["alldvn"], Variant::Integer(1));
+        assert_eq!(vm.variables["samedvn"], Variant::Integer(2));
+        assert_eq!(vm.variables["allcfn"], Variant::Integer(1));
+        assert_eq!(vm.variables["samecfn"], Variant::Integer(2));
+        assert_eq!(vm.variables["noten"], Variant::Integer(1));
+    }
+
+    #[test]
+    fn specialcells_reports_no_matches_and_enforces_scan_budget() {
+        let prog = parser::parse(
+            "Sub MySub()\n    Set none = Range(\"A1:A2\").SpecialCells(xlCellTypeConstants)\nEnd Sub\n",
+        )
+        .unwrap();
+        let mut vm = Vm::new();
+        let err = vm.run_sub(&prog, "mysub").unwrap_err();
+        assert!(err.contains("no cells were found (Error 1004)"), "{err}");
+
+        let prog = parser::parse(
+            "Sub MySub()\n    Set blanks = Range(\"A1:A3\").SpecialCells(xlCellTypeBlanks)\nEnd Sub\n",
+        )
+        .unwrap();
+        let mut vm = Vm::new();
+        vm.max_cells = Some(2);
+        let err = vm.run_sub(&prog, "mysub").unwrap_err();
+        assert!(err.contains("SpecialCells scan limit exceeded"), "{err}");
     }
 
     // ── Milestone B7c item 5: multi-area Copy/Paste ──────────────────────────
@@ -15785,6 +26749,8 @@ mod tests {
             column_styles: Vec::new(),
             tables: Vec::new(),
             data_validations: Vec::new(),
+            conditional_format_ranges: Vec::new(),
+            comment_cells: Vec::new(),
             autofilter: None,
         }];
         let mut vm = Vm::new();
@@ -15893,6 +26859,8 @@ mod tests {
             column_styles: Vec::new(),
             tables: Vec::new(),
             data_validations: Vec::new(),
+            conditional_format_ranges: Vec::new(),
+            comment_cells: Vec::new(),
             autofilter: None,
         }];
         let mut vm = Vm::new();
@@ -15938,6 +26906,8 @@ mod tests {
             column_styles: Vec::new(),
             tables: Vec::new(),
             data_validations: Vec::new(),
+            conditional_format_ranges: Vec::new(),
+            comment_cells: Vec::new(),
             autofilter: None,
         }];
         let mut vm = Vm::new();
@@ -15972,6 +26942,8 @@ mod tests {
             column_styles: Vec::new(),
             tables: Vec::new(),
             data_validations: Vec::new(),
+            conditional_format_ranges: Vec::new(),
+            comment_cells: Vec::new(),
             autofilter: None,
         }];
         let mut vm = Vm::new();
@@ -16356,6 +27328,26 @@ mod tests {
     }
 
     #[test]
+    fn qualified_cell_write_invalidates_formula_on_the_target_sheet() {
+        let mut vm = Vm::new();
+        vm.ensure_sheet("Data");
+        vm.active_sheet = "data".to_string();
+        vm.set_cell_value(1, 1, Variant::Integer(1)).unwrap();
+        vm.set_cell_formula(1, 2, "=A1+1").unwrap();
+
+        let program =
+            parser::parse("Sub MySub()\n    Sheets(\"Data\").Cells(1, 1).Value = 7\nEnd Sub\n")
+                .unwrap();
+        vm.active_sheet = "sheet1".to_string();
+        vm.run_sub(&program, "MySub").unwrap();
+        vm.active_sheet = "data".to_string();
+        vm.recalculate_all().unwrap();
+        assert_eq!(vm.get_cell(1, 1), Variant::Integer(7));
+        assert_eq!(vm.get_cell(1, 2), Variant::Integer(8));
+        assert_eq!(vm.active_sheet, "data");
+    }
+
+    #[test]
     fn set_wb_thisworkbook_then_worksheets_write_targets_the_named_sheet() {
         let vm = run(
             "Sub MySub()\n    Set wb = ThisWorkbook\n    wb.Worksheets(\"Data\").Cells(2, 3).Value = 77\nEnd Sub\n",
@@ -16373,6 +27365,510 @@ mod tests {
             "Sub MySub()\n    Sheets(\"Data\").Cells(1, 1).Value = 42\n    Set wb = ActiveWorkbook\n    x = wb.Sheets(\"Data\").Range(\"A1\").Value\nEnd Sub\n",
         );
         assert_eq!(vm.variables["x"], Variant::Integer(42));
+    }
+
+    // ── Built-in VBA Collection ─────────────────────────────────────────────
+
+    #[test]
+    fn collection_supports_one_based_items_keys_ordering_remove_and_for_each() {
+        let vm = run(concat!(
+            "Sub MySub()\n",
+            "    Dim items As New Collection\n",
+            "    items.Add 20, \"middle\"\n",
+            "    items.Add Item:=10, Key:=\"first\", Before:=1\n",
+            "    items.Add Item:=30, Key:=\"last\", After:=\"middle\"\n",
+            "    beforeCount = items.Count\n",
+            "    firstValue = items(1)\n",
+            "    keyedValue = items.Item(\"MIDDLE\")\n",
+            "    total = 0\n",
+            "    For Each item In items\n",
+            "        total = total + item\n",
+            "    Next item\n",
+            "    items.Remove \"middle\"\n",
+            "    afterCount = items.Count\n",
+            "    newSecond = items.Item(2)\n",
+            "End Sub\n",
+        ));
+        assert_eq!(vm.variables["beforecount"], Variant::Integer(3));
+        assert_eq!(vm.variables["firstvalue"], Variant::Integer(10));
+        assert_eq!(vm.variables["keyedvalue"], Variant::Integer(20));
+        assert_eq!(vm.variables["total"], Variant::Integer(60));
+        assert_eq!(vm.variables["aftercount"], Variant::Integer(2));
+        assert_eq!(vm.variables["newsecond"], Variant::Integer(30));
+    }
+
+    #[test]
+    fn dictionary_supports_new_add_exists_item_count_removeall_and_keys() {
+        let code = "Sub MySub()\n\
+                Dim d As New Scripting.Dictionary\n\
+                d.Add \"A\", 10\n\
+                d.Add \"B\", 20\n\
+                a = d(\"A\")\n\
+                b = d.Item(\"B\")\n\
+                e = d.Exists(\"a\")\n\
+                n = d.Count\n\
+                For Each k In d.Keys\n\
+                    last = k\n\
+                Next k\n\
+                d.Remove \"A\"\n\
+                after_remove = d.Count\n\
+                d.RemoveAll\n\
+                after_clear = d.Count\n\
+            End Sub\n";
+        let prog = parser::parse(code).unwrap();
+        let mut vm = Vm::new();
+        vm.run_sub(&prog, "mysub").unwrap();
+        assert_eq!(vm.variables["a"], Variant::Integer(10));
+        assert_eq!(vm.variables["b"], Variant::Integer(20));
+        assert_eq!(vm.variables["e"], Variant::Boolean(false));
+        assert_eq!(vm.variables["n"], Variant::Integer(2));
+        assert_eq!(vm.variables["last"], Variant::Str("B".to_string()));
+        assert_eq!(vm.variables["after_remove"], Variant::Integer(1));
+        assert_eq!(vm.variables["after_clear"], Variant::Integer(0));
+    }
+
+    #[test]
+    fn dictionary_text_compare_mode_is_case_insensitive_and_locked_after_add() {
+        let vm = run("Sub MySub()\n\
+                Set d = New Scripting.Dictionary\n\
+                d.CompareMode = 1\n\
+                d.Add \"Key\", 7\n\
+                value = d(\"kEy\")\n\
+                exists = d.Exists(\"KEY\")\n\
+            End Sub\n");
+        assert_eq!(vm.variables["value"], Variant::Integer(7));
+        assert_eq!(vm.variables["exists"], Variant::Boolean(true));
+    }
+
+    #[test]
+    fn collection_aliases_share_mutations_and_clearing_one_alias_keeps_the_other_live() {
+        let vm = run(concat!(
+            "Sub MySub()\n",
+            "    Set a = New Collection\n",
+            "    Set b = a\n",
+            "    b.Add 42, \"answer\"\n",
+            "    seenThroughA = a.Item(\"answer\")\n",
+            "    Set a = Nothing\n",
+            "    stillLive = b.Count\n",
+            "End Sub\n",
+        ));
+        assert_eq!(vm.variables["seenthrougha"], Variant::Integer(42));
+        assert_eq!(vm.variables["stilllive"], Variant::Integer(1));
+        assert_eq!(vm.collections.len(), 1);
+    }
+
+    #[test]
+    fn dim_as_collection_starts_as_nothing() {
+        let vm =
+            run("Sub MySub()\n    Dim items As Collection\n    x = (items Is Nothing)\nEnd Sub\n");
+        assert_eq!(vm.variables["x"], Variant::Boolean(true));
+        assert_eq!(vm.object_variables.get("items"), Some(&ObjectRef::Nothing));
+    }
+
+    #[test]
+    fn collection_duplicate_key_reports_vba_error_457() {
+        let vm = run(concat!(
+            "Sub MySub()\n",
+            "    Dim items As New Collection\n",
+            "    items.Add 1, \"same\"\n",
+            "    On Error Resume Next\n",
+            "    items.Add 2, \"SAME\"\n",
+            "    n = Err.Number\n",
+            "End Sub\n",
+        ));
+        assert_eq!(vm.variables["n"], Variant::Integer(457));
+    }
+
+    #[test]
+    fn collection_uses_the_array_element_resource_budget() {
+        let prog = parser::parse(concat!(
+            "Sub MySub()\n",
+            "    Dim items As New Collection\n",
+            "    items.Add 1\n",
+            "    items.Add 2\n",
+            "End Sub\n",
+        ))
+        .unwrap();
+        let mut vm = Vm::new();
+        vm.max_array_elements = Some(1);
+        assert_eq!(
+            vm.run_sub(&prog, "mysub").unwrap_err(),
+            "BUDGET: VBA Collection element limit exceeded (2; maximum is 1)"
+        );
+    }
+
+    #[test]
+    fn collection_invalid_index_reports_vba_error_5() {
+        let vm = run(concat!(
+            "Sub MySub()\n",
+            "    Dim items As New Collection\n",
+            "    items.Add 1\n",
+            "    On Error Resume Next\n",
+            "    x = items.Item(0)\n",
+            "    n = Err.Number\n",
+            "End Sub\n",
+        ));
+        assert_eq!(vm.variables["n"], Variant::Integer(5));
+    }
+
+    #[test]
+    fn collection_last_alias_reassignment_reclaims_storage() {
+        let vm = run(concat!(
+            "Sub MySub()\n",
+            "    Set items = New Collection\n",
+            "    items.Add 1\n",
+            "    Set items = Nothing\n",
+            "End Sub\n",
+        ));
+        assert!(vm.collections.is_empty());
+    }
+
+    #[test]
+    fn collection_storage_is_isolated_by_vm_fork() {
+        let vm = run(concat!(
+            "Sub MySub()\n",
+            "    Set items = New Collection\n",
+            "    items.Add 1\n",
+            "End Sub\n",
+        ));
+        let mut fork = vm.fork();
+        let add = parser::parse("Sub AddOne()\n    items.Add 2\nEnd Sub\n").unwrap();
+        fork.run_sub(&add, "addone").unwrap();
+
+        let id = vm.collection_id("items").unwrap();
+        let fork_id = fork.collection_id("items").unwrap();
+        assert_eq!(vm.collections[&id].items.len(), 1);
+        assert_eq!(fork.collections[&fork_id].items.len(), 2);
+    }
+
+    #[test]
+    fn collection_object_item_preserves_range_identity_for_set_retrieval() {
+        let vm = run(concat!(
+            "Sub MySub()\n",
+            "    Range(\"A1\").Value = 10\n",
+            "    Set source = Range(\"A1\")\n",
+            "    Set items = New Collection\n",
+            "    items.Add source, \"cell\"\n",
+            "    Set fetched = items.Item(\"CELL\")\n",
+            "    fetched.Value = 42\n",
+            "    result = source.Value\n",
+            "End Sub\n",
+        ));
+        assert_eq!(vm.variables["result"], Variant::Integer(42));
+        assert_eq!(vm.get_cell(1, 1), Variant::Integer(42));
+    }
+
+    #[test]
+    fn call_collection_add_and_remove_preserve_named_argument_semantics() {
+        let vm = run(concat!(
+            "Sub MySub()\n",
+            "    Set items = New Collection\n",
+            "    Call items.Add(Item:=10, Key:=\"ten\")\n",
+            "    Call items.Add(Item:=20, Before:=1)\n",
+            "    first = items.Item(1)\n",
+            "    keyed = items.Item(\"TEN\")\n",
+            "    Call items.Remove(1)\n",
+            "    count = items.Count\n",
+            "End Sub\n",
+        ));
+        assert_eq!(vm.variables["first"], Variant::Integer(20));
+        assert_eq!(vm.variables["keyed"], Variant::Integer(10));
+        assert_eq!(vm.variables["count"], Variant::Integer(1));
+    }
+
+    #[test]
+    fn collection_can_hold_another_collection_after_the_original_alias_is_cleared() {
+        let vm = run(concat!(
+            "Sub MySub()\n",
+            "    Set child = New Collection\n",
+            "    child.Add 7\n",
+            "    Set parent = New Collection\n",
+            "    parent.Add child, \"nested\"\n",
+            "    Set child = Nothing\n",
+            "    Set fetched = parent(\"NESTED\")\n",
+            "    fetched.Add 8\n",
+            "    result = fetched.Count\n",
+            "End Sub\n",
+        ));
+        assert_eq!(vm.variables["result"], Variant::Integer(2));
+        assert_eq!(vm.collections.len(), 2);
+    }
+
+    #[test]
+    fn collection_for_each_binds_object_items_as_live_object_variables() {
+        let vm = run(concat!(
+            "Sub MySub()\n",
+            "    Range(\"A1\").Value = 3\n",
+            "    Range(\"A2\").Value = 4\n",
+            "    Set first = Range(\"A1\")\n",
+            "    Set second = Range(\"A2\")\n",
+            "    Set items = New Collection\n",
+            "    items.Add first\n",
+            "    items.Add second\n",
+            "    total = 0\n",
+            "    For Each item In items\n",
+            "        total = total + item.Value\n",
+            "        item.Value = item.Value * 10\n",
+            "    Next item\n",
+            "End Sub\n",
+        ));
+        assert_eq!(vm.variables["total"], Variant::Integer(7));
+        assert_eq!(vm.get_cell(1, 1), Variant::Integer(30));
+        assert_eq!(vm.get_cell(2, 1), Variant::Integer(40));
+    }
+
+    #[test]
+    fn with_collection_supports_value_and_object_members() {
+        let vm = run(concat!(
+            "Sub MySub()\n",
+            "    Range(\"B2\").Value = 5\n",
+            "    Set cell = Range(\"B2\")\n",
+            "    Set items = New Collection\n",
+            "    With items\n",
+            "        .Add 10, \"ten\"\n",
+            "        .Add cell, \"cell\"\n",
+            "        beforeCount = .Count\n",
+            "        valueItem = .Item(\"TEN\")\n",
+            "        Set fetched = .Item(\"CELL\")\n",
+            "        fetched.Value = 9\n",
+            "        .Remove \"ten\"\n",
+            "        afterCount = .Count\n",
+            "    End With\n",
+            "End Sub\n",
+        ));
+        assert_eq!(vm.variables["beforecount"], Variant::Integer(2));
+        assert_eq!(vm.variables["valueitem"], Variant::Integer(10));
+        assert_eq!(vm.variables["aftercount"], Variant::Integer(1));
+        assert_eq!(vm.get_cell(2, 2), Variant::Integer(9));
+    }
+
+    #[test]
+    fn collection_object_item_can_be_used_as_a_direct_with_target() {
+        let vm = run(concat!(
+            "Sub MySub()\n",
+            "    Set child = New Collection\n",
+            "    child.Add 1\n",
+            "    Set parent = New Collection\n",
+            "    parent.Add child\n",
+            "    With parent.Item(1)\n",
+            "        .Add 2\n",
+            "        result = .Count\n",
+            "    End With\n",
+            "End Sub\n",
+        ));
+        assert_eq!(vm.variables["result"], Variant::Integer(2));
+    }
+
+    #[test]
+    fn collection_object_item_can_be_forwarded_without_losing_identity() {
+        let vm = run(concat!(
+            "Sub MySub()\n",
+            "    Set cell = Range(\"C3\")\n",
+            "    Set source = New Collection\n",
+            "    source.Add cell\n",
+            "    Set destination = New Collection\n",
+            "    destination.Add source.Item(1)\n",
+            "    Set fetched = destination.Item(1)\n",
+            "    fetched.Value = 73\n",
+            "    result = cell.Value\n",
+            "End Sub\n",
+        ));
+        assert_eq!(vm.variables["result"], Variant::Integer(73));
+        assert_eq!(vm.get_cell(3, 3), Variant::Integer(73));
+    }
+
+    #[test]
+    fn collection_default_item_can_be_used_as_a_direct_with_target() {
+        let vm = run(concat!(
+            "Sub MySub()\n",
+            "    Set child = New Collection\n",
+            "    child.Add 1\n",
+            "    Set parent = New Collection\n",
+            "    parent.Add child\n",
+            "    With parent(1)\n",
+            "        .Add 2\n",
+            "        result = .Count\n",
+            "    End With\n",
+            "End Sub\n",
+        ));
+        assert_eq!(vm.variables["result"], Variant::Integer(2));
+    }
+
+    fn counter_class_program() -> Program {
+        parser::parse(concat!(
+            "VERSION 1.0 CLASS\n",
+            "BEGIN\n",
+            "  MultiUse = -1\n",
+            "END\n",
+            "Attribute VB_Name = \"Counter\"\n",
+            "Option Explicit\n",
+            "Private total As Long\n",
+            "Private Sub Class_Initialize()\n",
+            "    total = 10\n",
+            "End Sub\n",
+            "Public Sub Add(value)\n",
+            "    total = total + value\n",
+            "End Sub\n",
+            "Public Sub Increment(value)\n",
+            "    Call Add(value)\n",
+            "End Sub\n",
+            "Public Function Current()\n",
+            "    Current = total\n",
+            "End Function\n",
+            "Public Sub ExportSelf()\n",
+            "    Set exported = Me\n",
+            "End Sub\n",
+        ))
+        .unwrap()
+    }
+
+    #[test]
+    fn class_instance_methods_with_and_collection_preserve_identity() {
+        let main = parser::parse(concat!(
+            "Attribute VB_Name = \"MainModule\"\n",
+            "Sub Main()\n",
+            "    Dim item As New Counter\n",
+            "    Call item.Add(2)\n",
+            "    item.Increment 3\n",
+            "    initialized = item.Current()\n",
+            "    Set items = New Collection\n",
+            "    Call items.Add(item, \"counter\")\n",
+            "    Set item = Nothing\n",
+            "    For Each entry In items\n",
+            "        iterated = entry.Current()\n",
+            "    Next entry\n",
+            "    With items.Item(\"COUNTER\")\n",
+            "        .Add 4\n",
+            "        inside = .Current()\n",
+            "    End With\n",
+            "    Set fetched = items.Item(\"COUNTER\")\n",
+            "    Call fetched.ExportSelf\n",
+            "    Set fetched = Nothing\n",
+            "    result = exported.Current()\n",
+            "End Sub\n",
+        ))
+        .unwrap();
+        let modules = vec![
+            ("mainmodule".to_string(), main),
+            ("counter".to_string(), counter_class_program()),
+        ];
+        let mut vm = Vm::new();
+        vm.run_sub_multi(&modules, "Main").unwrap();
+        assert_eq!(vm.variables["initialized"], Variant::Integer(15));
+        assert_eq!(vm.variables["iterated"], Variant::Integer(15));
+        assert_eq!(vm.variables["inside"], Variant::Integer(19));
+        assert_eq!(vm.variables["result"], Variant::Integer(19));
+        assert_eq!(vm.class_instances.len(), 1);
+    }
+
+    #[test]
+    fn class_instance_is_reclaimed_after_collection_and_alias_release() {
+        let main = parser::parse(concat!(
+            "Sub Main()\n",
+            "    Set item = New Counter\n",
+            "    Set items = New Collection\n",
+            "    items.Add item\n",
+            "    Set item = Nothing\n",
+            "    items.Remove 1\n",
+            "    Set items = Nothing\n",
+            "End Sub\n",
+        ))
+        .unwrap();
+        let modules = vec![
+            ("mainmodule".to_string(), main),
+            ("counter".to_string(), counter_class_program()),
+        ];
+        let mut vm = Vm::new();
+        vm.run_sub_multi(&modules, "Main").unwrap();
+        assert!(vm.class_instances.is_empty());
+        assert!(vm.collections.is_empty());
+    }
+
+    #[test]
+    fn class_methods_do_not_collide_with_standard_module_procedures() {
+        let main = parser::parse(concat!(
+            "Sub Add(value)\n",
+            "    globalValue = value\n",
+            "End Sub\n",
+            "Sub Main()\n",
+            "    Set item = New Counter\n",
+            "    item.Add 5\n",
+            "    Call Add(7)\n",
+            "    classValue = item.Current()\n",
+            "End Sub\n",
+        ))
+        .unwrap();
+        let modules = vec![
+            ("mainmodule".to_string(), main),
+            ("counter".to_string(), counter_class_program()),
+        ];
+        assert!(parser::find_cross_module_sub_collisions(&modules).is_empty());
+        let mut vm = Vm::new();
+        vm.run_sub_multi(&modules, "Main").unwrap();
+        assert_eq!(vm.variables["globalvalue"], Variant::Integer(7));
+        assert_eq!(vm.variables["classvalue"], Variant::Integer(15));
+    }
+
+    #[test]
+    fn declared_but_unset_class_variable_raises_error_91() {
+        let main = parser::parse(concat!(
+            "Sub Main()\n",
+            "    Dim item As Counter\n",
+            "    On Error Resume Next\n",
+            "    Call item.Increment(1)\n",
+            "    number = Err.Number\n",
+            "End Sub\n",
+        ))
+        .unwrap();
+        let modules = vec![
+            ("mainmodule".to_string(), main),
+            ("counter".to_string(), counter_class_program()),
+        ];
+        let mut vm = Vm::new();
+        vm.run_sub_multi(&modules, "Main").unwrap();
+        assert_eq!(vm.variables["number"], Variant::Integer(91));
+    }
+
+    #[test]
+    fn with_keeps_collection_live_after_its_variable_is_cleared_then_reclaims_it() {
+        let vm = run(concat!(
+            "Sub MySub()\n",
+            "    Set items = New Collection\n",
+            "    With items\n",
+            "        .Add 1\n",
+            "        Set items = Nothing\n",
+            "        observed = .Count\n",
+            "    End With\n",
+            "End Sub\n",
+        ));
+        assert_eq!(vm.variables["observed"], Variant::Integer(1));
+        assert!(vm.collections.is_empty());
+    }
+
+    #[test]
+    fn unreachable_self_referential_collection_cycle_is_reclaimed() {
+        let vm = run(concat!(
+            "Sub MySub()\n",
+            "    Set items = New Collection\n",
+            "    items.Add items\n",
+            "    Set items = Nothing\n",
+            "End Sub\n",
+        ));
+        assert!(vm.collections.is_empty());
+    }
+
+    #[test]
+    fn set_from_scalar_collection_item_reports_object_required_error_424() {
+        let vm = run(concat!(
+            "Sub MySub()\n",
+            "    Set items = New Collection\n",
+            "    items.Add 1\n",
+            "    On Error Resume Next\n",
+            "    Set fetched = items(1)\n",
+            "    number = Err.Number\n",
+            "End Sub\n",
+        ));
+        assert_eq!(vm.variables["number"], Variant::Integer(424));
     }
 
     // ── ObjectRef::Nothing — unset / cleared object variables ───────────────
@@ -16522,6 +28018,166 @@ mod tests {
                 .and_then(|s| s.get(&(1, 1)))
                 .map(|c| c.value.clone()),
             Some(Variant::Integer(42))
+        );
+    }
+
+    #[test]
+    fn range_relative_cells_range_and_default_members_share_one_based_coordinates() {
+        let vm = run(concat!(
+            "Sub MySub()\n",
+            "    Range(\"A1\") = 7\n",
+            "    Cells(1, 2) = 8\n",
+            "    Set base = Range(\"B2:D4\")\n",
+            "    base.Range(\"A1:B1\").Value = 5\n",
+            "    base.Cells(2, 2).Value = 22\n",
+            "    base(3, 1) = 31\n",
+            "    With base\n",
+            "        .Cells(1, 3).Value = 13\n",
+            "        .Range(\"B3\").Value = 33\n",
+            "    End With\n",
+            "    Set nested = base.Range(\"C3\")\n",
+            "    nested.Value = 44\n",
+            "    Set defaultItem = base(2, 2)\n",
+            "    Set explicitItem = base.Item(3, 1)\n",
+            "    literalDefault = Range(\"A1\")\n",
+            "    sheetDefault = ActiveSheet.Cells(1, 2)\n",
+            "    cellDefault = base(2, 2)\n",
+            "    firstDefault = base(1)\n",
+            "    rangeRead = base.Range(\"B3\").Value\n",
+            "    objectRead = defaultItem.Value\n",
+            "    explicitItemRead = explicitItem.Value\n",
+            "    explicitScalarRead = base.Item(3, 1)\n",
+            "    isArrayResult = IsArray(base)\n",
+            "End Sub\n",
+        ));
+        assert_eq!(vm.get_cell(1, 1), Variant::Integer(7));
+        assert_eq!(vm.get_cell(1, 2), Variant::Integer(8));
+        assert_eq!(vm.get_cell(2, 2), Variant::Integer(5));
+        assert_eq!(vm.get_cell(2, 3), Variant::Integer(5));
+        assert_eq!(vm.get_cell(2, 4), Variant::Integer(13));
+        assert_eq!(vm.get_cell(3, 3), Variant::Integer(22));
+        assert_eq!(vm.get_cell(4, 2), Variant::Integer(31));
+        assert_eq!(vm.get_cell(4, 3), Variant::Integer(33));
+        assert_eq!(vm.get_cell(4, 4), Variant::Integer(44));
+        assert_eq!(vm.variables["literaldefault"], Variant::Integer(7));
+        assert_eq!(vm.variables["sheetdefault"], Variant::Integer(8));
+        assert_eq!(vm.variables["celldefault"], Variant::Integer(22));
+        assert_eq!(vm.variables["firstdefault"], Variant::Integer(5));
+        assert_eq!(vm.variables["rangeread"], Variant::Integer(33));
+        assert_eq!(vm.variables["objectread"], Variant::Integer(22));
+        assert_eq!(vm.variables["explicititemread"], Variant::Integer(31));
+        assert_eq!(vm.variables["explicitscalarread"], Variant::Integer(31));
+        assert_eq!(vm.variables["isarrayresult"], Variant::Boolean(true));
+    }
+
+    #[test]
+    fn worksheet_and_workbook_core_members_work_through_direct_and_object_references() {
+        let program = parser::parse(concat!(
+            "Sub MySub()\n",
+            "    Worksheets(\"Data\").Range(\"B2\") = 41\n",
+            "    directName = Worksheets(\"Data\").Name\n",
+            "    directIndex = Worksheets(\"Data\").Index\n",
+            "    directCount = Worksheets.Count\n",
+            "    qualifiedCount = ThisWorkbook.Worksheets.Count\n",
+            "    workbookName = ThisWorkbook.Name\n",
+            "    Set book = ThisWorkbook\n",
+            "    objectBookName = book.Name\n",
+            "    objectCount = book.Sheets.Count\n",
+            "    Set viaBook = book.Worksheets(\"Data\")\n",
+            "    viaBookName = viaBook.Name\n",
+            "    Set ws = Worksheets(\"Data\")\n",
+            "    Set used = ws.UsedRange\n",
+            "    usedValue = used.Value\n",
+            "    visibleBefore = ws.Visible\n",
+            "    ws.Activate\n",
+            "    activeName = ActiveSheet.Name\n",
+            "    Set dynamicUsed = ActiveSheet.UsedRange\n",
+            "    dynamicUsedValue = dynamicUsed.Value\n",
+            "    Set active = ThisWorkbook.ActiveSheet\n",
+            "    activeIndex = active.Index\n",
+            "    Worksheets(\"Sheet1\").Activate\n",
+            "    ws.Visible = xlSheetVeryHidden\n",
+            "    hiddenValue = ws.Visible\n",
+            "    ws.Visible = xlSheetVisible\n",
+            "    With ws\n",
+            "        withName = .Name\n",
+            "        .Visible = xlSheetHidden\n",
+            "        withHiddenValue = .Visible\n",
+            "        .Visible = xlSheetVisible\n",
+            "    End With\n",
+            "    Call ws.Activate()\n",
+            "    ws.Name = \"Renamed\"\n",
+            "    renamedName = ActiveSheet.Name\n",
+            "    referenceName = ws.Name\n",
+            "    activeReferenceName = active.Name\n",
+            "    usedAfterRename = used.Value\n",
+            "End Sub\n",
+        ))
+        .unwrap();
+        let mut vm = Vm::new();
+        vm.ensure_sheet("Data");
+        vm.loaded_workbook_name = Some("Book.xlsm".to_string());
+        vm.run_sub(&program, "MySub").unwrap();
+
+        assert_eq!(vm.variables["directname"], Variant::Str("Data".to_string()));
+        assert_eq!(vm.variables["directindex"], Variant::Integer(2));
+        assert_eq!(vm.variables["directcount"], Variant::Integer(2));
+        assert_eq!(vm.variables["qualifiedcount"], Variant::Integer(2));
+        assert_eq!(
+            vm.variables["workbookname"],
+            Variant::Str("Book.xlsm".to_string())
+        );
+        assert_eq!(vm.variables["objectbookname"], vm.variables["workbookname"]);
+        assert_eq!(vm.variables["objectcount"], Variant::Integer(2));
+        assert_eq!(
+            vm.variables["viabookname"],
+            Variant::Str("Data".to_string())
+        );
+        assert_eq!(vm.variables["usedvalue"], Variant::Integer(41));
+        assert_eq!(vm.variables["visiblebefore"], Variant::Integer(-1));
+        assert_eq!(vm.variables["activename"], Variant::Str("Data".to_string()));
+        assert_eq!(vm.variables["dynamicusedvalue"], Variant::Integer(41));
+        assert_eq!(vm.variables["activeindex"], Variant::Integer(2));
+        assert_eq!(vm.variables["hiddenvalue"], Variant::Integer(2));
+        assert_eq!(vm.variables["withname"], Variant::Str("Data".to_string()));
+        assert_eq!(vm.variables["withhiddenvalue"], Variant::Integer(0));
+        assert_eq!(
+            vm.variables["renamedname"],
+            Variant::Str("Renamed".to_string())
+        );
+        assert_eq!(vm.variables["referencename"], vm.variables["renamedname"]);
+        assert_eq!(
+            vm.variables["activereferencename"],
+            vm.variables["renamedname"]
+        );
+        assert_eq!(vm.variables["usedafterrename"], Variant::Integer(41));
+    }
+
+    #[test]
+    fn worksheet_visibility_rejects_hiding_active_or_last_visible_sheet() {
+        let active =
+            parser::parse("Sub Main()\n    ActiveSheet.Visible = xlSheetHidden\nEnd Sub\n")
+                .unwrap();
+        let mut vm = Vm::new();
+        vm.ensure_sheet("Data");
+        assert_eq!(
+            vm.run_sub(&active, "Main").unwrap_err(),
+            "Cannot hide the active worksheet"
+        );
+
+        let last = parser::parse(concat!(
+            "Sub Main()\n",
+            "    Worksheets(\"Data\").Activate\n",
+            "    Worksheets(\"Sheet1\").Visible = xlSheetHidden\n",
+            "    Worksheets(\"Data\").Visible = xlSheetHidden\n",
+            "End Sub\n",
+        ))
+        .unwrap();
+        let mut vm = Vm::new();
+        vm.ensure_sheet("Data");
+        assert_eq!(
+            vm.run_sub(&last, "Main").unwrap_err(),
+            "Workbook must contain at least one visible worksheet"
         );
     }
 
@@ -16952,7 +28608,7 @@ mod tests {
 
     #[test]
     fn next_append_row_is_1_on_an_empty_sheet() {
-        let vm = Vm::new();
+        let mut vm = Vm::new();
         assert_eq!(vm.next_append_row("sheet1"), 1);
     }
 
@@ -16967,6 +28623,38 @@ mod tests {
             },
         );
         assert_eq!(vm.next_append_row("sheet1"), 51);
+    }
+
+    #[test]
+    fn append_row_values_advances_without_rescanning_semantics() {
+        let mut vm = Vm::new();
+        assert_eq!(vm.append_row_values("sheet1", vec![Variant::Integer(1)]), 1);
+        assert_eq!(vm.append_row_values("sheet1", vec![Variant::Integer(2)]), 2);
+        assert_eq!(vm.get_cell(2, 1), Variant::Integer(2));
+    }
+
+    #[test]
+    fn append_row_values_does_not_advance_for_an_all_empty_row() {
+        let mut vm = Vm::new();
+        assert_eq!(vm.append_row_values("sheet1", vec![Variant::Empty]), 1);
+        assert_eq!(vm.append_row_values("sheet1", vec![Variant::Empty]), 1);
+    }
+
+    #[test]
+    fn general_cell_mutation_invalidates_the_append_row_cache() {
+        let mut vm = Vm::new();
+        assert_eq!(vm.append_row_values("sheet1", vec![Variant::Integer(1)]), 1);
+        vm.cells_mut().insert(
+            (50, 1),
+            CellContent {
+                formula: None,
+                value: Variant::Integer(50),
+            },
+        );
+        assert_eq!(
+            vm.append_row_values("sheet1", vec![Variant::Integer(51)]),
+            51
+        );
     }
 
     #[test]
@@ -17022,6 +28710,150 @@ mod tests {
             vm.read_rect("sheet1", 1, 1, 1, 1)[0][0],
             Variant::Integer(3)
         );
+    }
+
+    #[test]
+    fn read_rect_large_dense_cache_is_invalidated_by_write_rect() {
+        let mut vm = Vm::new();
+        let values: Vec<Vec<Variant>> = (1..=32)
+            .map(|row| {
+                (1..=32)
+                    .map(|col| Variant::Integer((row * 100 + col) as i64))
+                    .collect()
+            })
+            .collect();
+        vm.write_rect("sheet1", (1, 1), &values);
+        assert_eq!(
+            vm.read_rect("sheet1", 1, 1, 32, 32)[31][31],
+            Variant::Integer(3232)
+        );
+        vm.write_rect("sheet1", (32, 32), &[vec![Variant::Str("updated".into())]]);
+        assert_eq!(
+            vm.read_rect("sheet1", 1, 1, 32, 32)[31][31],
+            Variant::Str("updated".into())
+        );
+    }
+
+    #[test]
+    fn write_rect_incrementally_updates_cached_sparse_tile() {
+        let mut vm = Vm::new();
+        vm.write_rect("sheet1", (1, 1), &[vec![Variant::Integer(1)]]);
+        assert_eq!(
+            vm.read_rect("sheet1", 1, 1, 32, 32)[0][0],
+            Variant::Integer(1)
+        );
+        vm.write_rect("sheet1", (2, 2), &[vec![Variant::Integer(2)]]);
+        assert_eq!(
+            vm.read_rect("sheet1", 1, 1, 32, 32)[1][1],
+            Variant::Integer(2)
+        );
+        vm.write_rect("sheet1", (1, 1), &[vec![Variant::Empty]]);
+        assert_eq!(vm.read_rect("sheet1", 1, 1, 32, 32)[0][0], Variant::Empty);
+    }
+
+    #[test]
+    fn write_rect_invalidates_only_affected_tiles_for_large_writes() {
+        let mut vm = Vm::new();
+        vm.write_rect("sheet1", (1, 1), &vec![vec![Variant::Integer(1); 64]; 64]);
+        let _ = vm.read_rect("sheet1", 1, 1, 64, 64);
+        vm.write_rect("sheet1", (65, 65), &[vec![Variant::Integer(9)]]);
+        let _ = vm.read_rect("sheet1", 65, 65, 96, 96);
+        vm.write_rect("sheet1", (1, 1), &vec![vec![Variant::Integer(7); 64]; 64]);
+        let rect = vm.read_rect("sheet1", 1, 1, 64, 64);
+        assert_eq!(rect[0][0], Variant::Integer(7));
+        assert_eq!(rect[63][63], Variant::Integer(7));
+        assert_eq!(
+            vm.read_rect("sheet1", 65, 65, 65, 65)[0][0],
+            Variant::Integer(9)
+        );
+    }
+
+    #[test]
+    fn read_rect_large_sparse_cache_preserves_empty_gaps() {
+        let mut vm = Vm::new();
+        vm.write_rect(
+            "sheet1",
+            (2, 30),
+            &[vec![
+                Variant::Integer(7),
+                Variant::Empty,
+                Variant::Boolean(true),
+            ]],
+        );
+        let rect = vm.read_rect("sheet1", 1, 1, 64, 64);
+        assert_eq!(rect[1][29], Variant::Integer(7));
+        assert_eq!(rect[1][30], Variant::Empty);
+        assert_eq!(rect[1][31], Variant::Boolean(true));
+        assert_eq!(rect[63][63], Variant::Empty);
+    }
+
+    #[test]
+    fn read_rect_sparse_cache_keeps_empty_tiles_without_value_arrays() {
+        let mut vm = Vm::new();
+        vm.write_rect("sheet1", (2, 2), &[vec![Variant::Integer(7)]]);
+        let _ = vm.read_rect("sheet1", 1, 1, 64, 64);
+        let cache = vm
+            .cell_tile_cache
+            .lock()
+            .expect("cell tile cache mutex poisoned");
+        let tiles = cache.get("sheet1").expect("sheet cache populated");
+        assert_eq!(tiles.len(), 4);
+        assert_eq!(tiles.values().filter(|(tile, _)| tile.is_none()).count(), 3);
+        assert_eq!(tiles.values().filter(|(tile, _)| tile.is_some()).count(), 1);
+    }
+
+    #[test]
+    fn read_rect_cache_tracks_sheet_rename() {
+        let mut vm = Vm::new();
+        let values = vec![vec![Variant::Integer(9); 32]; 32];
+        vm.write_rect("sheet1", (1, 1), &values);
+        assert_eq!(
+            vm.read_rect("sheet1", 1, 1, 32, 32)[0][0],
+            Variant::Integer(9)
+        );
+        vm.rename_sheet("sheet1", "Renamed").unwrap();
+        assert_eq!(
+            vm.read_rect("RENAMED", 1, 1, 32, 32)[31][31],
+            Variant::Integer(9)
+        );
+    }
+
+    #[test]
+    fn read_rect_beyond_tile_cache_limit_uses_uncached_path() {
+        let mut vm = Vm::new();
+        vm.write_rect("sheet1", (1, 1), &[vec![Variant::Integer(1)]]);
+        let rect = vm.read_rect("sheet1", 1, 1, 544, 544);
+        assert_eq!(rect[0][0], Variant::Integer(1));
+        let cache = vm
+            .cell_tile_cache
+            .lock()
+            .expect("cell tile cache mutex poisoned");
+        assert!(cache.get("sheet1").is_none_or(HashMap::is_empty));
+    }
+
+    #[test]
+    fn read_rect_tile_cache_evicts_the_least_recently_used_tile() {
+        let vm = Vm::new();
+        for tile_col in 0..256 {
+            let col = tile_col * CELL_TILE_SIZE + 1;
+            let _ = vm.read_rect("sheet1", 1, col, CELL_TILE_SIZE, col + CELL_TILE_SIZE - 1);
+        }
+        let _ = vm.read_rect("sheet1", 1, 1, CELL_TILE_SIZE, CELL_TILE_SIZE);
+        let _ = vm.read_rect(
+            "sheet1",
+            1,
+            257 * CELL_TILE_SIZE + 1,
+            CELL_TILE_SIZE,
+            258 * CELL_TILE_SIZE,
+        );
+        let cache = vm
+            .cell_tile_cache
+            .lock()
+            .expect("cell tile cache mutex poisoned");
+        let tiles = cache.get("sheet1").expect("sheet cache populated");
+        assert_eq!(tiles.len(), 256);
+        assert!(tiles.contains_key(&(0, 0)));
+        assert!(!tiles.contains_key(&(0, 1)));
     }
 
     #[test]
@@ -17381,6 +29213,55 @@ mod tests {
         );
     }
 
+    #[test]
+    fn structured_formula_follows_a_table_column_after_column_removal() {
+        let mut vm = Vm::new();
+        vm.tables.insert(
+            "sheet1".to_string(),
+            vec![table_with_columns(&["A", "B", "C"], ((1, 1), (3, 3)))],
+        );
+        {
+            let cells = vm.sheet_cells_mut("sheet1").unwrap();
+            cells.insert(
+                (2, 3),
+                CellContent {
+                    formula: None,
+                    value: Variant::Integer(7),
+                },
+            );
+            cells.insert(
+                (3, 3),
+                CellContent {
+                    formula: None,
+                    value: Variant::Integer(8),
+                },
+            );
+            cells.insert(
+                (1, 5),
+                CellContent {
+                    formula: Some("=SUM(Table1[C])".to_string()),
+                    value: Variant::Empty,
+                },
+            );
+        }
+        vm.workbook_formula_structure_dirty = true;
+        vm.recalculate_all().unwrap();
+        assert_eq!(vm.get_cell(1, 5), Variant::Integer(15));
+        vm.edit_table_on_sheet(
+            "sheet1",
+            "Table1",
+            None,
+            None,
+            None,
+            None,
+            &[],
+            &["B".to_string()],
+        )
+        .unwrap();
+        vm.recalculate_all().unwrap();
+        assert_eq!(vm.get_cell(1, 5), Variant::Integer(15));
+    }
+
     fn table_with_columns(names: &[&str], ref_range: MergeRect) -> TableDef {
         let mut t = sample_table(ref_range);
         t.columns = names
@@ -17674,6 +29555,8 @@ mod tests {
             column_styles: Vec::new(),
             tables: vec![sample_table(((1, 1), (4, 3)))],
             data_validations: Vec::new(),
+            conditional_format_ranges: Vec::new(),
+            comment_cells: Vec::new(),
             autofilter: None,
         }];
         let mut vm = Vm::new();
@@ -17704,6 +29587,8 @@ mod tests {
             column_styles: Vec::new(),
             tables: Vec::new(),
             data_validations: Vec::new(),
+            conditional_format_ranges: Vec::new(),
+            comment_cells: Vec::new(),
             autofilter: None,
         }];
         let mut vm = Vm::new();
@@ -18564,6 +30449,8 @@ mod tests {
             column_styles: Vec::new(),
             tables: Vec::new(),
             data_validations: Vec::new(),
+            conditional_format_ranges: Vec::new(),
+            comment_cells: Vec::new(),
             autofilter: Some(bare_autofilter(((1, 1), (5, 1)))),
         };
         sheet.autofilter.as_mut().unwrap().ref_range = ((1, 1), (5, 1));
@@ -18599,6 +30486,8 @@ mod tests {
             column_styles: Vec::new(),
             tables: Vec::new(),
             data_validations: vec![sample_dv_rule(vec![((1, 1), (1, 1))])],
+            conditional_format_ranges: Vec::new(),
+            comment_cells: Vec::new(),
             autofilter: None,
         };
         sheet.data_validations[0].dirty = false;
@@ -18610,5 +30499,430 @@ mod tests {
         // Freshly loaded data is never pre-marked touched -- an untouched sheet must
         // pass through its original fragment byte-identical.
         assert!(!vm.data_validations_touched.contains("sheet1"));
+    }
+
+    #[test]
+    fn class_properties_object_fields_arguments_arrays_and_terminate_work_together() {
+        let child = parser::parse(concat!(
+            "VERSION 1.0 CLASS\n",
+            "Attribute VB_Name = \"Child\"\n",
+            "Private stored As Long\n",
+            "Public Property Get Value() As Long\n",
+            "    Value = stored\n",
+            "End Property\n",
+            "Public Property Let Value(ByVal newValue As Long)\n",
+            "    stored = newValue\n",
+            "End Property\n",
+            "Private Sub Class_Terminate()\n",
+            "    terminated = terminated + 1\n",
+            "End Sub\n",
+        ))
+        .unwrap();
+        let holder = parser::parse(concat!(
+            "VERSION 1.0 CLASS\n",
+            "Attribute VB_Name = \"Holder\"\n",
+            "Private storedChild As Child\n",
+            "Public Property Set Child(ByVal value As Child)\n",
+            "    Set storedChild = value\n",
+            "End Property\n",
+            "Public Property Get Child() As Child\n",
+            "    Set Child = storedChild\n",
+            "End Property\n",
+            "Public Function ReadFrom(ByVal value As Child) As Long\n",
+            "    ReadFrom = value.Value\n",
+            "End Function\n",
+        ))
+        .unwrap();
+        let main = parser::parse(concat!(
+            "Sub Main()\n",
+            "    terminated = 0\n",
+            "    Set item = New Child\n",
+            "    item.Value = 41\n",
+            "    Set box = New Holder\n",
+            "    Set box.Child = item\n",
+            "    Set alias = box.Child\n",
+            "    result = box.ReadFrom(alias)\n",
+            "    Dim objects() As Child\n",
+            "    ReDim objects(1 To 2, 3 To 4)\n",
+            "    Set objects(1, 3) = item\n",
+            "    ReDim Preserve objects(1 To 2, 3 To 5)\n",
+            "    Set fetched = objects(1, 3)\n",
+            "    arrayResult = fetched.Value\n",
+            "    Set item = Nothing\n",
+            "    Set alias = Nothing\n",
+            "    Set fetched = Nothing\n",
+            "    Erase objects\n",
+            "    Set box = Nothing\n",
+            "End Sub\n",
+        ))
+        .unwrap();
+        let modules = vec![
+            ("main".to_string(), main),
+            ("child".to_string(), child),
+            ("holder".to_string(), holder),
+        ];
+        let mut vm = Vm::new();
+        vm.run_sub_multi(&modules, "Main").unwrap();
+        assert_eq!(vm.variables["result"], Variant::Integer(41));
+        assert_eq!(vm.variables["arrayresult"], Variant::Integer(41));
+        assert_eq!(vm.variables["terminated"], Variant::Integer(1));
+        assert!(vm.class_instances.is_empty());
+    }
+
+    #[test]
+    fn implements_binds_prefixed_member_and_checks_contract() {
+        let interface = parser::parse(concat!(
+            "VERSION 1.0 CLASS\n",
+            "Attribute VB_Name = \"IWorker\"\n",
+            "Public Sub Run(ByVal value As Long)\n",
+            "End Sub\n",
+        ))
+        .unwrap();
+        let worker = parser::parse(concat!(
+            "VERSION 1.0 CLASS\n",
+            "Attribute VB_Name = \"Worker\"\n",
+            "Implements IWorker\n",
+            "Private Sub IWorker_Run(ByVal value As Long)\n",
+            "    observed = value\n",
+            "End Sub\n",
+        ))
+        .unwrap();
+        let main = parser::parse(concat!(
+            "Sub Main()\n",
+            "    Dim worker As IWorker\n",
+            "    Set worker = New Worker\n",
+            "    Call worker.Run(9)\n",
+            "End Sub\n",
+        ))
+        .unwrap();
+        let modules = vec![
+            ("main".to_string(), main),
+            ("iworker".to_string(), interface),
+            ("worker".to_string(), worker),
+        ];
+        let mut vm = Vm::new();
+        vm.run_sub_multi(&modules, "Main").unwrap();
+        assert_eq!(vm.variables["observed"], Variant::Integer(9));
+    }
+
+    #[test]
+    fn indexed_scalar_and_object_properties_bind_index_arguments() {
+        let child = parser::parse(concat!(
+            "VERSION 1.0 CLASS\n",
+            "Attribute VB_Name = \"Child\"\n",
+            "Public Value As Long\n",
+        ))
+        .unwrap();
+        let holder = parser::parse(concat!(
+            "VERSION 1.0 CLASS\n",
+            "Attribute VB_Name = \"Holder\"\n",
+            "Private firstChild As Child\n",
+            "Private secondChild As Child\n",
+            "Private firstScore As Long\n",
+            "Private secondScore As Long\n",
+            "Public Property Set Item(ByVal index As Long, ByVal value As Child)\n",
+            "    If index = 1 Then\n",
+            "        Set firstChild = value\n",
+            "    Else\n",
+            "        Set secondChild = value\n",
+            "    End If\n",
+            "End Property\n",
+            "Public Property Get Item(ByVal index As Long) As Child\n",
+            "    If index = 1 Then\n",
+            "        Set Item = firstChild\n",
+            "    Else\n",
+            "        Set Item = secondChild\n",
+            "    End If\n",
+            "End Property\n",
+            "Public Property Let Score(ByVal index As Long, ByVal value As Long)\n",
+            "    If index = 1 Then\n",
+            "        firstScore = value\n",
+            "    Else\n",
+            "        secondScore = value\n",
+            "    End If\n",
+            "End Property\n",
+            "Public Property Get Score(ByVal index As Long) As Long\n",
+            "    If index = 1 Then\n",
+            "        Score = firstScore\n",
+            "    Else\n",
+            "        Score = secondScore\n",
+            "    End If\n",
+            "End Property\n",
+        ))
+        .unwrap();
+        let main = parser::parse(concat!(
+            "Sub Main()\n",
+            "    Dim box As New Holder\n",
+            "    Dim child As New Child\n",
+            "    child.Value = 73\n",
+            "    Set box.Item(2) = child\n",
+            "    Set fetched = box.Item(2)\n",
+            "    box.Score(1) = 27\n",
+            "    objectResult = fetched.Value\n",
+            "    scalarResult = box.Score(1)\n",
+            "End Sub\n",
+        ))
+        .unwrap();
+        let modules = vec![
+            ("main".to_string(), main),
+            ("child".to_string(), child),
+            ("holder".to_string(), holder),
+        ];
+        let mut vm = Vm::new();
+        vm.run_sub_multi(&modules, "Main").unwrap();
+        assert_eq!(vm.variables["objectresult"], Variant::Integer(73));
+        assert_eq!(vm.variables["scalarresult"], Variant::Integer(27));
+    }
+
+    #[test]
+    fn object_returning_class_function_accepts_typed_arguments() {
+        let child = parser::parse(concat!(
+            "VERSION 1.0 CLASS\n",
+            "Attribute VB_Name = \"Child\"\n",
+            "Public Value As Long\n",
+        ))
+        .unwrap();
+        let factory = parser::parse(concat!(
+            "VERSION 1.0 CLASS\n",
+            "Attribute VB_Name = \"Factory\"\n",
+            "Public Function Choose(ByVal first As Child, ByVal second As Child, ByVal useSecond As Boolean) As Child\n",
+            "    If useSecond Then\n",
+            "        Set Choose = second\n",
+            "    Else\n",
+            "        Set Choose = first\n",
+            "    End If\n",
+            "End Function\n",
+        ))
+        .unwrap();
+        let main = parser::parse(concat!(
+            "Sub Main()\n",
+            "    Dim factory As New Factory\n",
+            "    Dim first As New Child\n",
+            "    Dim second As New Child\n",
+            "    first.Value = 11\n",
+            "    second.Value = 29\n",
+            "    Set chosen = factory.Choose(first, second, True)\n",
+            "    result = chosen.Value\n",
+            "End Sub\n",
+        ))
+        .unwrap();
+        let modules = vec![
+            ("main".to_string(), main),
+            ("child".to_string(), child),
+            ("factory".to_string(), factory),
+        ];
+        let mut vm = Vm::new();
+        vm.run_sub_multi(&modules, "Main").unwrap();
+        assert_eq!(vm.variables["result"], Variant::Integer(29));
+    }
+
+    #[test]
+    fn interface_variables_use_interface_members_while_concrete_variables_use_direct_members() {
+        let interface = parser::parse(concat!(
+            "VERSION 1.0 CLASS\n",
+            "Attribute VB_Name = \"IRouter\"\n",
+            "Public Sub Run(ByVal value As Long)\n",
+            "End Sub\n",
+            "Public Function Label(ByVal value As Long) As Long\n",
+            "End Function\n",
+            "Public Property Get Item(ByVal index As Long) As Long\n",
+            "End Property\n",
+        ))
+        .unwrap();
+        let worker = parser::parse(concat!(
+            "VERSION 1.0 CLASS\n",
+            "Attribute VB_Name = \"Worker\"\n",
+            "Implements IRouter\n",
+            "Public Sub Run(ByVal value As Long)\n",
+            "    concreteRun = 100 + value\n",
+            "End Sub\n",
+            "Private Sub IRouter_Run(ByVal value As Long)\n",
+            "    interfaceRun = 200 + value\n",
+            "End Sub\n",
+            "Public Function Label(ByVal value As Long) As Long\n",
+            "    Label = 300 + value\n",
+            "End Function\n",
+            "Private Function IRouter_Label(ByVal value As Long) As Long\n",
+            "    IRouter_Label = 400 + value\n",
+            "End Function\n",
+            "Public Property Get Item(ByVal index As Long) As Long\n",
+            "    Item = 500 + index\n",
+            "End Property\n",
+            "Private Property Get IRouter_Item(ByVal index As Long) As Long\n",
+            "    IRouter_Item = 600 + index\n",
+            "End Property\n",
+        ))
+        .unwrap();
+        let main = parser::parse(concat!(
+            "Sub Main()\n",
+            "    Dim viaInterface As IRouter\n",
+            "    Set viaInterface = New Worker\n",
+            "    Call viaInterface.Run(1)\n",
+            "    interfaceFunction = viaInterface.Label(2)\n",
+            "    interfaceProperty = viaInterface.Item(3)\n",
+            "    With viaInterface\n",
+            "        .Run 7\n",
+            "        withFunction = .Label(8)\n",
+            "        withProperty = .Item(9)\n",
+            "    End With\n",
+            "    Dim concrete As Worker\n",
+            "    Set concrete = viaInterface\n",
+            "    Call concrete.Run(4)\n",
+            "    concreteFunction = concrete.Label(5)\n",
+            "    concreteProperty = concrete.Item(6)\n",
+            "End Sub\n",
+        ))
+        .unwrap();
+        let modules = vec![
+            ("main".to_string(), main),
+            ("irouter".to_string(), interface),
+            ("worker".to_string(), worker),
+        ];
+        let mut vm = Vm::new();
+        vm.run_sub_multi(&modules, "Main").unwrap();
+        assert_eq!(vm.variables["interfacerun"], Variant::Integer(207));
+        assert_eq!(vm.variables["interfacefunction"], Variant::Integer(402));
+        assert_eq!(vm.variables["interfaceproperty"], Variant::Integer(603));
+        assert_eq!(vm.variables["withfunction"], Variant::Integer(408));
+        assert_eq!(vm.variables["withproperty"], Variant::Integer(609));
+        assert_eq!(vm.variables["concreterun"], Variant::Integer(104));
+        assert_eq!(vm.variables["concretefunction"], Variant::Integer(305));
+        assert_eq!(vm.variables["concreteproperty"], Variant::Integer(506));
+    }
+
+    #[test]
+    fn interface_variable_rejects_members_outside_the_interface_contract() {
+        let interface = parser::parse(concat!(
+            "VERSION 1.0 CLASS\n",
+            "Attribute VB_Name = \"IRouter\"\n",
+            "Public Sub Run()\n",
+            "End Sub\n",
+        ))
+        .unwrap();
+        let worker = parser::parse(concat!(
+            "VERSION 1.0 CLASS\n",
+            "Attribute VB_Name = \"Worker\"\n",
+            "Implements IRouter\n",
+            "Private Sub IRouter_Run()\n",
+            "End Sub\n",
+            "Public Sub ConcreteOnly()\n",
+            "End Sub\n",
+        ))
+        .unwrap();
+        let main = parser::parse(concat!(
+            "Sub Main()\n",
+            "    Dim route As IRouter\n",
+            "    Set route = New Worker\n",
+            "    Call route.ConcreteOnly()\n",
+            "End Sub\n",
+        ))
+        .unwrap();
+        let modules = vec![
+            ("main".to_string(), main),
+            ("irouter".to_string(), interface),
+            ("worker".to_string(), worker),
+        ];
+        let error = Vm::new().run_sub_multi(&modules, "Main").unwrap_err();
+        assert!(error.contains("Interface 'irouter' has no"), "{error}");
+    }
+
+    #[test]
+    fn interface_variable_rejects_a_non_implementing_class_assignment() {
+        let interface = parser::parse(concat!(
+            "VERSION 1.0 CLASS\n",
+            "Attribute VB_Name = \"IRouter\"\n",
+            "Public Sub Run()\n",
+            "End Sub\n",
+        ))
+        .unwrap();
+        let stranger = parser::parse(concat!(
+            "VERSION 1.0 CLASS\n",
+            "Attribute VB_Name = \"Stranger\"\n",
+            "Public Sub Run()\n",
+            "End Sub\n",
+        ))
+        .unwrap();
+        let main = parser::parse(concat!(
+            "Sub Main()\n",
+            "    Dim route As IRouter\n",
+            "    Set route = New Stranger\n",
+            "End Sub\n",
+        ))
+        .unwrap();
+        let modules = vec![
+            ("main".to_string(), main),
+            ("irouter".to_string(), interface),
+            ("stranger".to_string(), stranger),
+        ];
+        let error = Vm::new().run_sub_multi(&modules, "Main").unwrap_err();
+        assert_eq!(error, "Object variable 'route' requires 'irouter'");
+    }
+
+    #[test]
+    fn private_class_members_are_rejected_from_standard_modules() {
+        let class = parser::parse(concat!(
+            "VERSION 1.0 CLASS\n",
+            "Attribute VB_Name = \"Secret\"\n",
+            "Private value As Long\n",
+            "Private Sub Hidden()\n",
+            "End Sub\n",
+        ))
+        .unwrap();
+        let main = parser::parse(concat!(
+            "Sub Main()\n",
+            "    Set secret = New Secret\n",
+            "    Call secret.Hidden()\n",
+            "End Sub\n",
+        ))
+        .unwrap();
+        let modules = vec![("main".to_string(), main), ("secret".to_string(), class)];
+        let error = Vm::new().run_sub_multi(&modules, "Main").unwrap_err();
+        assert!(error.contains("Private"), "{error}");
+    }
+
+    #[test]
+    fn object_array_accepts_builtin_object_references() {
+        let program = parser::parse(concat!(
+            "Sub Main()\n",
+            "    Dim objects(0 To 1) As Object\n",
+            "    Set cell = Range(\"A1\")\n",
+            "    Set objects(0) = cell\n",
+            "    Set fetched = objects(0)\n",
+            "    fetched.Value = 17\n",
+            "    result = Cells(1, 1).Value\n",
+            "End Sub\n",
+        ))
+        .unwrap();
+        let mut vm = Vm::new();
+        vm.run_sub(&program, "Main").unwrap();
+        assert_eq!(vm.variables["result"], Variant::Integer(17));
+    }
+
+    #[test]
+    fn implements_rejects_a_missing_member() {
+        let interface = parser::parse(concat!(
+            "VERSION 1.0 CLASS\n",
+            "Attribute VB_Name = \"IWorker\"\n",
+            "Public Sub Run(ByVal value As Long)\n",
+            "End Sub\n",
+        ))
+        .unwrap();
+        let worker = parser::parse(concat!(
+            "VERSION 1.0 CLASS\n",
+            "Attribute VB_Name = \"Worker\"\n",
+            "Implements IWorker\n",
+        ))
+        .unwrap();
+        let main = parser::parse("Sub Main()\nEnd Sub\n").unwrap();
+        let modules = vec![
+            ("main".to_string(), main),
+            ("iworker".to_string(), interface),
+            ("worker".to_string(), worker),
+        ];
+        let error = Vm::new().run_sub_multi(&modules, "Main").unwrap_err();
+        assert!(
+            error.contains("does not implement Sub 'iworker.run'"),
+            "{error}"
+        );
     }
 }

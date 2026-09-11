@@ -31,7 +31,7 @@ record of something already done.
    ```
 
    Record the actual `Application.Version`/`Application.Build` this ran against — see
-   `CONTRACT.md`'s schema — since `UNVERIFIED.md` item 6 flags that this affects which
+   `CONTRACT.md`'s schema — the version boundary in `UNVERIFIED.md` affects which
    worksheet functions are even expected to exist.
 
 5. **Feed the output into the existing classifier.** `compat/corpus/run-classify.mjs`

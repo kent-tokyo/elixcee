@@ -246,6 +246,16 @@ fn read_all_zip_entries(bytes: &[u8]) -> HashMap<String, Vec<u8>> {
     out
 }
 
+fn write_all_zip_entries(entries: &HashMap<String, Vec<u8>>) -> Vec<u8> {
+    let mut names: Vec<_> = entries.keys().collect();
+    names.sort();
+    let mut zip = ZipWriter::new(Cursor::new(Vec::<u8>::new()));
+    for name in names {
+        zip_add(&mut zip, name, &entries[name]);
+    }
+    zip.finish().unwrap().into_inner()
+}
+
 fn is_writer_owned(name: &str) -> bool {
     matches!(
         name,
@@ -308,6 +318,91 @@ fn tmp_path(name: &str) -> String {
 }
 
 #[test]
+fn buffered_zip_crosses_xml_and_output_buffers_without_losing_tail_bytes() {
+    use calamine::{Data, Reader, Xlsx, open_workbook};
+    use elixcee::vm::Variant;
+
+    let mut vm = Vm::new();
+    let sheet = vm.sheet_names()[0].clone();
+    let mut state = 0x1234_5678_u32;
+    let values: Vec<Vec<Variant>> = (1..=2000)
+        .map(|row| {
+            let mut text = format!(" {row}:日本語 &<>\" ");
+            for _ in 0..96 {
+                state ^= state << 13;
+                state ^= state >> 17;
+                state ^= state << 5;
+                text.push(char::from(b'!' + (state % 90) as u8));
+            }
+            vec![Variant::Str(text), Variant::Integer(row)]
+        })
+        .collect();
+    vm.write_rect(&sheet, (1, 1), &values);
+    let output = tmp_path("buffer_boundaries.xlsx");
+    // Repeat in place to exercise atomic replacement as well as first save.
+    for _ in 0..2 {
+        save_workbook(&vm, &output).unwrap();
+        let bytes = std::fs::read(&output).unwrap();
+        assert!(bytes.len() > 64 * 1024, "cross compressed output buffer");
+        let entries = read_all_zip_entries(&bytes);
+        assert!(entries["xl/worksheets/sheet1.xml"].len() > 64 * 1024);
+        assert!(entries["xl/sharedStrings.xml"].len() > 64 * 1024);
+        let mut workbook: Xlsx<_> = open_workbook(&output).unwrap();
+        let range = workbook.worksheet_range(&sheet).unwrap();
+        for (index, row) in values.iter().enumerate() {
+            let Variant::Str(text) = &row[0] else {
+                unreachable!()
+            };
+            assert_eq!(range.get((index, 0)), Some(&Data::String(text.clone())));
+            assert_eq!(
+                range.get((index, 1)),
+                Some(&Data::Float((index + 1) as f64))
+            );
+        }
+        let mut reloaded = Vm::new();
+        reloaded.load_workbook_file(&output).unwrap();
+        assert_eq!(reloaded.read_rect(&sheet, 1, 1, 2000, 2), values);
+    }
+    std::fs::remove_file(output).unwrap();
+}
+
+#[test]
+fn shared_strings_keep_coordinate_order_and_deduplicate_among_numeric_cells() {
+    use elixcee::vm::Variant;
+
+    let mut vm = Vm::new();
+    let sheet = vm.sheet_names()[0].clone();
+    let numbers: Vec<_> = (1..=1000).map(|n| vec![Variant::Integer(n)]).collect();
+    vm.write_rect(&sheet, (1, 1), &numbers);
+    // Insert in reverse coordinate order; numeric cells must not affect SST IDs.
+    for (row, col, value) in [
+        (900, 2, "終端"),
+        (50, 2, "先頭"),
+        (2, 3, " &<> "),
+        (1, 4, "先頭"),
+    ] {
+        vm.write_rect(&sheet, (row, col), &[vec![Variant::Str(value.into())]]);
+    }
+    let output = tmp_path("shared_strings_numeric_mix.xlsx");
+    save_workbook(&vm, &output).unwrap();
+    let entries = read_all_zip_entries(&std::fs::read(&output).unwrap());
+    let strings = std::str::from_utf8(&entries["xl/sharedStrings.xml"]).unwrap();
+    assert!(strings.contains("uniqueCount=\"3\""));
+    assert!(strings.contains(concat!(
+        "<si><t>先頭</t></si>\n",
+        "<si><t xml:space=\"preserve\"> &amp;&lt;&gt; </t></si>\n",
+        "<si><t>終端</t></si>\n"
+    )));
+    let mut reloaded = Vm::new();
+    reloaded.load_workbook_file(&output).unwrap();
+    assert_eq!(
+        reloaded.read_rect(&sheet, 1, 1, 1000, 4),
+        vm.read_rect(&sheet, 1, 1, 1000, 4)
+    );
+    std::fs::remove_file(output).unwrap();
+}
+
+#[test]
 fn xlsm_roundtrip_preserves_vba_project_and_declares_macro_enabled_content_types() {
     let (fixture_bytes, vba_bytes, table_bytes, styles_bytes) = build_fixture_xlsm();
     let source_path = tmp_path("source.xlsm");
@@ -367,18 +462,13 @@ fn xlsm_roundtrip_preserves_vba_project_and_declares_macro_enabled_content_types
         Some(&table_bytes)
     );
 
-    // (iv) 0.10.0-D, D1: the sheet's output part name is its ORIGIN's real part name
-    // (sheet3.xml), not a position-derived sheet1.xml -- this fixture's one sheet was
-    // deliberately given a non-sequential source part name specifically to prove this.
+    // (iv) the non-sequential worksheet part is the existing sheet's origin and
+    // must remain the output location after the D1 origin-based plan.
     assert!(
         output_entries.contains_key("xl/worksheets/sheet3.xml"),
-        "existing sheet's output part name must stay sheet3.xml (its own origin), not be \
-         renumbered to sheet1.xml by position"
+        "the existing worksheet must retain its original part name"
     );
-    assert!(
-        !output_entries.contains_key("xl/worksheets/sheet1.xml"),
-        "no sheet in this fixture originates from sheet1.xml, so it must not appear"
-    );
+    assert!(!output_entries.contains_key("xl/worksheets/sheet1.xml"));
 
     // (v) + (vi) content-types: macro-enabled root override, vbaProject resolvable,
     // and every part actually present in the output resolves via the output's
@@ -535,7 +625,6 @@ fn xlsm_roundtrip_in_place_save_preserves_vba_project() {
         Some(&styles_bytes),
         "xl/styles.xml must also survive an in-place overwrite byte-identical"
     );
-    // 0.10.0-D, D1: sheet3.xml (this fixture's real origin part name), not sheet1.xml.
     let sheet_xml = String::from_utf8(output_entries["xl/worksheets/sheet3.xml"].clone()).unwrap();
     let a1_tag = &sheet_xml[sheet_xml.find("<c r=\"A1\"").unwrap()..];
     let a1_tag = &a1_tag[..a1_tag.find('>').unwrap() + 1];
@@ -1156,12 +1245,10 @@ fn rename_sheet_rewrites_defined_names_that_reference_the_old_name() {
     let _ = std::fs::remove_file(&output_path);
 }
 
-/// Rename-preservation against fixture5's real, real-Excel-verified
-/// `_xlnm.Print_Area` (see `internal_docs/xlsx-worksheet-preservation-0.10.0-design.md`'s
-/// 0.10.0-C section) -- confirms the fix covers the builtin print-area name, not just a
-/// plain user-defined one, on genuine Excel-authored bytes rather than a synthetic fixture.
+/// A sheet rename on fixture5 rewrites the chart's qualified formula references
+/// while preserving the drawing/chart relationship chain.
 #[test]
-fn rename_sheet_rewrites_a_real_print_area_defined_name() {
+fn rename_sheet_rewrites_chart_references_on_a_real_fixture() {
     let source_path = real_fixture("fixture5_chart_image_freeze_print.xlsm");
     let fixture_bytes = std::fs::read(&source_path).expect("real fixture must exist");
     let fixture_entries = read_all_zip_entries(&fixture_bytes);
@@ -1176,21 +1263,449 @@ fn rename_sheet_rewrites_a_real_print_area_defined_name() {
     vm.load_workbook_file(&source_path)
         .expect("real fixture should load");
     vm.rename_sheet("Sheet1", "Renamed").unwrap();
-    save_workbook(&vm, &output_path).expect("save-as should succeed");
-
-    let output_bytes = std::fs::read(&output_path).unwrap();
-    let output_entries = read_all_zip_entries(&output_bytes);
-    let out_wb = String::from_utf8(output_entries["xl/workbook.xml"].clone()).unwrap();
+    save_workbook(&vm, &output_path).expect("chart reference rewrite should succeed");
+    let output_entries = read_all_zip_entries(&std::fs::read(&output_path).unwrap());
+    let chart = String::from_utf8(output_entries["xl/charts/chart1.xml"].clone()).unwrap();
+    assert!(chart.contains("Renamed!$A$6:$B$6"), "chart output: {chart}");
+    assert!(chart.contains("Renamed!$C$1:$C$5"));
+    assert!(output_entries.contains_key("xl/drawings/drawing1.xml"));
     assert!(
-        out_wb.contains("_xlnm.Print_Area") && out_wb.contains("Renamed!$E$3"),
-        "Print_Area must survive the rename with its sheet-qualifier rewritten: {out_wb}"
+        String::from_utf8(output_entries["xl/worksheets/sheet1.xml"].clone())
+            .unwrap()
+            .contains("<drawing r:id=\"rId1\"/>")
     );
-    assert!(
-        !out_wb.contains("Sheet1!$E$3"),
-        "the OLD sheet name must not survive the rewrite: {out_wb}"
-    );
+}
 
-    let _ = std::fs::remove_file(&output_path);
+/// G2d: an explicit chart-series edit rewrites only the selected category and
+/// value references while leaving the drawing relationship chain intact.
+#[test]
+fn edit_chart_series_rewrites_selected_references_on_a_real_fixture() {
+    let source_path = real_fixture("fixture5_chart_image_freeze_print.xlsm");
+    let output_path = tmp_path("edit_chart_series_output.xlsm");
+    let mut vm = Vm::new();
+    vm.load_workbook_file(&source_path)
+        .expect("real fixture should load");
+    vm.set_chart_series_formulas(
+        "xl/charts/chart1.xml",
+        0,
+        Some("Sheet1!$A$1:$A$5"),
+        Some("Sheet1!$B$1:$B$5"),
+    )
+    .expect("chart series edit should be accepted");
+    vm.set_drawing_anchor("xl/drawings/drawing1.xml", 0, 2, 3, 10, 12)
+        .expect("drawing anchor edit should be accepted");
+    vm.set_drawing_shape_name("xl/drawings/drawing1.xml", 0, "Ready & reviewed")
+        .expect("drawing shape name edit should be accepted");
+    vm.set_drawing_shape_description("xl/drawings/drawing1.xml", 0, "Ready for review")
+        .expect("drawing shape description edit should be accepted");
+    vm.set_drawing_shape_title("xl/drawings/drawing1.xml", 0, "Review title")
+        .expect("drawing shape title edit should be accepted");
+    vm.set_chart_series_cache(
+        "xl/charts/chart1.xml",
+        0,
+        Some(vec![
+            "Open & ready".to_string(),
+            "ok".to_string(),
+            "bad".to_string(),
+        ]),
+        Some(vec!["42".to_string()]),
+    )
+    .expect("chart cache edit should be accepted");
+    save_workbook(&vm, &output_path).expect("chart series edit should save");
+
+    let output_entries = read_all_zip_entries(&std::fs::read(&output_path).unwrap());
+    let chart = String::from_utf8(output_entries["xl/charts/chart1.xml"].clone()).unwrap();
+    assert!(chart.contains("<c:cat><c:strRef><c:f>Sheet1!$A$1:$A$5</c:f>"));
+    assert!(chart.contains("<c:val><c:numRef><c:f>Sheet1!$B$1:$B$5</c:f>"));
+    assert!(chart.contains("<c:strCache><c:ptCount val=\"3\"/>"));
+    assert!(chart.contains("<c:v>Open &amp; ready</c:v>"));
+    assert!(
+        chart.contains("<c:numCache><c:formatCode>General</c:formatCode><c:ptCount val=\"1\"/>")
+    );
+    assert!(chart.contains("<c:v>42</c:v>"));
+    assert!(output_entries.contains_key("xl/drawings/drawing1.xml"));
+    assert!(output_entries.contains_key("xl/drawings/_rels/drawing1.xml.rels"));
+    let drawing = String::from_utf8(output_entries["xl/drawings/drawing1.xml"].clone()).unwrap();
+    assert!(drawing.contains("<xdr:from><xdr:col>2</xdr:col>"));
+    assert!(drawing.contains("<xdr:row>1</xdr:row>"));
+    assert!(drawing.contains("<xdr:to><xdr:col>11</xdr:col>"));
+    assert!(drawing.contains("<xdr:row>9</xdr:row>"));
+    assert!(drawing.contains("name=\"Ready &amp; reviewed\""));
+    assert!(drawing.contains("descr=\"Ready for review\""));
+    assert!(drawing.contains("title=\"Review title\""));
+}
+
+/// G2d: create a new chart part and connect it to an existing Drawing.
+#[test]
+fn create_chart_connects_new_part_to_existing_drawing() {
+    let source_path = real_fixture("fixture5_chart_image_freeze_print.xlsm");
+    let output_path = tmp_path("create_chart_output.xlsm");
+    let mut vm = Vm::new();
+    vm.load_workbook_file(&source_path)
+        .expect("real fixture should load");
+    let chart_part = vm
+        .add_chart(
+            "xl/drawings/drawing1.xml",
+            "line",
+            "Sheet1!$A$1:$A$5",
+            "Sheet1!$B$1:$B$5",
+            Some("Created chart"),
+            2,
+            2,
+            12,
+            10,
+        )
+        .expect("chart creation should be accepted");
+    assert_eq!(chart_part, "xl/charts/chart-new-1.xml");
+    vm.add_chart_series(
+        &chart_part,
+        "Sheet1!$C$1:$C$5",
+        "Sheet1!$B$1:$B$5",
+        Some("Second series"),
+    )
+    .expect("a second series should be accepted");
+    let second_chart_part = vm
+        .add_chart(
+            "xl/drawings/drawing1.xml",
+            "bar",
+            "Sheet1!$C$1:$C$5",
+            "Sheet1!$B$1:$B$5",
+            Some("Second chart"),
+            14,
+            2,
+            24,
+            10,
+        )
+        .expect("a second chart should be accepted");
+    assert_eq!(second_chart_part, "xl/charts/chart-new-2.xml");
+    save_workbook(&vm, &output_path).expect("created chart should save");
+    if let Ok(kept_path) = std::env::var("ELIXCEE_KEEP_CHART_OUTPUT") {
+        std::fs::copy(&output_path, kept_path).expect("chart output should be copied");
+    }
+    let output_entries = read_all_zip_entries(&std::fs::read(&output_path).unwrap());
+    let chart = String::from_utf8(output_entries[chart_part.as_str()].clone()).unwrap();
+    assert!(chart.contains("<c:lineChart>"));
+    assert!(chart.contains("<c:f>Sheet1!$A$1:$A$5</c:f>"));
+    assert!(chart.contains("Created chart"));
+    assert!(chart.contains("<c:idx val=\"1\"/><c:order val=\"1\"/><c:tx><c:v>Second series</c:v>"));
+    assert!(chart.contains("<c:axId val=\"10000\"/><c:axId val=\"10001\"/>"));
+    let second_chart =
+        String::from_utf8(output_entries[second_chart_part.as_str()].clone()).unwrap();
+    assert!(second_chart.contains("<c:barChart>"));
+    assert!(second_chart.contains("<c:axId val=\"10002\"/><c:axId val=\"10003\"/>"));
+    let drawing = String::from_utf8(output_entries["xl/drawings/drawing1.xml"].clone()).unwrap();
+    let rels =
+        String::from_utf8(output_entries["xl/drawings/_rels/drawing1.xml.rels"].clone()).unwrap();
+    assert!(rels.contains("relationships/chart"));
+    assert!(rels.contains("Target=\"../charts/chart-new-1.xml\""));
+    assert!(rels.contains("Target=\"../charts/chart-new-2.xml\""));
+    for chart_name in ["chart-new-1.xml", "chart-new-2.xml"] {
+        let relation = rels
+            .split("<Relationship ")
+            .find(|fragment| fragment.contains(&format!("Target=\"../charts/{chart_name}\"")))
+            .expect("created chart relationship should exist");
+        let relation_id = relation
+            .split("Id=\"")
+            .nth(1)
+            .and_then(|value| value.split('"').next())
+            .expect("created chart relationship should have an id");
+        assert!(drawing.contains(&format!("r:id=\"{relation_id}\"")));
+    }
+    assert_eq!(drawing.matches("<xdr:graphicFrame").count(), 3);
+}
+
+/// G2 measurement helper: isolate a newly-created bar chart from the
+/// multi-chart case so Excel reopen failures can be attributed to the chart
+/// type rather than to multiple anchors/parts.
+#[test]
+fn create_bar_chart_connects_new_part_to_existing_drawing() {
+    let source_path = real_fixture("fixture5_chart_image_freeze_print.xlsm");
+    let output_path = tmp_path("create_bar_chart_output.xlsm");
+    let mut vm = Vm::new();
+    vm.load_workbook_file(&source_path)
+        .expect("real fixture should load");
+    vm.add_chart(
+        "xl/drawings/drawing1.xml",
+        "bar",
+        "Sheet1!$C$1:$C$5",
+        "Sheet1!$B$1:$B$5",
+        Some("Bar chart"),
+        2,
+        2,
+        12,
+        10,
+    )
+    .expect("bar chart creation should be accepted");
+    save_workbook(&vm, &output_path).expect("bar chart should save");
+    if let Ok(kept_path) = std::env::var("ELIXCEE_KEEP_BAR_CHART_OUTPUT") {
+        std::fs::copy(&output_path, kept_path).expect("bar chart output should be copied");
+    }
+    let output_entries = read_all_zip_entries(&std::fs::read(&output_path).unwrap());
+    let chart = String::from_utf8(output_entries["xl/charts/chart-new-1.xml"].clone()).unwrap();
+    assert!(chart.contains("<c:barChart>"));
+    assert!(chart.contains("<c:tx><c:v>Series 1</c:v></c:tx>"));
+    assert!(chart.contains("<c:f>Sheet1!$C$1:$C$5</c:f>"));
+    assert!(chart.contains("<c:f>Sheet1!$B$1:$B$5</c:f>"));
+    assert!(chart.contains("<c:strCache><c:ptCount val=\"5\"/><c:pt idx=\"0\"><c:v>Status</c:v>"));
+    assert!(chart.contains(
+        "<c:numCache><c:formatCode>General</c:formatCode><c:ptCount val=\"5\"/><c:pt idx=\"0\"><c:v></c:v>"
+    ));
+}
+
+/// G2 measurement helper: use data rows only so a generated bar chart does not
+/// mix a header string into its numeric value reference.
+#[test]
+fn create_bar_chart_with_data_rows_only() {
+    let source_path = real_fixture("fixture5_chart_image_freeze_print.xlsm");
+    let output_path = tmp_path("create_bar_chart_data_rows_output.xlsm");
+    let mut vm = Vm::new();
+    vm.load_workbook_file(&source_path)
+        .expect("real fixture should load");
+    vm.add_chart(
+        "xl/drawings/drawing1.xml",
+        "bar",
+        "Sheet1!$A$2:$A$6",
+        "Sheet1!$B$2:$B$6",
+        Some("Bar chart data rows"),
+        2,
+        2,
+        12,
+        10,
+    )
+    .expect("bar chart creation should accept data rows");
+    save_workbook(&vm, &output_path).expect("bar chart should save");
+    if let Ok(kept_path) = std::env::var("ELIXCEE_KEEP_BAR_CHART_DATA_OUTPUT") {
+        std::fs::copy(&output_path, kept_path).expect("chart output should be copied");
+    }
+    let output_entries = read_all_zip_entries(&std::fs::read(&output_path).unwrap());
+    let chart = String::from_utf8(output_entries["xl/charts/chart-new-1.xml"].clone()).unwrap();
+    assert!(chart.contains("<c:f>Sheet1!$A$2:$A$6</c:f>"));
+    assert!(chart.contains("<c:f>Sheet1!$B$2:$B$6</c:f>"));
+}
+
+/// G2d: the chart-series smooth edit is exercised through the loaded-workbook
+/// save path. The real fixture has no smooth flag, so the test injects only
+/// that existing-OOXML element into a temporary copy before loading it.
+#[test]
+fn edit_chart_series_smooth_survives_real_fixture_save() {
+    let source_path = tmp_path("edit_chart_series_smooth_source.xlsm");
+    let output_path = tmp_path("edit_chart_series_smooth_output.xlsm");
+    let fixture_path = real_fixture("fixture5_chart_image_freeze_print.xlsm");
+    let fixture_bytes = std::fs::read(&fixture_path).expect("real fixture must exist");
+    let mut entries = read_all_zip_entries(&fixture_bytes);
+    let chart = String::from_utf8(entries["xl/charts/chart1.xml"].clone()).unwrap();
+    let series_end = chart
+        .find("</c:ser>")
+        .expect("fixture should contain one chart series");
+    let mut chart_with_smooth = chart;
+    chart_with_smooth.insert_str(series_end, "<c:smooth val=\"0\"/>");
+    entries.insert(
+        "xl/charts/chart1.xml".to_string(),
+        chart_with_smooth.into_bytes(),
+    );
+    std::fs::write(&source_path, write_all_zip_entries(&entries)).unwrap();
+
+    let mut vm = Vm::new();
+    vm.load_workbook_file(&source_path)
+        .expect("temporary fixture should load");
+    vm.set_chart_series_smooth("xl/charts/chart1.xml", 0, true)
+        .expect("smooth edit should be accepted");
+    save_workbook(&vm, &output_path).expect("smooth edit should save");
+
+    let output_entries = read_all_zip_entries(&std::fs::read(&output_path).unwrap());
+    let output_chart = String::from_utf8(output_entries["xl/charts/chart1.xml"].clone()).unwrap();
+    assert!(output_chart.contains("<c:smooth val=\"1\"/>"));
+    assert!(output_chart.contains("<c:f>Sheet1!$A$6:$B$6</c:f>"));
+}
+
+/// G2d: series visibility editing uses the same bounded save path and keeps
+/// the chart's existing formula references intact.
+#[test]
+fn edit_chart_series_visibility_survives_real_fixture_save() {
+    let source_path = tmp_path("edit_chart_series_visibility_source.xlsm");
+    let output_path = tmp_path("edit_chart_series_visibility_output.xlsm");
+    let fixture_path = real_fixture("fixture5_chart_image_freeze_print.xlsm");
+    let fixture_bytes = std::fs::read(&fixture_path).expect("real fixture must exist");
+    let mut entries = read_all_zip_entries(&fixture_bytes);
+    let chart = String::from_utf8(entries["xl/charts/chart1.xml"].clone()).unwrap();
+    let series_end = chart
+        .find("</c:ser>")
+        .expect("fixture should contain one chart series");
+    let mut chart_with_delete = chart;
+    chart_with_delete.insert_str(series_end, "<c:delete val=\"0\"/>");
+    entries.insert(
+        "xl/charts/chart1.xml".to_string(),
+        chart_with_delete.into_bytes(),
+    );
+    std::fs::write(&source_path, write_all_zip_entries(&entries)).unwrap();
+
+    let mut vm = Vm::new();
+    vm.load_workbook_file(&source_path)
+        .expect("temporary fixture should load");
+    vm.set_chart_series_deleted("xl/charts/chart1.xml", 0, true)
+        .expect("visibility edit should be accepted");
+    save_workbook(&vm, &output_path).expect("visibility edit should save");
+
+    let output_entries = read_all_zip_entries(&std::fs::read(&output_path).unwrap());
+    let output_chart = String::from_utf8(output_entries["xl/charts/chart1.xml"].clone()).unwrap();
+    assert!(output_chart.contains("<c:delete val=\"1\"/>"));
+    assert!(output_chart.contains("<c:f>Sheet1!$A$6:$B$6</c:f>"));
+}
+
+/// G2d: series line-color editing rewrites only an existing solid RGB style
+/// in a temporary copy of the Excel-authored chart fixture.
+#[test]
+fn edit_chart_series_line_color_survives_real_fixture_save() {
+    let source_path = tmp_path("edit_chart_series_line_color_source.xlsm");
+    let output_path = tmp_path("edit_chart_series_line_color_output.xlsm");
+    let fixture_path = real_fixture("fixture5_chart_image_freeze_print.xlsm");
+    let fixture_bytes = std::fs::read(&fixture_path).expect("real fixture must exist");
+    let mut entries = read_all_zip_entries(&fixture_bytes);
+    let chart = String::from_utf8(entries["xl/charts/chart1.xml"].clone()).unwrap();
+    let series_start = chart
+        .find("<c:ser>")
+        .expect("fixture should contain one chart series");
+    let series_end = chart
+        .find("</c:ser>")
+        .expect("fixture should contain one chart series");
+    let mut chart_with_line = chart;
+    let no_fill = chart_with_line[series_start..series_end]
+        .find("<a:noFill/>")
+        .map(|offset| series_start + offset)
+        .expect("fixture series should contain a line noFill marker");
+    chart_with_line.replace_range(
+        no_fill..no_fill + "<a:noFill/>".len(),
+        "<a:solidFill><a:srgbClr val=\"112233\"/></a:solidFill>",
+    );
+    let series_end_after_line = chart_with_line
+        .find("</c:ser>")
+        .expect("fixture should contain one chart series");
+    let scheme_color = chart_with_line[series_start..series_end_after_line]
+        .find("<a:schemeClr val=\"accent1\"/>")
+        .map(|offset| series_start + offset)
+        .expect("fixture series should contain a solid fill scheme color");
+    chart_with_line.replace_range(
+        scheme_color..scheme_color + "<a:schemeClr val=\"accent1\"/>".len(),
+        "<a:srgbClr val=\"223344\"/>",
+    );
+    entries.insert(
+        "xl/charts/chart1.xml".to_string(),
+        chart_with_line.into_bytes(),
+    );
+    std::fs::write(&source_path, write_all_zip_entries(&entries)).unwrap();
+
+    let mut vm = Vm::new();
+    vm.load_workbook_file(&source_path)
+        .expect("temporary fixture should load");
+    vm.set_chart_series_line_color("xl/charts/chart1.xml", 0, "#aBc123")
+        .expect("line color edit should be accepted");
+    vm.set_chart_series_fill_color("xl/charts/chart1.xml", 0, "#dEf456")
+        .expect("fill color edit should be accepted");
+    save_workbook(&vm, &output_path).expect("chart color edits should save");
+
+    let output_entries = read_all_zip_entries(&std::fs::read(&output_path).unwrap());
+    let output_chart = String::from_utf8(output_entries["xl/charts/chart1.xml"].clone()).unwrap();
+    assert!(output_chart.contains("<a:srgbClr val=\"ABC123\"/>"));
+    assert!(output_chart.contains("<a:srgbClr val=\"DEF456\"/>"));
+    assert!(output_chart.contains("<c:f>Sheet1!$A$6:$B$6</c:f>"));
+}
+
+/// A minimal Pivot cache package exercises the complete loaded-workbook rename
+/// path without requiring a binary Excel fixture. The cache itself is opaque;
+/// only its worksheet source sheet name may change.
+#[test]
+fn rename_sheet_rewrites_pivot_worksheet_source_and_keeps_cache_owner() {
+    let source_path = tmp_path("rename_sheet_pivot_source.xlsx");
+    let output_path = tmp_path("rename_sheet_pivot_output.xlsx");
+    let cursor = Cursor::new(Vec::<u8>::new());
+    let mut zip = ZipWriter::new(cursor);
+    zip_add(
+        &mut zip,
+        "[Content_Types].xml",
+        concat!(
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?>",
+            "<Types xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\">",
+            "<Default Extension=\"rels\" ContentType=\"application/vnd.openxmlformats-package.relationships+xml\"/>",
+            "<Default Extension=\"xml\" ContentType=\"application/xml\"/>",
+            "<Override PartName=\"/xl/workbook.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml\"/>",
+            "<Override PartName=\"/xl/worksheets/sheet1.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml\"/>",
+            "<Override PartName=\"/xl/pivotCache/pivotCacheDefinition1.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.spreadsheetml.pivotCacheDefinition+xml\"/>",
+            "</Types>"
+        )
+        .as_bytes(),
+    );
+    zip_add(&mut zip, "_rels/.rels", ROOT_RELS.as_bytes());
+    zip_add(
+        &mut zip,
+        "xl/workbook.xml",
+        concat!(
+            "<workbook xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\" ",
+            "xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\">",
+            "<sheets><sheet name=\"Sheet1\" sheetId=\"1\" r:id=\"rId1\"/></sheets>",
+            "<pivotCaches><pivotCache cacheId=\"7\" r:id=\"rId2\"/></pivotCaches></workbook>"
+        )
+        .as_bytes(),
+    );
+    zip_add(
+        &mut zip,
+        "xl/_rels/workbook.xml.rels",
+        concat!(
+            "<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">",
+            "<Relationship Id=\"rId1\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet\" Target=\"worksheets/sheet1.xml\"/>",
+            "<Relationship Id=\"rId2\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/pivotCacheDefinition\" Target=\"pivotCache/pivotCacheDefinition1.xml\"/>",
+            "</Relationships>"
+        )
+        .as_bytes(),
+    );
+    zip_add(&mut zip, "xl/worksheets/sheet1.xml", sheet_xml().as_bytes());
+    zip_add(
+        &mut zip,
+        "xl/pivotCache/pivotCacheDefinition1.xml",
+        concat!(
+            "<pivotCacheDefinition xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\" cacheId=\"7\">",
+            "<cacheSource><worksheetSource ref=\"A1:B2\" sheet=\"Sheet1\"/></cacheSource>",
+            "<cacheFields count=\"2\"><cacheField name=\"Region\"><sharedItems/></cacheField>",
+            "<cacheField name=\"Amount\"><sharedItems count=\"2\"/></cacheField></cacheFields>",
+            "</pivotCacheDefinition>"
+        )
+        .as_bytes(),
+    );
+    std::fs::write(&source_path, zip.finish().unwrap().into_inner()).unwrap();
+
+    let mut vm = Vm::new();
+    vm.load_workbook_file(&source_path).unwrap();
+    vm.rename_sheet("Sheet1", "Data & 2026").unwrap();
+    vm.set_pivot_worksheet_source(
+        "xl/pivotCache/pivotCacheDefinition1.xml",
+        None,
+        Some("A1:C3"),
+    )
+    .expect("pivot source edit should be accepted");
+    vm.set_pivot_cache_refresh_on_load("xl/pivotCache/pivotCacheDefinition1.xml", true)
+        .expect("pivot refresh policy edit should be accepted");
+    vm.set_pivot_cache_field_caption(
+        "xl/pivotCache/pivotCacheDefinition1.xml",
+        1,
+        "Amount & total",
+    )
+    .expect("pivot field caption edit should be accepted");
+    save_workbook(&vm, &output_path).expect("pivot sheet rename should save");
+
+    let entries = read_all_zip_entries(&std::fs::read(&output_path).unwrap());
+    let workbook = String::from_utf8(entries["xl/workbook.xml"].clone()).unwrap();
+    let cache =
+        String::from_utf8(entries["xl/pivotCache/pivotCacheDefinition1.xml"].clone()).unwrap();
+    assert!(workbook.contains("<pivotCaches>"));
+    assert!(workbook.contains("cacheId=\"7\""));
+    assert!(cache.contains("sheet=\"Data &amp; 2026\""));
+    assert!(cache.contains("ref=\"A1:C3\""));
+    assert!(cache.contains("refreshOnLoad=\"1\""));
+    assert!(cache.contains(
+        "<cacheField name=\"Amount &amp; total\"><sharedItems count=\"2\"/></cacheField>"
+    ));
+
+    let _ = std::fs::remove_file(source_path);
+    let _ = std::fs::remove_file(output_path);
 }
 
 /// P2: `defined_names` exercised against the one real fixture with genuine
@@ -2757,128 +3272,6 @@ fn copy_sheet_preserves_row_height_and_column_width_on_a_synthetic_fixture() {
     assert_eq!(vm.column_width_on_sheet("copy", 3), Some(12.5));
 
     let _ = std::fs::remove_file(&source_path);
-}
-
-/// 0.10.0-D, slice D1: a surviving sheet's output part name stays its own origin
-/// (`WorksheetOrigin.original_part_name`), not renumbered by output position. Three
-/// sheets, no VBA; Sheet3 (last, with a real worksheet-level relationship) is the one
-/// that must NOT get renumbered when Sheet2 -- an earlier, unrelated, relationship-free
-/// sheet -- is deleted, shifting Sheet3 from position 3 to position 2.
-///
-/// This is a real, previously-reproduced bug, not a hypothetical: before D1, the
-/// surviving worksheet content was written to the position-derived `sheet2.xml`, while
-/// `xl/worksheets/_rels/sheet3.xml.rels` (which passes through keyed by its ORIGINAL
-/// path, untouched by this fix) stayed at `sheet3.xml` -- orphaning the `.rels` file and
-/// leaving the real `sheet2.xml` content with no relationship file at all, even though
-/// its original content had one. Confirmed by running this exact scenario against the
-/// pre-D1 code before writing this test.
-#[test]
-fn surviving_sheets_keep_their_own_origin_part_name_after_an_earlier_sheet_is_deleted() {
-    const WORKBOOK_XML: &str = concat!(
-        "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n",
-        "<workbook xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\" ",
-        "xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\">\n",
-        "<sheets>\n",
-        "<sheet name=\"Sheet1\" sheetId=\"1\" r:id=\"rId1\"/>\n",
-        "<sheet name=\"Sheet2\" sheetId=\"2\" r:id=\"rId2\"/>\n",
-        "<sheet name=\"Sheet3\" sheetId=\"3\" r:id=\"rId3\"/>\n",
-        "</sheets>\n</workbook>\n",
-    );
-    const WORKBOOK_RELS: &str = concat!(
-        "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n",
-        "<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">\n",
-        "<Relationship Id=\"rId1\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet\" Target=\"worksheets/sheet1.xml\"/>\n",
-        "<Relationship Id=\"rId2\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet\" Target=\"worksheets/sheet2.xml\"/>\n",
-        "<Relationship Id=\"rId3\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet\" Target=\"worksheets/sheet3.xml\"/>\n",
-        "</Relationships>\n",
-    );
-    const PLAIN_SHEET: &str = concat!(
-        "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n",
-        "<worksheet xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\">\n",
-        "<sheetData><row r=\"1\"><c r=\"A1\"><v>1</v></c></row></sheetData>\n</worksheet>\n",
-    );
-    const SHEET3_XML: &str = concat!(
-        "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n",
-        "<worksheet xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\" ",
-        "xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\">\n",
-        "<sheetData><row r=\"1\"><c r=\"A1\"><v>3</v></c></row></sheetData>\n",
-        "<hyperlinks><hyperlink ref=\"A1\" r:id=\"hlink1\"/></hyperlinks>\n</worksheet>\n",
-    );
-    const SHEET3_RELS: &str = concat!(
-        "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n",
-        "<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">\n",
-        "<Relationship Id=\"hlink1\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink\" Target=\"https://example.com/\" TargetMode=\"External\"/>\n",
-        "</Relationships>\n",
-    );
-
-    let cursor = Cursor::new(Vec::<u8>::new());
-    let mut zip = ZipWriter::new(cursor);
-    zip_add(
-        &mut zip,
-        "[Content_Types].xml",
-        CONTENT_TYPES_NO_VBA.as_bytes(),
-    );
-    zip_add(&mut zip, "_rels/.rels", ROOT_RELS.as_bytes());
-    zip_add(&mut zip, "xl/workbook.xml", WORKBOOK_XML.as_bytes());
-    zip_add(
-        &mut zip,
-        "xl/_rels/workbook.xml.rels",
-        WORKBOOK_RELS.as_bytes(),
-    );
-    zip_add(&mut zip, "xl/worksheets/sheet1.xml", PLAIN_SHEET.as_bytes());
-    zip_add(&mut zip, "xl/worksheets/sheet2.xml", PLAIN_SHEET.as_bytes());
-    zip_add(&mut zip, "xl/worksheets/sheet3.xml", SHEET3_XML.as_bytes());
-    zip_add(
-        &mut zip,
-        "xl/worksheets/_rels/sheet3.xml.rels",
-        SHEET3_RELS.as_bytes(),
-    );
-    let fixture_bytes = zip.finish().unwrap().into_inner();
-
-    let source_path = tmp_path("source_d1_reorder.xlsx");
-    let output_path = tmp_path("output_d1_reorder.xlsx");
-    std::fs::write(&source_path, &fixture_bytes).unwrap();
-
-    let mut vm = Vm::new();
-    vm.load_workbook_file(&source_path)
-        .expect("fixture should load");
-    let prog =
-        parser::parse("Sub DeleteSheet2()\n    Sheets(\"Sheet2\").Delete\nEnd Sub\n").unwrap();
-    vm.run_sub(&prog, "DeleteSheet2").expect("macro should run");
-    save_workbook(&vm, &output_path).expect("save should succeed");
-
-    let output_bytes = std::fs::read(&output_path).unwrap();
-    let output_entries = read_all_zip_entries(&output_bytes);
-
-    assert!(
-        output_entries.contains_key("xl/worksheets/sheet3.xml"),
-        "Sheet3's content must stay at its own origin part name, sheet3.xml, even though \
-         it's now the second (not third) sheet in output order"
-    );
-    assert!(
-        !output_entries.contains_key("xl/worksheets/sheet2.xml"),
-        "sheet2.xml must not exist -- Sheet3's content must not be renumbered into it"
-    );
-    assert!(
-        output_entries.contains_key("xl/worksheets/_rels/sheet3.xml.rels"),
-        "the passthrough .rels file must still be at sheet3.xml's own path"
-    );
-    let sheet3_xml = String::from_utf8(output_entries["xl/worksheets/sheet3.xml"].clone()).unwrap();
-    assert!(
-        sheet3_xml.contains("<c r=\"A1\"><v>3</v></c>"),
-        "sheet3.xml must actually contain Sheet3's own cell data, not Sheet1's or an \
-         empty regenerated sheet: {sheet3_xml}"
-    );
-
-    let wb_rels = String::from_utf8(output_entries["xl/_rels/workbook.xml.rels"].clone()).unwrap();
-    assert!(
-        wb_rels.contains("Target=\"worksheets/sheet3.xml\""),
-        "workbook.xml.rels must point the surviving sheet's relationship at sheet3.xml, \
-         not a stale/renumbered target: {wb_rels}"
-    );
-
-    let _ = std::fs::remove_file(&source_path);
-    let _ = std::fs::remove_file(&output_path);
 }
 
 /// 0.10.0-D4: deleting a sheet must prune its EXCLUSIVELY-reachable target parts (its own

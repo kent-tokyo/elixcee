@@ -1,5 +1,10 @@
 use super::ast::{BinOpKind, FormulaExpr, SheetQualifier};
 
+const MAX_FORMULA_BYTES: usize = 1024 * 1024;
+const MAX_FORMULA_REFS: usize = 100_000;
+const MAX_FORMULA_NODES: usize = 200_000;
+const MAX_FORMULA_DEPTH: usize = 256;
+
 /// One cell/range reference as it literally appears in formula text, with its
 /// exact char-offset span (relative to the normalized input `parse_with_refs`
 /// was called on -- see that function's doc comment). Used by the reference
@@ -40,6 +45,7 @@ pub struct FormulaParser {
     chars: Vec<char>,
     pos: usize,
     refs: Vec<RefOccurrence>,
+    depth: usize,
 }
 
 impl FormulaParser {
@@ -48,7 +54,21 @@ impl FormulaParser {
             chars: input.chars().collect(),
             pos: 0,
             refs: Vec::new(),
+            depth: 0,
         }
+    }
+
+    fn parse_nested_expr(&mut self) -> Result<FormulaExpr, String> {
+        if self.depth >= MAX_FORMULA_DEPTH {
+            return Err(format!(
+                "Formula nesting exceeds the maximum depth of {}",
+                MAX_FORMULA_DEPTH
+            ));
+        }
+        self.depth += 1;
+        let result = self.parse_expr();
+        self.depth -= 1;
+        result
     }
 
     fn peek(&self) -> Option<char> {
@@ -216,7 +236,7 @@ impl FormulaParser {
         match self.peek() {
             Some('(') => {
                 self.advance();
-                let expr = self.parse_expr()?;
+                let expr = self.parse_nested_expr()?;
                 self.skip_ws();
                 if !self.consume(')') {
                     return Err("Expected ')'".into());
@@ -323,6 +343,12 @@ impl FormulaParser {
             self.advance();
             self.skip_ws();
             let (c2, r2, abs_c2, abs_r2, c2_start, c2_end) = self.parse_ref_corner()?;
+            if self.refs.len() >= MAX_FORMULA_REFS {
+                return Err(format!(
+                    "Formula has too many references (maximum is {})",
+                    MAX_FORMULA_REFS
+                ));
+            }
             self.refs.push(RefOccurrence::Range {
                 span: (corner1_start, c2_end),
                 c1: col,
@@ -348,6 +374,12 @@ impl FormulaParser {
                 abs_r2,
                 sheet,
             });
+        }
+        if self.refs.len() >= MAX_FORMULA_REFS {
+            return Err(format!(
+                "Formula has too many references (maximum is {})",
+                MAX_FORMULA_REFS
+            ));
         }
         self.refs.push(RefOccurrence::Cell {
             span: (corner1_start, corner1_end),
@@ -474,10 +506,10 @@ impl FormulaParser {
         if !abs_col {
             // Support dot-separated function names (e.g. MODE.MULT, NETWORKDAYS.INTL)
             while self.peek() == Some('.')
-                && matches!(self.chars.get(self.pos + 1), Some(c) if c.is_ascii_alphabetic())
+                && matches!(self.chars.get(self.pos + 1), Some(c) if c.is_ascii_alphanumeric())
             {
                 name.push(self.advance().unwrap()); // consume '.'
-                while matches!(self.peek(), Some(c) if c.is_ascii_alphabetic()) {
+                while matches!(self.peek(), Some(c) if c.is_ascii_alphanumeric()) {
                     name.push(self.advance().unwrap().to_ascii_uppercase());
                 }
             }
@@ -489,6 +521,35 @@ impl FormulaParser {
         let mut trailing_digits = String::new();
         while matches!(self.peek(), Some(c) if c.is_ascii_digit()) {
             trailing_digits.push(self.advance().unwrap());
+        }
+
+        // Some Excel function names contain digits in the middle of the name
+        // (for example SUMX2MY2 and SUMX2PY2), unlike a cell reference whose
+        // digits are its row suffix.  If the complete alphanumeric token is
+        // followed by `(`, treat the suffix as part of the function name;
+        // otherwise restore the position so A1-style references keep their
+        // normal interpretation.
+        if !abs_col && !trailing_digits.is_empty() {
+            let continuation_start = self.pos;
+            while matches!(self.peek(), Some(c) if c.is_ascii_alphanumeric() || c == '_') {
+                self.advance();
+            }
+            let continuation_end = self.pos;
+            let mut lookahead = self.pos;
+            while matches!(self.chars.get(lookahead), Some(' ' | '\t')) {
+                lookahead += 1;
+            }
+            if self.chars.get(lookahead) == Some(&'(') {
+                name.push_str(&trailing_digits);
+                name.extend(
+                    self.chars[continuation_start..continuation_end]
+                        .iter()
+                        .map(|c| c.to_ascii_uppercase()),
+                );
+                trailing_digits.clear();
+            } else {
+                self.pos = continuation_start;
+            }
         }
 
         if abs_col || abs_row {
@@ -533,25 +594,20 @@ impl FormulaParser {
         self.skip_ws();
         if self.peek() == Some('(') {
             self.advance();
-            let mut args = vec![];
+            let args = self.parse_argument_list()?;
+            let function = FormulaExpr::FuncCall {
+                name: name.clone(),
+                args,
+            };
             self.skip_ws();
-            if self.peek() != Some(')') {
-                args.push(self.parse_expr()?);
-                loop {
-                    self.skip_ws();
-                    if self.consume(',') {
-                        self.skip_ws();
-                        args.push(self.parse_expr()?);
-                    } else {
-                        break;
-                    }
-                }
+            if name.eq_ignore_ascii_case("LAMBDA") && self.consume('(') {
+                let call_args = self.parse_argument_list()?;
+                return Ok(FormulaExpr::Call {
+                    callee: Box::new(function),
+                    args: call_args,
+                });
             }
-            self.skip_ws();
-            if !self.consume(')') {
-                return Err(format!("Expected ')' after arguments of '{}'", name));
-            }
-            return Ok(FormulaExpr::FuncCall { name, args });
+            return Ok(function);
         }
 
         // Boolean literals
@@ -563,6 +619,40 @@ impl FormulaParser {
 
         // Bare identifier not matching any known pattern → name reference for LET/LAMBDA
         Ok(FormulaExpr::FuncCall { name, args: vec![] })
+    }
+
+    fn parse_argument_list(&mut self) -> Result<Vec<FormulaExpr>, String> {
+        let mut args = vec![];
+        let mut needs_argument = false;
+        self.skip_ws();
+        loop {
+            self.skip_ws();
+            if self.peek() == Some(')') {
+                if needs_argument {
+                    args.push(FormulaExpr::Omitted);
+                }
+                self.advance();
+                return Ok(args);
+            }
+            if self.peek() == Some(',') {
+                args.push(FormulaExpr::Omitted);
+                self.advance();
+                needs_argument = true;
+                self.skip_ws();
+                continue;
+            }
+            args.push(self.parse_nested_expr()?);
+            self.skip_ws();
+            if self.consume(',') {
+                needs_argument = true;
+                self.skip_ws();
+            } else {
+                if !self.consume(')') {
+                    return Err("Expected ')' after arguments".into());
+                }
+                return Ok(args);
+            }
+        }
     }
 }
 
@@ -589,6 +679,13 @@ pub fn parse(formula: &str) -> Result<FormulaExpr, String> {
 /// the original stored string must apply the same normalization first.
 pub fn parse_with_refs(formula: &str) -> Result<(FormulaExpr, Vec<RefOccurrence>), String> {
     let input = formula.trim().trim_start_matches('=');
+    if input.len() > MAX_FORMULA_BYTES {
+        return Err(format!(
+            "Formula is too long ({} bytes; maximum is {})",
+            input.len(),
+            MAX_FORMULA_BYTES
+        ));
+    }
     let mut p = FormulaParser::new(input);
     let expr = p.parse_expr()?;
     p.skip_ws();
@@ -599,8 +696,53 @@ pub fn parse_with_refs(formula: &str) -> Result<(FormulaExpr, Vec<RefOccurrence>
             p.chars[p.pos..].iter().collect::<String>()
         ))
     } else {
+        let mut nodes = 0usize;
+        validate_expr_shape(&expr, 0, &mut nodes)?;
         Ok((expr, p.refs))
     }
+}
+
+fn validate_expr_shape(expr: &FormulaExpr, depth: usize, nodes: &mut usize) -> Result<(), String> {
+    *nodes = (*nodes)
+        .checked_add(1)
+        .ok_or_else(|| "Formula AST node count overflows usize".to_string())?;
+    if *nodes > MAX_FORMULA_NODES {
+        return Err(format!(
+            "Formula AST is too large (maximum is {} nodes)",
+            MAX_FORMULA_NODES
+        ));
+    }
+    if depth > MAX_FORMULA_DEPTH {
+        return Err(format!(
+            "Formula AST exceeds the maximum depth of {}",
+            MAX_FORMULA_DEPTH
+        ));
+    }
+    match expr {
+        FormulaExpr::BinOp { lhs, rhs, .. } => {
+            validate_expr_shape(lhs, depth + 1, nodes)?;
+            validate_expr_shape(rhs, depth + 1, nodes)?;
+        }
+        FormulaExpr::UnaryMinus(inner) => validate_expr_shape(inner, depth + 1, nodes)?,
+        FormulaExpr::FuncCall { args, .. } => {
+            for arg in args {
+                validate_expr_shape(arg, depth + 1, nodes)?;
+            }
+        }
+        FormulaExpr::Call { callee, args } => {
+            validate_expr_shape(callee, depth + 1, nodes)?;
+            for arg in args {
+                validate_expr_shape(arg, depth + 1, nodes)?;
+            }
+        }
+        FormulaExpr::Number(_)
+        | FormulaExpr::Str(_)
+        | FormulaExpr::Bool(_)
+        | FormulaExpr::Omitted
+        | FormulaExpr::CellRef { .. }
+        | FormulaExpr::Range { .. } => {}
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -627,6 +769,36 @@ mod tests {
     fn test_bool() {
         assert_eq!(parse("=TRUE").unwrap(), FormulaExpr::Bool(true));
         assert_eq!(parse("=FALSE").unwrap(), FormulaExpr::Bool(false));
+    }
+
+    #[test]
+    fn test_omitted_argument_slots() {
+        assert_eq!(
+            parse("=CHOOSE(1,,3)").unwrap(),
+            FormulaExpr::FuncCall {
+                name: "CHOOSE".into(),
+                args: vec![
+                    FormulaExpr::Number(1.0),
+                    FormulaExpr::Omitted,
+                    FormulaExpr::Number(3.0),
+                ],
+            }
+        );
+        assert_eq!(
+            parse("=CHOOSE(,2,)").unwrap(),
+            FormulaExpr::FuncCall {
+                name: "CHOOSE".into(),
+                args: vec![
+                    FormulaExpr::Omitted,
+                    FormulaExpr::Number(2.0),
+                    FormulaExpr::Omitted,
+                ],
+            }
+        );
+        assert!(matches!(
+            parse("=LAMBDA(x,x+1)(2)").unwrap(),
+            FormulaExpr::Call { .. }
+        ));
     }
 
     #[test]
@@ -920,6 +1092,9 @@ mod tests {
     fn test_dot_function_name() {
         let expr = parse("=MODE.MULT(1,2,2)").unwrap();
         assert!(matches!(expr, FormulaExpr::FuncCall { ref name, .. } if name == "MODE.MULT"));
+
+        let expr = parse("=T.DIST.2T(2,10)").unwrap();
+        assert!(matches!(expr, FormulaExpr::FuncCall { ref name, .. } if name == "T.DIST.2T"));
     }
 
     #[test]
@@ -930,6 +1105,9 @@ mod tests {
 
         let expr = parse("=ATAN2(1,1)").unwrap();
         assert!(matches!(expr, FormulaExpr::FuncCall { ref name, .. } if name == "ATAN2"));
+
+        let expr = parse("=SUMX2MY2(A1:A3,B1:B3)").unwrap();
+        assert!(matches!(expr, FormulaExpr::FuncCall { ref name, .. } if name == "SUMX2MY2"));
 
         // Cell references with the same letter+digit pattern must still work
         assert_eq!(
@@ -1110,5 +1288,23 @@ mod tests {
             }
             other => panic!("expected Cell occurrence, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn formula_limits_reject_excessive_input_length() {
+        let input = "1".repeat(MAX_FORMULA_BYTES + 1);
+        let error = parse(&input).unwrap_err();
+        assert!(error.contains("too long"));
+    }
+
+    #[test]
+    fn formula_limits_reject_excessive_nesting_before_stack_growth() {
+        let input = format!(
+            "{}1{}",
+            "(".repeat(MAX_FORMULA_DEPTH + 1),
+            ")".repeat(MAX_FORMULA_DEPTH + 1)
+        );
+        let error = parse(&input).unwrap_err();
+        assert!(error.contains("nesting"));
     }
 }
