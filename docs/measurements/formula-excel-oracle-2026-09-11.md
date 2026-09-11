@@ -91,6 +91,14 @@ The previously failing `SUM(SEQUENCE(2,3)+1)` case is now supported by
 element-wise scalar/array broadcasting with bounded equal-length validation;
 array errors remain represented as per-element Excel errors.
 
+## Automatic dependency recalculation
+
+In a separate three-cell chain, `P1 = 1`, `P2 = P1+1`, and `P3 = P2*2`
+produced `4` in Excel. After changing `P1` to `3`, Excel automatically
+recalculated `P3` to `8`; the current VM produced the same `4 → 8` sequence
+after `set_cell` and `recalculate`. This is a focused automatic-recalculation
+probe, not evidence for every cross-sheet, volatile, cycle, or spill rule.
+
 Excel's Error/array probes returned an error for
 `SUM(CHOOSE(SEQUENCE(2),1,1/0))` and `AVERAGE(CHOOSE(SEQUENCE(2),1,1/0))`,
 `1` for `COUNT(CHOOSE(SEQUENCE(2),1,1/0))`, `2` for the corresponding
