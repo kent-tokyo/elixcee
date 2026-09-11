@@ -16,8 +16,18 @@ select, input { border: 1px solid #cad2e2; border-radius: 8px; background: white
 .card { border: 1px solid #dce3ef; border-radius: 18px; background: white; padding: 24px; box-shadow: 0 8px 28px #203a7810; }
 h1, h2 { margin-top: 0; } h2 { font-size: 1.05rem; }
 table { width: 100%; border-collapse: collapse; font-size: .9rem; }
-th, td { border-bottom: 1px solid #e8edf5; padding: 8px 6px; text-align: left; }
-th { color: #58657d; font-weight: 650; }
+th, td { border: 1px solid #dce3ef; padding: 6px; text-align: left; }
+th { color: #58657d; font-weight: 650; background: #f3f6fb; }
+.sheet-title { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.sheet-title h2 { margin-bottom: 14px; }
+.sheet-title span { color: #7c879a; font-size: .8rem; }
+.sheet-wrap { overflow-x: auto; }
+.sheet { min-width: 430px; table-layout: fixed; }
+.sheet .corner, .sheet .row-label { width: 34px; text-align: center; }
+.sheet .column-label, .sheet .row-label { text-align: center; }
+.sheet td { padding: 2px; background: white; }
+.formula-row td, .formula-row th { background: #f8faff; }
+.formula-cell { color: #3856d9; font-weight: 750; }
 .cell-input { width: 100%; min-width: 70px; padding: 7px 8px; }
 .actions { display: flex; gap: 10px; margin-top: 20px; }
 button { border: 0; border-radius: 9px; padding: 10px 15px; font: inherit; font-weight: 650; color: white; background: #3856d9; cursor: pointer; }
