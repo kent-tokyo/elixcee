@@ -4791,7 +4791,7 @@ fn render_chart_reference(formula: &str, values: &[Variant], numeric: bool) -> S
     }
 }
 
-fn render_created_chart_xml(chart: &vm::ChartCreation) -> String {
+fn render_created_chart_xml(chart: &vm::ChartCreation, chart_index: usize) -> String {
     let title = chart
         .title
         .as_deref()
@@ -4808,6 +4808,8 @@ fn render_created_chart_xml(chart: &vm::ChartCreation) -> String {
     } else {
         "<c:spPr><a:ln><a:prstDash val=\"solid\"/></a:ln></c:spPr>"
     };
+    let category_axis_id = 10_000 + chart_index * 2;
+    let value_axis_id = category_axis_id + 1;
     let mut append_series = |index: usize,
                              categories: &str,
                              values: &str,
@@ -4843,20 +4845,22 @@ fn render_created_chart_xml(chart: &vm::ChartCreation) -> String {
     }
     let plot_chart = match chart.chart_type.as_str() {
         "bar" => format!(
-            "<c:barChart><c:barDir val=\"col\"/><c:grouping val=\"clustered\"/><c:varyColors val=\"0\"/>{series}<c:gapWidth val=\"150\"/><c:overlap val=\"0\"/><c:axId val=\"201\"/><c:axId val=\"202\"/></c:barChart>"
+            "<c:barChart><c:barDir val=\"col\"/><c:grouping val=\"clustered\"/><c:varyColors val=\"0\"/>{series}<c:gapWidth val=\"150\"/><c:overlap val=\"0\"/><c:axId val=\"{category_axis_id}\"/><c:axId val=\"{value_axis_id}\"/></c:barChart>"
         ),
         "area" => format!(
-            "<c:areaChart><c:grouping val=\"standard\"/>{series}<c:axId val=\"201\"/><c:axId val=\"202\"/></c:areaChart>"
+            "<c:areaChart><c:grouping val=\"standard\"/>{series}<c:axId val=\"{category_axis_id}\"/><c:axId val=\"{value_axis_id}\"/></c:areaChart>"
         ),
         "pie" => format!("<c:pieChart>{series}</c:pieChart>"),
         _ => format!(
-            "<c:lineChart><c:grouping val=\"standard\"/><c:varyColors val=\"0\"/>{series}<c:axId val=\"201\"/><c:axId val=\"202\"/></c:lineChart>"
+            "<c:lineChart><c:grouping val=\"standard\"/><c:varyColors val=\"0\"/>{series}<c:axId val=\"{category_axis_id}\"/><c:axId val=\"{value_axis_id}\"/></c:lineChart>"
         ),
     };
     let axes = if chart.chart_type == "pie" {
         String::new()
     } else {
-        "<c:catAx><c:axId val=\"201\"/><c:scaling><c:orientation val=\"minMax\"/></c:scaling><c:delete val=\"0\"/><c:axPos val=\"b\"/><c:tickLblPos val=\"nextTo\"/><c:crossAx val=\"202\"/><c:crosses val=\"autoZero\"/></c:catAx><c:valAx><c:axId val=\"202\"/><c:scaling><c:orientation val=\"minMax\"/></c:scaling><c:delete val=\"0\"/><c:axPos val=\"l\"/><c:tickLblPos val=\"nextTo\"/><c:crossAx val=\"201\"/><c:crosses val=\"autoZero\"/></c:valAx>".to_string()
+        format!(
+            "<c:catAx><c:axId val=\"{category_axis_id}\"/><c:scaling><c:orientation val=\"minMax\"/></c:scaling><c:delete val=\"0\"/><c:axPos val=\"b\"/><c:tickLblPos val=\"nextTo\"/><c:crossAx val=\"{value_axis_id}\"/><c:crosses val=\"autoZero\"/></c:catAx><c:valAx><c:axId val=\"{value_axis_id}\"/><c:scaling><c:orientation val=\"minMax\"/></c:scaling><c:delete val=\"0\"/><c:axPos val=\"l\"/><c:tickLblPos val=\"nextTo\"/><c:crossAx val=\"{category_axis_id}\"/><c:crosses val=\"autoZero\"/></c:valAx>"
+        )
     };
     format!(
         "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?><c:chartSpace xmlns:c=\"http://schemas.openxmlformats.org/drawingml/2006/chart\" xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\" xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\"><c:chart>{title}<c:plotArea><c:layout/>{plot_chart}{axes}</c:plotArea><c:plotVisOnly val=\"1\"/><c:dispBlanksAs val=\"gap\"/></c:chart></c:chartSpace>"
@@ -8065,7 +8069,7 @@ fn save_xlsx_impl(vm: &Vm, path: &str, sync: bool) -> Result<(), String> {
             let chart_part = format!("xl/charts/chart-new-{}.xml", index + 1);
             passthrough.push((
                 chart_part.clone(),
-                render_created_chart_xml(chart).into_bytes(),
+                render_created_chart_xml(chart, index).into_bytes(),
             ));
             if surviving_source_parts.contains("xl/charts/style1.xml")
                 && surviving_source_parts.contains("xl/charts/colors1.xml")
