@@ -71,3 +71,12 @@ After installing a locally built wheel into an isolated environment, add
 `--with-elixcee` to run the paired 118-case check.
 
 The runner exits non-zero if any comparable LibreOffice probe mismatches.
+
+## 2026-09-11 rerun
+
+The same runner was executed with LibreOffice from `/opt/homebrew/bin/soffice`
+in a fresh writable temporary directory. It produced 118 comparable cases and
+118/118 matches; 37 probes remained explicitly skipped because this build did
+not produce a comparable result. The `--with-elixcee` paired branch was not
+run successfully in this shell because the `elixcee` Python module was not
+installed. This rerun is LibreOffice evidence only, not Excel oracle evidence.
