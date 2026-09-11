@@ -1203,7 +1203,9 @@ fn func_min(
     args: &[FormulaExpr],
     cells: &HashMap<(u32, u32), CellContent>,
 ) -> Result<Variant, String> {
-    let values = match collect_numeric_values_with_errors(args, cells) {
+    // Excel coerces numeric text and logical values supplied directly to MIN;
+    // the same values inside a referenced range remain excluded.
+    let values = match collect_direct_numeric_args(args, cells, true) {
         Ok(values) => values,
         Err(error) => return Ok(Variant::Error(error)),
     };
@@ -1216,7 +1218,9 @@ fn func_max(
     args: &[FormulaExpr],
     cells: &HashMap<(u32, u32), CellContent>,
 ) -> Result<Variant, String> {
-    let values = match collect_numeric_values_with_errors(args, cells) {
+    // Keep direct-argument coercion aligned with Excel while preserving
+    // reference semantics for text and logical cells.
+    let values = match collect_direct_numeric_args(args, cells, true) {
         Ok(values) => values,
         Err(error) => return Ok(Variant::Error(error)),
     };
@@ -18826,6 +18830,8 @@ mod tests {
             ((3, 1), Variant::Integer(30)),
         ]);
         assert_eq!(calc("=AVERAGE(A1:A3)", &c), Variant::Float(20.0));
+        assert_eq!(calc("=MIN(\"1\",TRUE)", &c), Variant::Integer(1));
+        assert_eq!(calc("=MAX(\"1\",TRUE)", &c), Variant::Integer(1));
         let with_error = cells_from(&[
             ((1, 1), Variant::Integer(10)),
             ((2, 1), Variant::Error(ExcelError::NA)),

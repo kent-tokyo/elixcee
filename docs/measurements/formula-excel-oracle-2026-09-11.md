@@ -49,6 +49,11 @@ evaluator: direct text/logical arguments are included by `AVERAGE`, while
 text/logical values inside a referenced range remain excluded. The corrected
 source and wheel now match all 15 recorded probes.
 
+The same boundary check found that Excel returns `1` for both
+`=MIN("1",TRUE)` and `=MAX("1",TRUE)`. The evaluator now routes these direct
+arguments through the existing coercion path; text and logical values in a
+referenced range remain excluded. Focused regressions cover both functions.
+
 ## Mixed-type aggregate range probes
 
 Five additional range probes used `A1:B2 = {{1,1},{TRUE,"x"}}` in the same
