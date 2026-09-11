@@ -1,8 +1,9 @@
 # elixcee Playground
 
-Try elixcee in the browser: edit a small workbook, recalculate a formula with
-the Rust/WASM engine, and download the resulting `.xlsx` file. The page is
-client-only; workbook bytes are not uploaded.
+Try elixcee in the browser: switch between sales, budget, and grade samples;
+edit a small table; recalculate `SUM` or `AVERAGE` with the Rust/WASM engine;
+and download the resulting `.xlsx` file. The page is client-only; workbook
+bytes are not uploaded.
 
 Open the live [GitHub Pages playground](https://kent-tokyo.github.io/elixcee/playground/)
 or read the [English quick start](../docs/quickstart.md) first.

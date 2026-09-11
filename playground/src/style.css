@@ -8,21 +8,28 @@ body { margin: 0; }
 select, input { border: 1px solid #cad2e2; border-radius: 8px; background: white; padding: 8px 10px; font: inherit; }
 .header label { display: flex; align-items: center; gap: 8px; color: #58657d; font-size: .9rem; }
 .intro { max-width: 620px; margin: 18px 0 30px; color: #58657d; font-size: 1.08rem; line-height: 1.6; }
-.grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; }
+.toolbar { display: flex; align-items: end; justify-content: space-between; gap: 16px; margin-bottom: 18px; }
+.toolbar label { display: grid; gap: 6px; color: #58657d; font-size: .9rem; }
+.toolbar select { min-width: 190px; }
+.badge { color: #58657d; font-size: .85rem; }
+.grid { display: grid; grid-template-columns: minmax(0, 1.35fr) minmax(260px, .65fr); gap: 18px; }
 .card { border: 1px solid #dce3ef; border-radius: 18px; background: white; padding: 24px; box-shadow: 0 8px 28px #203a7810; }
 h1, h2 { margin-top: 0; } h2 { font-size: 1.05rem; }
-.editor label { display: grid; grid-template-columns: 42px 1fr; align-items: center; gap: 10px; margin: 10px 0; color: #58657d; }
-.value { width: 100%; }
+table { width: 100%; border-collapse: collapse; font-size: .9rem; }
+th, td { border-bottom: 1px solid #e8edf5; padding: 8px 6px; text-align: left; }
+th { color: #58657d; font-weight: 650; }
+.cell-input { width: 100%; min-width: 70px; padding: 7px 8px; }
 .actions { display: flex; gap: 10px; margin-top: 20px; }
 button { border: 0; border-radius: 9px; padding: 10px 15px; font: inherit; font-weight: 650; color: white; background: #3856d9; cursor: pointer; }
 button:hover { background: #2e46b8; } button.secondary { color: #3856d9; background: #eef1ff; }
 .formula { display: flex; justify-content: space-between; gap: 12px; color: #58657d; font-size: .9rem; }
 code { color: #172033; } .answer { margin: 26px 0 20px; font-size: 3rem; font-weight: 750; color: #3856d9; }
 .status { color: #1b7b55; font-size: .9rem; }
+.status.warning { color: #a36500; }
 .boundary { margin: 22px 0; padding: 14px 16px; border-left: 3px solid #8da1e8; color: #58657d; background: #eef1ff; line-height: 1.5; }
 .download { width: 100%; }
 .guide { margin-top: 18px; line-height: 1.6; color: #58657d; }
 .guide h2 { color: #172033; }
 .guide p { margin: 0 0 12px; }
 footer { margin-top: 28px; text-align: center; color: #7c879a; font-size: .85rem; } a { color: #3856d9; }
-@media (max-width: 680px) { .page { padding: 28px 16px; } .header { align-items: flex-start; flex-direction: column; } .grid { grid-template-columns: 1fr; } }
+@media (max-width: 680px) { .page { padding: 28px 16px; } .header, .toolbar { align-items: flex-start; flex-direction: column; } .grid { grid-template-columns: 1fr; } }
