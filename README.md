@@ -77,13 +77,7 @@ See the [v1 support contract](docs/v1-support-contract.md),
 
 ## Development
 
-```bash
-cargo test --workspace
-cargo fmt --all -- --check
-cargo clippy --workspace --all-targets --all-features -- -D warnings
-```
-
-Roadmap and release gates are tracked in [ROADMAP.md](ROADMAP.md). Changes not
-yet released are listed in [CHANGELOG.md](CHANGELOG.md) under `Unreleased`.
+See the [roadmap](ROADMAP.md) for current priorities and release gates.
+Unreleased changes are listed in [CHANGELOG.md](CHANGELOG.md).
 
 License: [MIT](docs/licensing.md). See [third-party notices](THIRD_PARTY_NOTICES.md).

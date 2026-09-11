@@ -4,6 +4,9 @@
 
 ## [Unreleased]
 
+- Documentation: shorten the English, Japanese, and Simplified Chinese README
+  development sections and direct contributors to the roadmap and changelog.
+
 ## [1.0.10] - 2026-09-11
 
 - CI/package metadata: restore the exact workspace-versus-root version check

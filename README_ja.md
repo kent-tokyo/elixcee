@@ -69,12 +69,7 @@ Chart／Drawing／Pivotと数式互換性は限定対応で、未対応OOXMLは�
 
 ## 開発
 
-```bash
-cargo test --workspace
-cargo fmt --all -- --check
-cargo clippy --workspace --all-targets --all-features -- -D warnings
-```
-
-ロードマップは[ROADMAP.md](ROADMAP.md)、未リリースの変更は[CHANGELOG.md](CHANGELOG.md)にあります。
+現在の優先事項とリリース条件は[ロードマップ](ROADMAP.md)を参照してください。
+未リリースの変更は[CHANGELOG.md](CHANGELOG.md)にあります。
 
 License: [MIT](docs/licensing.md)。[third-party notices](THIRD_PARTY_NOTICES.md)も参照してください。

@@ -69,12 +69,6 @@ Chart／Drawing／Pivot 和公式兼容性属于有限支持；未建模的 OOXM
 
 ## 开发
 
-```bash
-cargo test --workspace
-cargo fmt --all -- --check
-cargo clippy --workspace --all-targets --all-features -- -D warnings
-```
-
-路线图见 [ROADMAP.md](ROADMAP.md)，未发布变更见 [CHANGELOG.md](CHANGELOG.md)。
+当前优先事项和发布条件见[路线图](ROADMAP.md)。未发布变更见[CHANGELOG.md](CHANGELOG.md)。
 
 License: [MIT](docs/licensing.md)。另请参阅 [third-party notices](THIRD_PARTY_NOTICES.md)。
