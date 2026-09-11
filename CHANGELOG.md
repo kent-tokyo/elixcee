@@ -16,6 +16,12 @@
   with elixcee 1.0.10. Historical measurement records retain their original
   versions and dates.
 
+## [1.0.11] - 2026-09-11
+
+- Release metadata: bump the Rust/Python package and current documentation
+  references to 1.0.11, including the README badges, support contract,
+  roadmap, feature matrix, and publication workflow default.
+
 ## [1.0.10] - 2026-09-11
 
 - CI/package metadata: restore the exact workspace-versus-root version check

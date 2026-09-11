@@ -1,10 +1,10 @@
 # Documentation map
 
-Documentation version: **1.0.10**. API/coverage pages describe this version;
+Documentation version: **1.0.11**. API/coverage pages describe this version;
 dated benchmark records retain their original baseline and source hashes.
 The JavaScript package remains private at 0.0.0-development.
-The current branch may contain unreleased changes; the published 1.0.10
-contract ends at the `[1.0.10]` section of the changelog.
+The current branch may contain unreleased changes; the published 1.0.11
+contract ends at the `[1.0.11]` section of the changelog.
 
 elixcee is a headless Excel workbook automation runtime. Its native contract
 covers workbook editing, supported formula recalculation, and data-processing

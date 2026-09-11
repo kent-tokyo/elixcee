@@ -1,8 +1,8 @@
 # elixcee
 
 [![CI](https://github.com/kent-tokyo/elixcee/actions/workflows/ci.yml/badge.svg)](https://github.com/kent-tokyo/elixcee/actions/workflows/ci.yml)
-[![Docs](https://docs.rs/elixcee/badge.svg)](https://docs.rs/elixcee/1.0.10/elixcee/)
-[![Version](https://img.shields.io/badge/version-1.0.10-blue.svg)](https://github.com/kent-tokyo/elixcee/releases/tag/v1.0.10)
+[![Docs](https://docs.rs/elixcee/badge.svg)](https://docs.rs/elixcee/1.0.11/elixcee/)
+[![Version](https://img.shields.io/badge/version-1.0.11-blue.svg)](https://github.com/kent-tokyo/elixcee/releases/tag/v1.0.11)
 
 elixcee 是使用 Rust/Python 编写的无头 Excel 运行时。无需安装 Microsoft Excel，
 即可编辑 `.xlsx`／`.xlsm`、重新计算受支持的公式，并运行或诊断数据处理 VBA。
