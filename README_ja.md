@@ -1,5 +1,9 @@
 # elixcee
 
+[![CI](https://github.com/kent-tokyo/elixcee/actions/workflows/ci.yml/badge.svg)](https://github.com/kent-tokyo/elixcee/actions/workflows/ci.yml)
+[![Docs](https://docs.rs/elixcee/badge.svg)](https://docs.rs/elixcee/1.0.9/elixcee/)
+[![Version](https://img.shields.io/badge/version-1.0.9-blue.svg)](https://github.com/kent-tokyo/elixcee/releases/tag/v1.0.9)
+
 [English](README.md) | **日本語** | [中文](README_zh.md)
 
 Microsoft Excelなしで、Excelワークブックを直接編集し、対応する数式を再計算し、

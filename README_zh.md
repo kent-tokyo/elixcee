@@ -1,5 +1,9 @@
 # elixcee
 
+[![CI](https://github.com/kent-tokyo/elixcee/actions/workflows/ci.yml/badge.svg)](https://github.com/kent-tokyo/elixcee/actions/workflows/ci.yml)
+[![Docs](https://docs.rs/elixcee/badge.svg)](https://docs.rs/elixcee/1.0.9/elixcee/)
+[![Version](https://img.shields.io/badge/version-1.0.9-blue.svg)](https://github.com/kent-tokyo/elixcee/releases/tag/v1.0.9)
+
 [English](README.md) | [日本語](README_ja.md) | **中文**
 
 elixcee 是一个使用 Rust/Python 编写的无头 Excel 工作簿自动化运行时，可在不安装 Microsoft Excel 的情况下直接编辑工作簿、重新计算受支持的公式，并运行、测试和诊断面向数据处理的 VBA 子集。项目提供 PyO3 Python API、独立 CLI，以及实验性的 `@elixcee/xlsx` JavaScript/WASM 包。
