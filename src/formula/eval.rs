@@ -155,10 +155,47 @@ fn eval_binop(
     if let Variant::Error(_) = &r {
         return Ok(r);
     }
+    let l_array = match &l {
+        Variant::Array(values) => Some(values.clone()),
+        Variant::VbaArray(array) => Some(array.elements.clone()),
+        _ => None,
+    };
+    let r_array = match &r {
+        Variant::Array(values) => Some(values.clone()),
+        Variant::VbaArray(array) => Some(array.elements.clone()),
+        _ => None,
+    };
+    if l_array.is_some() || r_array.is_some() {
+        let l_values = l_array.unwrap_or_else(|| vec![l.clone()]);
+        let r_values = r_array.unwrap_or_else(|| vec![r.clone()]);
+        let len = l_values.len().max(r_values.len());
+        if !matches!(l_values.len(), 1) && l_values.len() != len
+            || !matches!(r_values.len(), 1) && r_values.len() != len
+        {
+            return Ok(Variant::Error(ExcelError::Value));
+        }
+        let mut result = Vec::with_capacity(len);
+        for index in 0..len {
+            let left = &l_values[if l_values.len() == 1 { 0 } else { index }];
+            let right = &r_values[if r_values.len() == 1 { 0 } else { index }];
+            result.push(eval_scalar_binop(op, left, right)?);
+        }
+        return Ok(Variant::Array(result));
+    }
+    eval_scalar_binop(op, &l, &r)
+}
+
+fn eval_scalar_binop(op: &BinOpKind, l: &Variant, r: &Variant) -> Result<Variant, String> {
+    if let Variant::Error(error) = l {
+        return Ok(Variant::Error(error.clone()));
+    }
+    if let Variant::Error(error) = r {
+        return Ok(Variant::Error(error.clone()));
+    }
     match op {
         BinOpKind::Add | BinOpKind::Sub | BinOpKind::Mul | BinOpKind::Div => {
-            let lf = to_float(&l)?;
-            let rf = to_float(&r)?;
+            let lf = to_float(l)?;
+            let rf = to_float(r)?;
             let result = match op {
                 BinOpKind::Add => lf + rf,
                 BinOpKind::Sub => lf - rf,
@@ -174,12 +211,12 @@ fn eval_binop(
             Ok(as_integer_if_whole(result))
         }
         BinOpKind::Concat => Ok(Variant::Str(format!("{}{}", l, r))),
-        BinOpKind::Eq => Ok(Variant::Boolean(variant_eq(&l, &r))),
-        BinOpKind::Ne => Ok(Variant::Boolean(!variant_eq(&l, &r))),
-        BinOpKind::Lt => Ok(Variant::Boolean(variant_cmp(&l, &r)? == Ordering::Less)),
-        BinOpKind::Le => Ok(Variant::Boolean(variant_cmp(&l, &r)? != Ordering::Greater)),
-        BinOpKind::Gt => Ok(Variant::Boolean(variant_cmp(&l, &r)? == Ordering::Greater)),
-        BinOpKind::Ge => Ok(Variant::Boolean(variant_cmp(&l, &r)? != Ordering::Less)),
+        BinOpKind::Eq => Ok(Variant::Boolean(variant_eq(l, r))),
+        BinOpKind::Ne => Ok(Variant::Boolean(!variant_eq(l, r))),
+        BinOpKind::Lt => Ok(Variant::Boolean(variant_cmp(l, r)? == Ordering::Less)),
+        BinOpKind::Le => Ok(Variant::Boolean(variant_cmp(l, r)? != Ordering::Greater)),
+        BinOpKind::Gt => Ok(Variant::Boolean(variant_cmp(l, r)? == Ordering::Greater)),
+        BinOpKind::Ge => Ok(Variant::Boolean(variant_cmp(l, r)? != Ordering::Less)),
     }
 }
 
@@ -18825,6 +18862,8 @@ mod tests {
             ((3, 1), Variant::Integer(3)),
         ]);
         assert_eq!(calc("=SUM(A1:A3)", &c), Variant::Integer(6));
+        assert_eq!(calc("=SUM(SEQUENCE(2,3))", &c), Variant::Integer(21));
+        assert_eq!(calc("=SUM(SEQUENCE(2,3)+1)", &c), Variant::Integer(27));
         let with_error = cells_from(&[
             ((1, 1), Variant::Integer(1)),
             ((2, 1), Variant::Error(ExcelError::DivZero)),
@@ -18928,6 +18967,8 @@ mod tests {
         assert_eq!(calc("=COUNT(\"x\")", &c), Variant::Integer(0));
         assert_eq!(calc("=COUNTA(\"\")", &c), Variant::Integer(1));
         assert_eq!(calc("=COUNTA(1/0)", &c), Variant::Integer(1));
+        assert_eq!(calc("=COUNT(SEQUENCE(2,3))", &c), Variant::Integer(6));
+        assert_eq!(calc("=COUNTA(SEQUENCE(2,3))", &c), Variant::Integer(6));
         assert_eq!(calc("=COUNT(SEQUENCE(3))", &c), Variant::Integer(3));
         assert_eq!(
             calc("=COUNTA(CHOOSE(SEQUENCE(2),\"x\",\"\"))", &c),
@@ -19205,6 +19246,10 @@ mod tests {
         ]);
         // INDEX(A1:B2, 2, 1) = row 2 col 1 of range = A2 = 30
         assert_eq!(calc("=INDEX(A1:B2,2,1)", &c), Variant::Integer(30));
+        assert_eq!(
+            calc("=INDEX(SEQUENCE(2,2),2,2)", &c),
+            Variant::Integer(4)
+        );
         assert_eq!(
             calc("=INDEX(A1:B2,-1,1)", &c),
             Variant::Error(ExcelError::Value)
@@ -19550,6 +19595,8 @@ mod tests {
         assert_eq!(calc("=ROWS(B3:C7)", &c), Variant::Integer(5));
         assert_eq!(calc("=ROWS(B3)", &c), Variant::Integer(1));
         assert_eq!(calc("=ROWS(SEQUENCE(3))", &c), Variant::Integer(3));
+        assert_eq!(calc("=ROWS(SEQUENCE(2,3))", &c), Variant::Integer(2));
+        assert_eq!(calc("=COLUMNS(SEQUENCE(2,3))", &c), Variant::Integer(3));
         assert_eq!(calc("=ROWS(TRANSPOSE(B3:C7))", &c), Variant::Integer(2));
     }
 

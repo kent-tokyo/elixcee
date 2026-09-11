@@ -603,6 +603,8 @@ formula dirty propagationの同日controlled matrixでは、single-input chain 1
 - [x] G4 Excel coercion follow-up: Excel実測で`PRODUCT("2",TRUE)`が2になることを確認し、直接引数の文字列・論理値を既存coercion経路で扱うようにした。Range内の非数値を除外する境界とError伝播は維持し、全型変換・配列境界・再計算のoracle拡張は継続する。
 - [x] G4 Excel coercion follow-up: Excel実測で`COUNT("1")`／`COUNT(TRUE)`／`COUNT("x")`が1／1／0になることを確認し、直接スカラー引数の数値文字列・論理値だけをCOUNT対象へ追加した。Range内の同型値と既存dynamic arrayの数値判定は維持し、全型変換・配列境界・再計算のoracle拡張は継続する。
 - [x] G4 Excel Empty/Error follow-up: Excel実測で空セル、`=""`、`1/0`、`COUNTBLANK`、空文字列・Error・論理値の`COUNTA`を照合し、現行VMが8件すべて一致することを確認した。配列境界・再計算・他OSのoracle拡張は継続する。
+- [x] G4 Excel dynamic-array follow-up: Excel実測で`SEQUENCE(2,3)`のSUM／COUNT／COUNTA、ROWS／COLUMNS、2D INDEX、配列演算を照合し、Rust evaluatorの2D spill集計・参照回帰を追加した。完全なspill shape metadata・Error伝播・再計算・他OSのoracle拡張は継続する。
+- [x] G4 dynamic-array binary BUILD: scalar／bounded arrayの二項演算を要素単位broadcastへ接続し、`SUM(SEQUENCE(2,3)+1)`のExcel実測値27、配列長不一致の`#VALUE!`、要素Error伝播を回帰した。完全な2D shape metadataとExcel全演算子oracleは未完。
 - [x] 部分 G4 local regression: 生成VBA corpus 581件を現行CLIで再実行し、572 PASS、8 EXPECTED_RUNTIME_ERROR、1 NONDETERMINISTIC、MISMATCH／UNEXPLAINED 0を確認した。実Excel由来の実運用macro、依存グラフ・循環・volatile／dynamic arrayのExcel意味論は未完。[測定記録](docs/measurements/vba-corpus-local-2026-09-10.md)
 
 ローカルsynthetic fixtureの通過数を、実Excelの意味論一致件数として扱いません。

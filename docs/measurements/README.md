@@ -30,7 +30,7 @@ fixture, host, and scope limit its conclusions. Open work belongs in the
 - [VBA diagnostic corpus measurement, 2026-09-11](vba-diagnostic-corpus-2026-09-11.json): versioned five-case runner timing and host metadata; not a cross-library or Excel-oracle benchmark.
 - [Writer streaming measurement, 2026-09-11](writer-streaming-2026-09-11.md): current-wheel macOS append RSS and semantic-output checks for 100,000 and 250,000 rows.
 - [Self-contained local gates, 2026-09-11](local-gates-2026-09-11.md): current-host Rust, fuzz, package, WASM, and browser gate results.
-- [Microsoft Excel formula oracle, 2026-09-11](formula-excel-oracle-2026-09-11.md): 26 real Excel formula probes compared with the current source wheel, including coercion, Empty/Error, and mixed-type aggregate boundaries.
+- [Microsoft Excel formula oracle, 2026-09-11](formula-excel-oracle-2026-09-11.md): 33 real Excel formula probes compared with the current source/evaluator regressions, including coercion, Empty/Error, mixed-type aggregates, and dynamic-array boundaries.
 - [HyperFormula dynamic-array oracle, 2026-09-11](formula-hyperformula-dynamic-2026-09-11.json): fixed HyperFormula 3.4.0 probes for VSTACK/HSTACK/UNIQUE/SORT/XIRR; separate from Excel and LibreOffice evidence.
 - [G6 readiness, 2026-09-11](g6-readiness-2026-09-11.md): current evidence audit and explicit remaining gates; not a completion sign-off.
 

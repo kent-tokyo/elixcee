@@ -76,3 +76,17 @@ returned `0.75`, `MINA` returned `0`, `MAXA` returned `1`, `COUNT` returned
 between numeric-only `COUNT`, non-empty `COUNTA`, and the logical/text
 coercion used by the `*A` aggregate family for referenced ranges. They remain
 small single-host probes, not complete type-coercion coverage.
+
+## Dynamic-array shape probes
+
+Excel returned `21` for `SUM(SEQUENCE(2,3))`, `6` for both
+`COUNT(SEQUENCE(2,3))` and `COUNTA(SEQUENCE(2,3))`, `2` for
+`ROWS(SEQUENCE(2,3))`, `3` for `COLUMNS(SEQUENCE(2,3))`, `4` for
+`INDEX(SEQUENCE(2,2),2,2)`, and `27` for `SUM(SEQUENCE(2,3)+1)`. The current
+Rust evaluator has matching source-level regressions for these 2D spill and
+aggregation boundaries. These are additional Excel observations; they are
+not a claim of complete spill-shape metadata or cross-version parity.
+
+The previously failing `SUM(SEQUENCE(2,3)+1)` case is now supported by
+element-wise scalar/array broadcasting with bounded equal-length validation;
+array errors remain represented as per-element Excel errors.
