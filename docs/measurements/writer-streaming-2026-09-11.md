@@ -1,0 +1,25 @@
+# Writer streaming measurement — 2026-09-11
+
+Scope: local macOS arm64, CPython 3.13, an isolated venv containing a wheel
+built from the current source (`elixcee` 1.0.10), append mode, three columns,
+plain values, two repetitions per case. Each child process output passed ZIP,
+worksheet-shape, final-row, and streaming semantic-digest checks.
+
+| rows | RSS p50 / p95 | child wall p50 / p95 | output | semantic |
+|---:|---:|---:|---:|:---:|
+| 100,000 | 19.88 / 19.97 MiB | 415 / 436 ms | 1.36 MiB | pass |
+| 250,000 | 19.88 / 19.91 MiB | 1,019 / 1,071 ms | 3.43 MiB | pass |
+
+The append writer's peak RSS stayed effectively flat across these two row
+counts on this host. This is evidence for this bounded append path only; it
+does not establish constant memory for the normal VM, Linux/Windows behavior,
+Excel compatibility, or a complete G5 gate. The raw report was generated at
+`/private/tmp/elixcee-stream-memory-20260911.json` and is intentionally kept
+outside the repository because it contains host-specific temporary paths.
+
+Command:
+
+```text
+python scripts/measure-stream-writer-memory.py --rows 100000 250000 \
+  --columns 3 --mode append --value-profile plain --repetitions 2
+```
