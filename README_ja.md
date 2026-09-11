@@ -1,8 +1,8 @@
 # elixcee
 
 [![CI](https://github.com/kent-tokyo/elixcee/actions/workflows/ci.yml/badge.svg)](https://github.com/kent-tokyo/elixcee/actions/workflows/ci.yml)
-[![Docs](https://docs.rs/elixcee/badge.svg)](https://docs.rs/elixcee/1.0.9/elixcee/)
-[![Version](https://img.shields.io/badge/version-1.0.9-blue.svg)](https://github.com/kent-tokyo/elixcee/releases/tag/v1.0.9)
+[![Docs](https://docs.rs/elixcee/badge.svg)](https://docs.rs/elixcee/1.0.10/elixcee/)
+[![Version](https://img.shields.io/badge/version-1.0.10-blue.svg)](https://github.com/kent-tokyo/elixcee/releases/tag/v1.0.10)
 
 Microsoft Excelなしで、`.xlsx`／`.xlsm`を編集し、対応する数式を再計算し、
 データ処理向けVBAを実行・診断できるRust/Python製のヘッドレスExcelランタイムです。

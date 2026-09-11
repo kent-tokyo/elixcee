@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+## [1.0.10] - 2026-09-11
+
 - CI/package metadata: restore the exact workspace-versus-root version check
   for the independently published `elixcee-types` crate and align the root
   dependency pin with `elixcee-types` 0.4.1. The published-source hash check
