@@ -8532,7 +8532,21 @@ fn save_xlsx_impl(vm: &Vm, path: &str, sync: bool) -> Result<(), String> {
             legacy_drawing: legacy_drawing.as_deref(),
         };
 
-        zip.start_file(plan.output_part_name.as_str(), deflated)
+        // For genuinely large generated worksheets, compression CPU dominates
+        // this save path and the durable write is already the expensive I/O
+        // barrier. Keep the compact Deflate output for small sheets, while
+        // using Stored for dense sheets where the measured throughput win is
+        // material. The threshold also prevents tiny workbooks from growing
+        // unnecessarily.
+        let worksheet_options = if vm
+            .get_sheet_cells(sheet_name)
+            .is_some_and(|cells| cells.len() >= 10_000)
+        {
+            zip::write::SimpleFileOptions::default().compression_method(CompressionMethod::Stored)
+        } else {
+            deflated
+        };
+        zip.start_file(plan.output_part_name.as_str(), worksheet_options)
             .map_err(|e| e.to_string())?;
         // Batch XML fragments before compression as well as compressed bytes
         // before filesystem writes. Memory remains bounded for large sheets.
