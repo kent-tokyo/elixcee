@@ -24,6 +24,11 @@ generator output (`target/tmp/g2d-chart-bar-smoke.xlsm`) from
 recovery dialog before opening the workbook. The warning was dismissed without
 accepting recovery, so no repaired workbook was used as evidence.
 
+A second 2026-09-11 probe used data rows only (`A2:A6` categories and `B2:B6`
+values), avoiding the header/type mix in the first smoke input. Excel still
+displayed the same recovery dialog and opened the file as `修復済み`; therefore
+the warning is not explained by the original header-inclusive ranges.
+
 ## Scope
 
 - `Vm.set_chart_series_formulas(chart_part, series_index, categories, values)`

@@ -1445,6 +1445,37 @@ fn create_bar_chart_connects_new_part_to_existing_drawing() {
     assert!(chart.contains("<c:f>Sheet1!$B$1:$B$5</c:f>"));
 }
 
+/// G2 measurement helper: use data rows only so a generated bar chart does not
+/// mix a header string into its numeric value reference.
+#[test]
+fn create_bar_chart_with_data_rows_only() {
+    let source_path = real_fixture("fixture5_chart_image_freeze_print.xlsm");
+    let output_path = tmp_path("create_bar_chart_data_rows_output.xlsm");
+    let mut vm = Vm::new();
+    vm.load_workbook_file(&source_path)
+        .expect("real fixture should load");
+    vm.add_chart(
+        "xl/drawings/drawing1.xml",
+        "bar",
+        "Sheet1!$A$2:$A$6",
+        "Sheet1!$B$2:$B$6",
+        Some("Bar chart data rows"),
+        2,
+        2,
+        12,
+        10,
+    )
+    .expect("bar chart creation should accept data rows");
+    save_workbook(&vm, &output_path).expect("bar chart should save");
+    if let Ok(kept_path) = std::env::var("ELIXCEE_KEEP_BAR_CHART_DATA_OUTPUT") {
+        std::fs::copy(&output_path, kept_path).expect("chart output should be copied");
+    }
+    let output_entries = read_all_zip_entries(&std::fs::read(&output_path).unwrap());
+    let chart = String::from_utf8(output_entries["xl/charts/chart-new-1.xml"].clone()).unwrap();
+    assert!(chart.contains("<c:f>Sheet1!$A$2:$A$6</c:f>"));
+    assert!(chart.contains("<c:f>Sheet1!$B$2:$B$6</c:f>"));
+}
+
 /// G2d: the chart-series smooth edit is exercised through the loaded-workbook
 /// save path. The real fixture has no smooth flag, so the test injects only
 /// that existing-OOXML element into a temporary copy before loading it.
