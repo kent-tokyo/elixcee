@@ -8538,14 +8538,13 @@ fn save_xlsx_impl(vm: &Vm, path: &str, sync: bool) -> Result<(), String> {
         // using Stored for dense sheets where the measured throughput win is
         // material. The threshold also prevents tiny workbooks from growing
         // unnecessarily.
-        let worksheet_options = if vm
-            .get_sheet_cells(sheet_name)
-            .is_some_and(|cells| cells.len() >= 10_000)
-        {
-            zip::write::SimpleFileOptions::default().compression_method(CompressionMethod::Stored)
-        } else {
-            deflated
-        };
+        let worksheet_options =
+            if worksheet_prefers_stored_compression(vm.get_sheet_cells(sheet_name)) {
+                zip::write::SimpleFileOptions::default()
+                    .compression_method(CompressionMethod::Stored)
+            } else {
+                deflated
+            };
         zip.start_file(plan.output_part_name.as_str(), worksheet_options)
             .map_err(|e| e.to_string())?;
         // Batch XML fragments before compression as well as compressed bytes
@@ -8648,6 +8647,33 @@ fn save_xlsx_impl(vm: &Vm, path: &str, sync: bool) -> Result<(), String> {
     drop(file);
     publish_atomic_output(path, &temporary)?;
     Ok(())
+}
+
+/// Return whether a generated worksheet is a good candidate for ZIP Stored.
+///
+/// Dense numeric sheets are dominated by XML serialization and compression
+/// CPU, while text-heavy sheets benefit much more from Deflate's size
+/// reduction. Keep the fast path deliberately conservative: the threshold and
+/// payload-shape guard are part of the performance/size trade-off and prevent
+/// a large text workbook from unexpectedly expanding just because it has many
+/// populated cells.
+fn worksheet_prefers_stored_compression(
+    cells: Option<&std::collections::HashMap<(u32, u32), types::CellContent>>,
+) -> bool {
+    let Some(cells) = cells else {
+        return false;
+    };
+    cells.len() >= 10_000
+        && cells.values().all(|cell| {
+            matches!(
+                cell.value,
+                Variant::Integer(_)
+                    | Variant::Float(_)
+                    | Variant::Boolean(_)
+                    | Variant::Date(_)
+                    | Variant::Empty
+            )
+        })
 }
 
 fn build_xlsx_root_rels(carried_root_rels: &[(String, String)]) -> String {
@@ -10874,6 +10900,29 @@ mod elixcee {
 mod tests {
     use super::*;
     use calamine::{Reader, Xlsx, open_workbook};
+
+    #[test]
+    fn stored_worksheet_compression_is_limited_to_large_numeric_payloads() {
+        let mut numeric = std::collections::HashMap::new();
+        for row in 1..=10_000 {
+            numeric.insert(
+                (row, 1),
+                CellContent {
+                    formula: None,
+                    value: Variant::Integer(row as i64),
+                },
+            );
+        }
+        assert!(worksheet_prefers_stored_compression(Some(&numeric)));
+
+        let mut text = numeric.clone();
+        text.get_mut(&(10_000, 1)).unwrap().value = Variant::Str("text".into());
+        assert!(!worksheet_prefers_stored_compression(Some(&text)));
+
+        numeric.remove(&(10_000, 1));
+        assert!(!worksheet_prefers_stored_compression(Some(&numeric)));
+        assert!(!worksheet_prefers_stored_compression(None));
+    }
 
     #[test]
     fn structural_ooxml_reference_gate_detects_chart_and_pivot_packages() {

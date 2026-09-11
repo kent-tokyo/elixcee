@@ -73,6 +73,11 @@ After analysis, relationship parts are also copied directly from the source ZIP;
 only a worksheet `.rels` requiring a new-table patch is materialized for output.
 Once connectivity and pruning checks finish, the raw relationship bytes are released;
 only the analysis index and entry names remain until output.
+Generated worksheets with at least 10,000 populated numeric/date/boolean/empty
+cells use ZIP `Stored` to avoid compression CPU; text or mixed-value worksheets
+continue to use Deflate level 1. This is a bounded throughput optimization, not
+a promise that every workbook becomes smaller or faster, and the output-size
+trade-off is measured separately.
 Python's
 append-only writer already writes each accepted row to ZIP, but materializes one
 row and its XML; its cumulative byte counter is not retained-memory telemetry.

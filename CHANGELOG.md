@@ -4,6 +4,10 @@
 
 ## [Unreleased]
 
+- Performance follow-up: use ZIP `Stored` only for large, dense numeric
+  worksheets; large text/mixed worksheets continue to use Deflate level 1 so
+  the throughput optimization does not cause avoidable package expansion.
+  Added a regression test for the compression-selection boundary.
 - Performance follow-up: reduce large-workbook load overhead by making A1
   parsing allocation-free, skipping empty formula-map lookups and absent
   optional-feature rescans, and lazily loading worksheet code names for event
