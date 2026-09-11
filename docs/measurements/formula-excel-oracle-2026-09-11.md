@@ -92,6 +92,10 @@ Excel returned `12` for the row/column broadcast
 `SUM(SEQUENCE(2)+SEQUENCE(3))`. The evaluator now uses the existing formula
 shape resolver for row/column broadcasting and rejects incompatible axes.
 
+Excel returned `-21` for `SUM(-SEQUENCE(2,3))` and `-15` for
+`SUM(-SEQUENCE(2,3)+1)`. Unary minus now maps over bounded formula arrays in
+the evaluator, including element Error preservation.
+
 The previously failing `SUM(SEQUENCE(2,3)+1)` case is now supported by
 element-wise scalar/array broadcasting with bounded equal-length validation;
 array errors remain represented as per-element Excel errors.

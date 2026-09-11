@@ -122,6 +122,29 @@ pub fn evaluate(
         FormulaExpr::UnaryMinus(inner) => match evaluate(inner, cells)? {
             Variant::Integer(n) => Ok(Variant::Integer(-n)),
             Variant::Float(f) => Ok(Variant::Float(-f)),
+            Variant::Array(values) => Ok(Variant::Array(
+                values
+                    .into_iter()
+                    .map(|value| match value {
+                        Variant::Error(error) => Variant::Error(error),
+                        value => to_float(&value)
+                            .map(|number| as_integer_if_whole(-number))
+                            .unwrap_or(Variant::Error(ExcelError::Value)),
+                    })
+                    .collect(),
+            )),
+            Variant::VbaArray(array) => Ok(Variant::Array(
+                array
+                    .elements
+                    .into_iter()
+                    .map(|value| match value {
+                        Variant::Error(error) => Variant::Error(error),
+                        value => to_float(&value)
+                            .map(|number| as_integer_if_whole(-number))
+                            .unwrap_or(Variant::Error(ExcelError::Value)),
+                    })
+                    .collect(),
+            )),
             other => Err(format!("Unary minus on non-numeric value: {}", other)),
         },
         FormulaExpr::BinOp { op, lhs, rhs } => eval_binop(op, lhs, rhs, cells),
@@ -18898,6 +18921,8 @@ mod tests {
         assert_eq!(calc("=SUM(A1:A3)", &c), Variant::Integer(6));
         assert_eq!(calc("=SUM(SEQUENCE(2,3))", &c), Variant::Integer(21));
         assert_eq!(calc("=SUM(SEQUENCE(2,3)+1)", &c), Variant::Integer(27));
+        assert_eq!(calc("=SUM(-SEQUENCE(2,3))", &c), Variant::Integer(-21));
+        assert_eq!(calc("=SUM(-SEQUENCE(2,3)+1)", &c), Variant::Integer(-15));
         assert_eq!(
             calc("=SUM(SEQUENCE(2,1)+SEQUENCE(1,2))", &c),
             Variant::Integer(12)
