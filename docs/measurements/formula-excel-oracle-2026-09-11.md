@@ -87,6 +87,11 @@ Rust evaluator has matching source-level regressions for these 2D spill and
 aggregation boundaries. These are additional Excel observations; they are
 not a claim of complete spill-shape metadata or cross-version parity.
 
+Excel returned `12` for the row/column broadcast
+`SUM(SEQUENCE(2,1)+SEQUENCE(1,2))` and an error for the incompatible
+`SUM(SEQUENCE(2)+SEQUENCE(3))`. The evaluator now uses the existing formula
+shape resolver for row/column broadcasting and rejects incompatible axes.
+
 The previously failing `SUM(SEQUENCE(2,3)+1)` case is now supported by
 element-wise scalar/array broadcasting with bounded equal-length validation;
 array errors remain represented as per-element Excel errors.

@@ -166,23 +166,57 @@ fn eval_binop(
         _ => None,
     };
     if l_array.is_some() || r_array.is_some() {
+        let l_is_array = l_array.is_some();
+        let r_is_array = r_array.is_some();
         let l_values = l_array.unwrap_or_else(|| vec![l.clone()]);
         let r_values = r_array.unwrap_or_else(|| vec![r.clone()]);
-        let len = l_values.len().max(r_values.len());
-        if !matches!(l_values.len(), 1) && l_values.len() != len
-            || !matches!(r_values.len(), 1) && r_values.len() != len
+        let l_shape = if l_is_array {
+            array_shape_for_expr(lhs, cells, l_values.len())
+        } else {
+            (1, 1)
+        };
+        let r_shape = if r_is_array {
+            array_shape_for_expr(rhs, cells, r_values.len())
+        } else {
+            (1, 1)
+        };
+        if l_shape.0.saturating_mul(l_shape.1) != l_values.len()
+            || r_shape.0.saturating_mul(r_shape.1) != r_values.len()
         {
             return Ok(Variant::Error(ExcelError::Value));
         }
-        let mut result = Vec::with_capacity(len);
-        for index in 0..len {
-            let left = &l_values[if l_values.len() == 1 { 0 } else { index }];
-            let right = &r_values[if r_values.len() == 1 { 0 } else { index }];
-            result.push(eval_scalar_binop(op, left, right)?);
+        let rows = broadcast_dimension(l_shape.0, r_shape.0);
+        let cols = broadcast_dimension(l_shape.1, r_shape.1);
+        let (Some(rows), Some(cols)) = (rows, cols) else {
+            return Ok(Variant::Error(ExcelError::Value));
+        };
+        let mut result = Vec::with_capacity(rows.saturating_mul(cols));
+        for row in 0..rows {
+            for col in 0..cols {
+                let left_row = if l_shape.0 == 1 { 0 } else { row };
+                let left_col = if l_shape.1 == 1 { 0 } else { col };
+                let right_row = if r_shape.0 == 1 { 0 } else { row };
+                let right_col = if r_shape.1 == 1 { 0 } else { col };
+                let left = &l_values[left_row * l_shape.1 + left_col];
+                let right = &r_values[right_row * r_shape.1 + right_col];
+                result.push(eval_scalar_binop(op, left, right)?);
+            }
         }
         return Ok(Variant::Array(result));
     }
     eval_scalar_binop(op, &l, &r)
+}
+
+fn broadcast_dimension(left: usize, right: usize) -> Option<usize> {
+    if left == right {
+        Some(left)
+    } else if left == 1 {
+        Some(right)
+    } else if right == 1 {
+        Some(left)
+    } else {
+        None
+    }
 }
 
 fn eval_scalar_binop(op: &BinOpKind, l: &Variant, r: &Variant) -> Result<Variant, String> {
@@ -18864,6 +18898,14 @@ mod tests {
         assert_eq!(calc("=SUM(A1:A3)", &c), Variant::Integer(6));
         assert_eq!(calc("=SUM(SEQUENCE(2,3))", &c), Variant::Integer(21));
         assert_eq!(calc("=SUM(SEQUENCE(2,3)+1)", &c), Variant::Integer(27));
+        assert_eq!(
+            calc("=SUM(SEQUENCE(2,1)+SEQUENCE(1,2))", &c),
+            Variant::Integer(12)
+        );
+        assert_eq!(
+            calc("=SUM(SEQUENCE(2)+SEQUENCE(3))", &c),
+            Variant::Error(ExcelError::Value)
+        );
         let with_error = cells_from(&[
             ((1, 1), Variant::Integer(1)),
             ((2, 1), Variant::Error(ExcelError::DivZero)),
