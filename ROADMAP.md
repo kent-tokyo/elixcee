@@ -611,6 +611,7 @@ formula dirty propagationの同日controlled matrixでは、single-input chain 1
 - [x] G4 dynamic-array unary BUILD: `UnaryMinus`をbounded formula array／VBA arrayの要素単位評価へ接続し、`SUM(-SEQUENCE(2,3))`とscalar加算後のExcel値を回帰した。完全なunary演算・shape metadata・Excel oracleは未完。
 - [x] G4 dynamic-array Error follow-up: Excel実測で配列内Errorの`SUM`／`AVERAGE`伝播、`COUNT`／`COUNTA`の扱い、`IF`のlazy branch、配列演算Errorを照合し、6件の回帰を追加した。完全な2D shape metadata・全関数のError優先順位・再計算oracleは未完。
 - [x] G3 Excel dependency follow-up: `P1→P2→P3`の3セル依存鎖をExcelとVMで変更前後に評価し、automatic再計算の`4→8`一致を確認した。cross-sheet／volatile／cycle／spillを含む完全な再計算oracleは未完。
+- [x] G3 cross-sheet dependency follow-up: `OracleInput!A1→OracleCalc!B1→C1`をExcelの明示full calculateとVM workbook recalculationで評価し、`4→8`一致を確認した。AppleScriptの入力順によるautomatic timingは主張せず、volatile／cycle／spillを含む完全な再計算oracleは未完。
 - [x] 部分 G4 local regression: 生成VBA corpus 581件を現行CLIで再実行し、572 PASS、8 EXPECTED_RUNTIME_ERROR、1 NONDETERMINISTIC、MISMATCH／UNEXPLAINED 0を確認した。実Excel由来の実運用macro、依存グラフ・循環・volatile／dynamic arrayのExcel意味論は未完。[測定記録](docs/measurements/vba-corpus-local-2026-09-10.md)
 
 ローカルsynthetic fixtureの通過数を、実Excelの意味論一致件数として扱いません。

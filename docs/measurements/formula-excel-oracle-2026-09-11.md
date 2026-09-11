@@ -108,6 +108,16 @@ recalculated `P3` to `8`; the current VM produced the same `4 → 8` sequence
 after `set_cell` and `recalculate`. This is a focused automatic-recalculation
 probe, not evidence for every cross-sheet, volatile, cycle, or spill rule.
 
+## Cross-sheet dependency recalculation
+
+With `OracleInput!A1 = 1`, `OracleCalc!B1 = OracleInput!A1+1`, and
+`OracleCalc!C1 = B1*2`, Excel returned `C1 = 4`. After changing the input to
+`3` and issuing Excel's explicit full calculation, `C1 = 8`; the current VM
+returned the same `4 → 8` sequence after its workbook recalculation. The
+Excel probe is explicitly a full-calculation result because the AppleScript
+multi-cell input sequence does not establish an automatic-update timing
+guarantee.
+
 Excel's Error/array probes returned an error for
 `SUM(CHOOSE(SEQUENCE(2),1,1/0))` and `AVERAGE(CHOOSE(SEQUENCE(2),1,1/0))`,
 `1` for `COUNT(CHOOSE(SEQUENCE(2),1,1/0))`, `2` for the corresponding
