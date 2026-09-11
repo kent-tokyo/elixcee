@@ -1397,6 +1397,8 @@ fn create_chart_connects_new_part_to_existing_drawing() {
     assert!(rels.contains("relationships/chart"));
     assert!(rels.contains("Target=\"../charts/chart-new-1.xml\""));
     assert!(rels.contains("Target=\"../charts/chart-new-2.xml\""));
+    assert!(!output_entries.contains_key("xl/charts/_rels/chart-new-1.xml.rels"));
+    assert!(!output_entries.contains_key("xl/charts/_rels/chart-new-2.xml.rels"));
     for chart_name in ["chart-new-1.xml", "chart-new-2.xml"] {
         let relation = rels
             .split("<Relationship ")
