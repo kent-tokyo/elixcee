@@ -266,6 +266,9 @@ creation remains an Excel-reopen failure until the Chart XML/Drawing structure
 is corrected. A bar-only output was then opened after adding the OOXML
 `<c:crossBetween val="between"/>` value-axis element; Excel still showed the
 same warning. That element is therefore not sufficient to fix the failure.
+Adding an explicit literal `c:tx` series name to the generated bar chart was
+also insufficient; Excel emitted the same warning. The candidate failure is
+still in the broader Chart/Drawing package structure.
 
 ## Not measured or claimed
 
