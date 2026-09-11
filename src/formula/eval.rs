@@ -1260,30 +1260,42 @@ fn func_count(
     cells: &HashMap<(u32, u32), CellContent>,
 ) -> Result<Variant, String> {
     let mut count = 0usize;
-    for value in collect_all(args, cells)? {
-        count += match value {
-            Variant::Integer(_) | Variant::Float(_) | Variant::Date(_) => 1,
-            Variant::Array(values) => values
-                .into_iter()
-                .filter(|value| {
-                    matches!(
-                        value,
-                        Variant::Integer(_) | Variant::Float(_) | Variant::Date(_)
-                    )
-                })
-                .count(),
-            Variant::VbaArray(array) => array
-                .elements
-                .into_iter()
-                .filter(|value| {
-                    matches!(
-                        value,
-                        Variant::Integer(_) | Variant::Float(_) | Variant::Date(_)
-                    )
-                })
-                .count(),
-            _ => 0,
-        };
+    for arg in args {
+        let is_reference = matches!(arg, FormulaExpr::Range { .. })
+            || matches!(arg, FormulaExpr::FuncCall { name, .. } if name.eq_ignore_ascii_case("OFFSET"));
+        for value in if is_reference {
+            collect_values(arg, cells)?
+        } else {
+            vec![evaluate(arg, cells)?]
+        } {
+            count += match value {
+                Variant::Integer(_) | Variant::Float(_) | Variant::Date(_) => 1,
+                // Excel counts logical values and numeric text supplied as
+                // direct scalar arguments, but not those values in a range.
+                Variant::Boolean(_) if !is_reference => 1,
+                Variant::Str(text) if !is_reference && text.parse::<f64>().is_ok() => 1,
+                Variant::Array(values) => values
+                    .into_iter()
+                    .filter(|value| {
+                        matches!(
+                            value,
+                            Variant::Integer(_) | Variant::Float(_) | Variant::Date(_)
+                        )
+                    })
+                    .count(),
+                Variant::VbaArray(array) => array
+                    .elements
+                    .into_iter()
+                    .filter(|value| {
+                        matches!(
+                            value,
+                            Variant::Integer(_) | Variant::Float(_) | Variant::Date(_)
+                        )
+                    })
+                    .count(),
+                _ => 0,
+            };
+        }
     }
     Ok(Variant::Integer(count as i64))
 }
@@ -18834,6 +18846,9 @@ mod tests {
         assert_eq!(calc("=AVERAGE(A1:A3)", &c), Variant::Float(20.0));
         assert_eq!(calc("=MIN(\"1\",TRUE)", &c), Variant::Integer(1));
         assert_eq!(calc("=MAX(\"1\",TRUE)", &c), Variant::Integer(1));
+        assert_eq!(calc("=COUNT(\"1\")", &c), Variant::Integer(1));
+        assert_eq!(calc("=COUNT(TRUE)", &c), Variant::Integer(1));
+        assert_eq!(calc("=COUNT(\"x\")", &c), Variant::Integer(0));
         let with_error = cells_from(&[
             ((1, 1), Variant::Integer(10)),
             ((2, 1), Variant::Error(ExcelError::NA)),

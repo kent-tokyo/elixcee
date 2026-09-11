@@ -601,6 +601,7 @@ formula dirty propagationの同日controlled matrixでは、single-input chain 1
 - [ ] Excelとの型変換・丸め・日付・Empty／Error・配列境界・再計算の独立oracle比較を拡張。
 - [x] G4 Excel coercion follow-up: Excel実測で`MIN("1",TRUE)`／`MAX("1",TRUE)`がともに1になることを確認し、直接引数だけをcoerceする共通経路へ接続した。Range内の文字列・論理値を除外する回帰も維持し、全型変換・配列境界・再計算のoracle拡張は継続する。
 - [x] G4 Excel coercion follow-up: Excel実測で`PRODUCT("2",TRUE)`が2になることを確認し、直接引数の文字列・論理値を既存coercion経路で扱うようにした。Range内の非数値を除外する境界とError伝播は維持し、全型変換・配列境界・再計算のoracle拡張は継続する。
+- [x] G4 Excel coercion follow-up: Excel実測で`COUNT("1")`／`COUNT(TRUE)`／`COUNT("x")`が1／1／0になることを確認し、直接スカラー引数の数値文字列・論理値だけをCOUNT対象へ追加した。Range内の同型値と既存dynamic arrayの数値判定は維持し、全型変換・配列境界・再計算のoracle拡張は継続する。
 - [x] 部分 G4 local regression: 生成VBA corpus 581件を現行CLIで再実行し、572 PASS、8 EXPECTED_RUNTIME_ERROR、1 NONDETERMINISTIC、MISMATCH／UNEXPLAINED 0を確認した。実Excel由来の実運用macro、依存グラフ・循環・volatile／dynamic arrayのExcel意味論は未完。[測定記録](docs/measurements/vba-corpus-local-2026-09-10.md)
 
 ローカルsynthetic fixtureの通過数を、実Excelの意味論一致件数として扱いません。

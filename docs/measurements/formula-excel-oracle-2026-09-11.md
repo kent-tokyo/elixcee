@@ -57,6 +57,10 @@ referenced range remain excluded. Focused regressions cover both functions.
 Excel also returns `2` for `=PRODUCT("2",TRUE)`. `PRODUCT` now uses the same
 direct-argument coercion path, with a regression for the observed result.
 
+The direct-argument boundary also measured `COUNT("1") = 1`, `COUNT(TRUE) = 1`,
+and `COUNT("x") = 0` in Excel. `COUNT` now counts numeric text and logical
+scalar arguments while continuing to ignore those values inside a reference.
+
 ## Mixed-type aggregate range probes
 
 Five additional range probes used `A1:B2 = {{1,1},{TRUE,"x"}}` in the same
