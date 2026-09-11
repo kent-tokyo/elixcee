@@ -21,3 +21,24 @@ The source cells were `A1:A3 = 1,2,3`. The Excel side was driven by
 not a complete Excel compatibility claim. Locale, date-system variants,
 coercion boundaries, arrays, errors, other Excel versions, and all remaining
 functions still require separate oracle coverage.
+
+## Boundary extension
+
+Eight additional probes were run in the same workbook and environment:
+
+| case | formula | Excel | elixcee | result |
+|---|---|---|---|:---:|
+| round-positive | `=ROUND(2.675,2)` | 2.68 | 2.68 | match |
+| round-negative | `=ROUND(-2.675,2)` | -2.68 | -2.68 | match |
+| date-start | `=DATE(1900,1,1)` | 1900-01-01 | 1900-01-01 | match |
+| date-leap-boundary | `=DATE(1900,2,29)` | 1900-03-01 | 1900-03-01 | match |
+| iferror | `=IFERROR(1/0,"fallback")` | fallback | fallback | match |
+| isblank | `=ISBLANK(C1)` | TRUE | TRUE | match |
+| rows | `=ROWS(A1:B2)` | 2 | 2 | match |
+| columns | `=COLUMNS(A1:B2)` | 2 | 2 | match |
+
+The date cells were compared by calendar value because AppleScript returns
+Excel date results as localized date objects while the binding returns Python
+`date` values. The combined result is 14/14 matching probes on one host; it
+still does not cover the full type-conversion, 1904-date, array-spill, or
+recalculation surface.
