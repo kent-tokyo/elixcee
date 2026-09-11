@@ -31,10 +31,15 @@ jobs:
       - run: npm ci
         working-directory: packages/xlsx
       - run: node playground/build.mjs
+      - name: Arrange site paths
+        run: |
+          mkdir -p site/playground
+          cp -R playground/dist/. site/
+          cp -R playground/dist/. site/playground/
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:
-          path: playground/dist
+          path: site
 
   deploy:
     needs: build
