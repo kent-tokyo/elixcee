@@ -2037,7 +2037,19 @@ fn func_index(
     if args.len() < 2 || args.len() > 4 {
         return Err("INDEX requires 2 to 4 arguments".into());
     }
-    let (c1, r1, c2, r2) = require_range(&args[0], "INDEX")?;
+    let range = require_range(&args[0], "INDEX").ok();
+    let array_values = if range.is_none() {
+        Some(flatten_array_vals(collect_values(&args[0], cells)?))
+    } else {
+        None
+    };
+    let (height, width) = if let Some((c1, r1, c2, r2)) = range.as_ref() {
+        (i64::from(r2 - r1 + 1), i64::from(c2 - c1 + 1))
+    } else {
+        let values = array_values.as_ref().expect("array values are present");
+        let (rows, cols) = array_shape_for_expr(&args[0], cells, values.len());
+        (rows as i64, cols as i64)
+    };
     let integer_index = |arg: &FormulaExpr| -> Result<i64, String> {
         match evaluate(arg, cells)? {
             Variant::Integer(value) => Ok(value),
@@ -2079,32 +2091,59 @@ fn func_index(
     if row_off < 0 || col_off < 0 {
         return Ok(Variant::Error(ExcelError::Value));
     }
-    let height = i64::from(r2 - r1 + 1);
-    let width = i64::from(c2 - c1 + 1);
     if row_off > height || col_off > width {
         return Ok(Variant::Error(ExcelError::Ref));
     }
     if row_off == 0 || col_off == 0 {
-        let rows = if row_off == 0 {
-            r1..=r2
+        let row_start = if row_off == 0 {
+            0
         } else {
-            r1 + row_off as u32 - 1..=r1 + row_off as u32 - 1
+            row_off as usize - 1
         };
-        let cols = if col_off == 0 {
-            c1..=c2
+        let row_end = if row_off == 0 {
+            height as usize
         } else {
-            c1 + col_off as u32 - 1..=c1 + col_off as u32 - 1
+            row_start + 1
         };
-        let values = rows
-            .flat_map(|row| cols.clone().map(move |col| cell_val(cells, row, col)))
-            .collect();
+        let col_start = if col_off == 0 {
+            0
+        } else {
+            col_off as usize - 1
+        };
+        let col_end = if col_off == 0 {
+            width as usize
+        } else {
+            col_start + 1
+        };
+        let values = if let Some(source) = array_values {
+            (row_start..row_end)
+                .flat_map(|row| {
+                    source[row * width as usize + col_start..row * width as usize + col_end]
+                        .iter()
+                        .cloned()
+                })
+                .collect()
+        } else {
+            let (c1, r1, _c2, _r2) = range.expect("range is present");
+            (row_start..row_end)
+                .flat_map(|row| {
+                    (col_start..col_end)
+                        .map(move |col| cell_val(cells, r1 + row as u32, c1 + col as u32))
+                })
+                .collect()
+        };
         return Ok(Variant::Array(values));
     }
-    Ok(cell_val(
-        cells,
-        r1 + row_off as u32 - 1,
-        c1 + col_off as u32 - 1,
-    ))
+    if let Some(source) = array_values {
+        Ok(source[(row_off as usize - 1) * width as usize + col_off as usize - 1].clone())
+    } else {
+        let (c1, r1, _c2, _r2) = range.expect("range is present");
+        Ok(cell_val(
+            cells,
+            r1 + row_off as u32 - 1,
+            c1 + col_off as u32 - 1,
+        ))
+    }
 }
 
 fn func_match_fn(
@@ -17226,6 +17265,32 @@ fn array_shape_for_expr(
             );
             (cols, rows)
         }
+        FormulaExpr::FuncCall { name, args }
+            if matches!(name.to_ascii_uppercase().as_str(), "LINEST" | "LOGEST") =>
+        {
+            let known_x = args
+                .get(1)
+                .map(|arg| {
+                    let values = collect_values(arg, cells).unwrap_or_default();
+                    array_shape_for_expr(arg, cells, values.len()).1
+                })
+                .unwrap_or(1);
+            let stats = args
+                .get(3)
+                .and_then(|arg| evaluate(arg, cells).ok())
+                .is_some_and(|value| is_truthy(&value));
+            (if stats { 5 } else { 1 }, known_x.saturating_add(1))
+        }
+        FormulaExpr::FuncCall { name, args }
+            if matches!(name.to_ascii_uppercase().as_str(), "TREND" | "GROWTH") =>
+        {
+            args.get(2)
+                .map(|arg| {
+                    let values = collect_values(arg, cells).unwrap_or_default();
+                    array_shape_for_expr(arg, cells, values.len())
+                })
+                .unwrap_or((1, 1))
+        }
         FormulaExpr::BinOp { lhs, rhs, .. } => {
             let operand_shape = |operand: &FormulaExpr| {
                 let values = flatten_array_vals(collect_values(operand, cells).ok()?);
@@ -23611,6 +23676,11 @@ mod tests {
             }
             other => panic!("multivariate LINEST unexpected: {:?}", other),
         }
+        match calc("=INDEX(LINEST(G1:G6,H1:I6),1,1)", &multivariate) {
+            Variant::Integer(value) => assert_eq!(value, 3),
+            Variant::Float(value) => assert!((value - 3.0).abs() < 1e-9),
+            other => panic!("LINEST INDEX projection unexpected: {:?}", other),
+        }
         match calc("=LINEST(G1:G6,H1:I6,TRUE,TRUE)", &multivariate) {
             Variant::Array(values) => {
                 assert_eq!(values.len(), 15);
@@ -23620,6 +23690,11 @@ mod tests {
                 assert!((as_f64(&values[6]).unwrap() - 1.0).abs() < 1e-9);
             }
             other => panic!("multivariate LINEST stats unexpected: {:?}", other),
+        }
+        match calc("=INDEX(LINEST(G1:G6,H1:I6,TRUE,TRUE),3,1)", &multivariate) {
+            Variant::Integer(value) => assert_eq!(value, 1),
+            Variant::Float(value) => assert!((value - 1.0).abs() < 1e-9),
+            other => panic!("LINEST stats INDEX projection unexpected: {:?}", other),
         }
         match calc("=LOGEST(G1:G6,H1:I6)", &multivariate) {
             Variant::Array(values) => {

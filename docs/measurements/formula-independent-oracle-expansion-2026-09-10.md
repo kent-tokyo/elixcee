@@ -14,17 +14,14 @@ LibreOffice 26.2.5 on this host evaluated 118 of 155 probes, with 118/118
 matches. Thirty-seven probes were excluded from the comparable count because this
 LibreOffice build returned an unsupported result in the formula-only path.
 
-The current-source `elixcee` 1.0.6 wheel, built locally for CPython 3.13 on
-arm64 macOS and installed in an isolated environment, evaluated the same 112
-comparable probes with 112/112 matches. This is a source-build verification,
+The current-source `elixcee` 1.0.10 wheel, built locally for CPython 3.13 on
+arm64 macOS and installed in an isolated environment, evaluated the same 118
+comparable probes with 118/118 matches. This is a source-build verification,
 not a published-package or cross-platform claim.
 
-The six additional comparable probes cover two multi-column `LINEST`
-coefficients, its R-squared row, one multi-column `LOGEST` factor, and one
-prediction each from multi-column `TREND` and `GROWTH`; all six matched
-LibreOffice's result. The paired installed-wheel rerun for this
-expanded fixture is still pending because the current shell does not have the
-`elixcee` module installed.
+The expanded probes cover multi-column `LINEST`／`LOGEST`／`TREND`／`GROWTH`
+results; all matched LibreOffice's result, including projections selected
+through `INDEX` from an array result.
 
 The seven newly added distribution probes were retained as visible probes;
 LibreOffice returned `#NAME?` for them here. The newly added `CORREL`,
@@ -68,9 +65,7 @@ python3 compat/oracle/run-libreoffice-formulas.py \
 ```
 
 After installing a locally built wheel into an isolated environment, add
-`--with-elixcee` to run the paired check. The current binding excludes six
-regression-array projections because `INDEX` cannot currently consume their
-array result.
+`--with-elixcee` to run the paired 118-case check.
 
 The runner exits non-zero if any comparable LibreOffice probe mismatches.
 
@@ -87,8 +82,7 @@ installed. This rerun is LibreOffice evidence only, not Excel oracle evidence.
 
 A CPython 3.13 arm64 macOS wheel was built from the current source and installed
 in a temporary virtual environment. With `--with-elixcee`, LibreOffice and the
-binding each evaluated 112 common probes with 112/112 matches. The six omitted
-cases are `LINEST`/`LOGEST`/`TREND`/`GROWTH` projections whose array result is
-not accepted by the current `INDEX` implementation; they remain visible in the
-full LibreOffice-only corpus. This is local source-wheel evidence, not a
-published-package, Microsoft Excel, or cross-platform claim.
+binding each evaluated 118 common probes with 118/118 matches. The run uses a
+local source wheel and is not a published-package, Microsoft Excel, or
+cross-platform claim. `INDEX` now accepts the array results produced by the
+multi-column regression functions in this corpus.
