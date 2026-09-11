@@ -68,7 +68,9 @@ python3 compat/oracle/run-libreoffice-formulas.py \
 ```
 
 After installing a locally built wheel into an isolated environment, add
-`--with-elixcee` to run the paired 118-case check.
+`--with-elixcee` to run the paired check. The current binding excludes six
+regression-array projections because `INDEX` cannot currently consume their
+array result.
 
 The runner exits non-zero if any comparable LibreOffice probe mismatches.
 
@@ -80,3 +82,13 @@ in a fresh writable temporary directory. It produced 118 comparable cases and
 not produce a comparable result. The `--with-elixcee` paired branch was not
 run successfully in this shell because the `elixcee` Python module was not
 installed. This rerun is LibreOffice evidence only, not Excel oracle evidence.
+
+## 2026-09-11 paired rerun
+
+A CPython 3.13 arm64 macOS wheel was built from the current source and installed
+in a temporary virtual environment. With `--with-elixcee`, LibreOffice and the
+binding each evaluated 112 common probes with 112/112 matches. The six omitted
+cases are `LINEST`/`LOGEST`/`TREND`/`GROWTH` projections whose array result is
+not accepted by the current `INDEX` implementation; they remain visible in the
+full LibreOffice-only corpus. This is local source-wheel evidence, not a
+published-package, Microsoft Excel, or cross-platform claim.
