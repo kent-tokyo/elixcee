@@ -733,6 +733,7 @@ mod tests {
             sheets: vec![s],
             number_formats: HashMap::new(),
             date1904: false,
+            defined_names: Vec::new(),
         }
     }
 
@@ -919,6 +920,7 @@ mod tests {
             sheets: vec![sheet("Sheet1", vec![])],
             number_formats,
             date1904: false,
+            defined_names: Vec::new(),
         };
         let json = workbook_json(&wb);
         assert!(json.contains(r#""!numFmts":{"164":"0.00\"kg\""}"#));

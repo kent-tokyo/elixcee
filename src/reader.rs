@@ -111,6 +111,14 @@ impl ReadBudget {
         Ok(())
     }
 
+    /// Event-by-event checks are needed only when the caller supplied a
+    /// deadline or cancellation flag. The work-unit limit is charged before
+    /// XML parsing, so the default path need not branch on this for every
+    /// token in a large worksheet.
+    fn needs_event_checks(&self) -> bool {
+        self.deadline.is_some() || self.cancellation.is_some()
+    }
+
     fn charge(&mut self, bytes: u64, entry_name: &str) -> Result<(), String> {
         self.check()?;
         let units = bytes.saturating_add(4096);
@@ -1022,6 +1030,28 @@ pub fn read_workbook_with_options(
     }
 }
 
+/// Path-based buffer reader used by the VM load path. Keeping the workbook-level
+/// metadata alongside the sheets avoids reopening the same ZIP entry for date1904
+/// and defined-name handling after the main parse has completed.
+pub(crate) fn read_workbook_buffer_with_options(
+    path: &str,
+    options: &ReadOptions,
+) -> Result<BufferWorkbook, String> {
+    ReadBudget::new(options)?.check()?;
+    let extension = std::path::Path::new(path)
+        .extension()
+        .and_then(|value| value.to_str());
+    if extension.is_some_and(|value| {
+        value.eq_ignore_ascii_case("xlsx") || value.eq_ignore_ascii_case("xlsm")
+    }) {
+        let file = std::fs::File::open(path).map_err(|e| e.to_string())?;
+        let archive = ZipArchive::new(file).map_err(|e| e.to_string())?;
+        read_workbook_from_archive(archive, options)
+    } else {
+        Err("unsupported input extension; use .xlsx, .xlsm, or .ods".to_string())
+    }
+}
+
 /// Read an in-memory XLSX/XLSM (Office Open XML ZIP) buffer into sheets — the buffer-
 /// first entry point the WASM bridge (`crates/elixcee-wasm`) and `@elixcee/xlsx`'s
 /// `XLSX.read()` are built on (see `docs/xlsx-architecture.md`'s "reader.rs buffer-API
@@ -1065,6 +1095,8 @@ pub struct BufferWorkbook {
     /// from `xl/workbook.xml`, read once for the whole workbook (all sheets share it, this
     /// isn't a per-sheet setting). `false` (the default 1900 system) when absent.
     pub date1904: bool,
+    /// Defined-name declarations captured while `workbook.xml` is already in memory.
+    pub defined_names: Vec<XlsxDefinedName>,
 }
 
 /// A `WorkbookSheet` plus buffer-API-only data (`read_workbook_from_bytes`) that has no
@@ -3536,6 +3568,14 @@ fn read_workbook_from_archive<R: Read + Seek>(
         sheets,
         number_formats: styles.number_formats,
         date1904,
+        // Most workbooks do not declare names. Avoid a second XML event walk in
+        // that common case; named workbooks retain the exact existing parser and
+        // validation path.
+        defined_names: if wb_xml.contains("definedName") {
+            xlsx_defined_name_decls(&wb_xml)?
+        } else {
+            Vec::new()
+        },
     })
 }
 
@@ -3557,6 +3597,7 @@ fn xlsx_workbook_date1904(xml: &str) -> bool {
 
 /// Read the workbook-level date system without exposing the internal XML
 /// parser to the VM. ODS and missing workbook parts use the 1900 default.
+#[allow(dead_code)]
 pub(crate) fn xlsx_date1904_for_path(path: &str) -> Result<bool, String> {
     let Some(bytes) = read_raw_zip_entry_if_present(path, "xl/workbook.xml")? else {
         return Ok(false);
@@ -3671,7 +3712,7 @@ fn validate_workbook_sheets(
 /// A workbook defined-name declaration. `local_sheet_id` is the zero-based
 /// worksheet position from OOXML's `localSheetId` attribute.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct XlsxDefinedName {
+pub struct XlsxDefinedName {
     pub name: String,
     pub local_sheet_id: Option<usize>,
     pub raw_text: String,
@@ -4697,9 +4738,10 @@ fn xlsx_sheet_cells_impl(
     let mut cur_formula = String::new();
     let mut in_is_t = false; // inside <is><t>
     let mut is_text = String::new();
+    let event_checks = validation_budget.is_some_and(ReadBudget::needs_event_checks);
 
     while let Some(ev) = iter.next_ev() {
-        if let Some(budget) = validation_budget {
+        if event_checks && let Some(budget) = validation_budget {
             // Check cancellation/deadline before XML-budget errors so an interrupt
             // remains deterministic even when the input is also close to a structural
             // XML limit. The byte read was already budgeted; this covers the CPU-bound
@@ -5002,7 +5044,9 @@ fn parse_cell_ref(r: &str) -> Option<(u32, u32)> {
         if !upper.is_ascii_uppercase() {
             break;
         }
-        col = col.checked_mul(26)?.checked_add((upper - b'A' + 1) as u32)?;
+        col = col
+            .checked_mul(26)?
+            .checked_add((upper - b'A' + 1) as u32)?;
         split += 1;
     }
     if split == 0 || split == bytes.len() {

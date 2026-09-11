@@ -10469,20 +10469,41 @@ impl Vm {
             .map(|n| n.to_string_lossy().to_string());
         self.loaded_workbook_path = Some(path.to_string());
         self.external_links_policy = options.external_links;
-        let sheets = reader::read_workbook_with_options(path, options).map_err(|error| {
-            if error == "unsupported input extension; use .xlsx, .xlsm, or .ods" {
-                error
-            } else {
-                format!("cannot read '{}': {}", path, error)
-            }
-        })?;
+        let is_ods = std::path::Path::new(path)
+            .extension()
+            .is_some_and(|value| value.eq_ignore_ascii_case("ods"));
+        let (sheets, date1904, defined_names) = if is_ods {
+            (
+                reader::read_workbook_with_options(path, options)
+                    .map_err(|error| format!("cannot read '{}': {}", path, error))?,
+                false,
+                Vec::new(),
+            )
+        } else {
+            let workbook =
+                reader::read_workbook_buffer_with_options(path, options).map_err(|error| {
+                    if error == "unsupported input extension; use .xlsx, .xlsm, or .ods" {
+                        error
+                    } else {
+                        format!("cannot read '{}': {}", path, error)
+                    }
+                })?;
+            (
+                workbook
+                    .sheets
+                    .into_iter()
+                    .map(|sheet| sheet.sheet)
+                    .collect(),
+                workbook.date1904,
+                workbook.defined_names,
+            )
+        };
         if sheets.is_empty() {
             return Err("workbook has no sheets".to_string());
         }
-        self.workbook_date1904 = reader::xlsx_date1904_for_path(path)
-            .map_err(|error| format!("cannot read '{}': {}", path, error))?;
+        self.workbook_date1904 = date1904;
         let names = self.populate_from_sheets(sheets);
-        self.load_simple_defined_names(path)?;
+        self.load_simple_defined_names_from_decls(&defined_names)?;
         Ok(names)
     }
 
@@ -10501,6 +10522,7 @@ impl Vm {
     /// names that the workbook formula engine can evaluate today. Qualified,
     /// dynamic, table, and external references remain available through
     /// `defined_names()` but are not silently converted into a wrong address.
+    #[allow(dead_code)]
     pub(crate) fn load_simple_defined_names(&mut self, path: &str) -> Result<(), String> {
         self.loaded_named_ranges.clear();
         self.scoped_named_ranges.clear();
@@ -10512,7 +10534,17 @@ impl Vm {
         let Ok(xml) = String::from_utf8(bytes) else {
             return Ok(());
         };
-        for decl in reader::xlsx_defined_name_decls(&xml)? {
+        let declarations = reader::xlsx_defined_name_decls(&xml)?;
+        self.load_simple_defined_names_from_decls(&declarations)
+    }
+
+    fn load_simple_defined_names_from_decls(
+        &mut self,
+        declarations: &[reader::XlsxDefinedName],
+    ) -> Result<(), String> {
+        self.loaded_named_ranges.clear();
+        self.scoped_named_ranges.clear();
+        for decl in declarations {
             let address = decl.raw_text.trim().trim_start_matches('=').trim();
             let valid_address =
                 if address.contains('!') || crate::types::parse_range_addr(address).is_none() {
