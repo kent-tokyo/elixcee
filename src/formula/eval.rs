@@ -18923,6 +18923,11 @@ mod tests {
         ]);
         assert_eq!(calc("=COUNT(A1:A3)", &c), Variant::Integer(1));
         assert_eq!(calc("=COUNTA(A1:A3)", &c), Variant::Integer(2));
+        assert_eq!(calc("=COUNT(\"1\")", &c), Variant::Integer(1));
+        assert_eq!(calc("=COUNT(TRUE)", &c), Variant::Integer(1));
+        assert_eq!(calc("=COUNT(\"x\")", &c), Variant::Integer(0));
+        assert_eq!(calc("=COUNTA(\"\")", &c), Variant::Integer(1));
+        assert_eq!(calc("=COUNTA(1/0)", &c), Variant::Integer(1));
         assert_eq!(calc("=COUNT(SEQUENCE(3))", &c), Variant::Integer(3));
         assert_eq!(
             calc("=COUNTA(CHOOSE(SEQUENCE(2),\"x\",\"\"))", &c),

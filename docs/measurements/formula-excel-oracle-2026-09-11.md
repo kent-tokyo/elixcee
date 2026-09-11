@@ -61,6 +61,12 @@ The direct-argument boundary also measured `COUNT("1") = 1`, `COUNT(TRUE) = 1`,
 and `COUNT("x") = 0` in Excel. `COUNT` now counts numeric text and logical
 scalar arguments while continuing to ignore those values inside a reference.
 
+For the empty/error boundary, Excel returned `COUNTA(C1) = 0` for a blank
+cell, `COUNTA(C2) = 1` for a formula returning `""`, `COUNTA(C3) = 1` for a
+formula error, `COUNTBLANK(C1:C3) = 2`, and `COUNTA("") = 1`,
+`COUNTA(1/0) = 1`, `COUNTA("x") = 1`, `COUNTA(TRUE) = 1`. The current VM
+matches all eight results.
+
 ## Mixed-type aggregate range probes
 
 Five additional range probes used `A1:B2 = {{1,1},{TRUE,"x"}}` in the same
