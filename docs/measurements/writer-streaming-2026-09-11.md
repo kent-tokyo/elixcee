@@ -10,6 +10,10 @@ worksheet-shape, final-row, and streaming semantic-digest checks.
 | 100,000 | 19.88 / 19.97 MiB | 415 / 436 ms | 1.36 MiB | pass |
 | 250,000 | 19.88 / 19.91 MiB | 1,019 / 1,071 ms | 3.43 MiB | pass |
 
+The same wheel completed a one-million-row confirmation sample at 19.93 MiB
+peak RSS and 4,498 ms child wall time. The output was 14.24 MiB and passed the
+same semantic check. This is a single confirmation sample, not a p95 estimate.
+
 The append writer's peak RSS stayed effectively flat across these two row
 counts on this host. This is evidence for this bounded append path only; it
 does not establish constant memory for the normal VM, Linux/Windows behavior,
