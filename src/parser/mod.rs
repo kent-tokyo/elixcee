@@ -471,8 +471,12 @@ impl Parser {
         let mut module_diagnostics: Vec<(String, SourceSpan)> = vec![];
         let mut module_name: Option<String> = None;
         let mut option_base: i64 = 0;
+        let mut option_explicit = false;
+        let mut option_compare = OptionCompare::Legacy;
         let mut is_class_module = false;
         let mut class_fields = Vec::new();
+        let mut module_variables = Vec::new();
+        let mut module_constants = Vec::new();
         let mut implements = Vec::new();
         while *self.peek() != Tok::Eof {
             let mut access = AccessModifier::Public;
@@ -506,6 +510,14 @@ impl Parser {
                         self.advance();
                         option_base = n;
                     }
+                } else if self.is_ident_at(1, "explicit") {
+                    option_explicit = true;
+                } else if self.is_ident_at(1, "compare") {
+                    if self.is_ident_at(2, "binary") {
+                        option_compare = OptionCompare::Binary;
+                    } else if self.is_ident_at(2, "text") {
+                        option_compare = OptionCompare::Text;
+                    }
                 }
                 self.skip_to_eol();
                 continue;
@@ -531,7 +543,6 @@ impl Parser {
                 || self.is_ident("friend")
                 || self.is_ident("static")
             {
-                let start = self.peek_span().start;
                 access = if self.is_ident("private") {
                     AccessModifier::Private
                 } else if self.is_ident("friend") {
@@ -540,32 +551,32 @@ impl Parser {
                     AccessModifier::Public
                 };
                 self.advance();
+                if self.is_ident("const") {
+                    module_constants.push(self.parse_module_const(access)?);
+                    continue;
+                }
                 if !self.is_ident("sub")
                     && !self.is_ident("function")
                     && !self.is_ident("property")
                     && !self.is_ident("type")
                 {
-                    // Module-level `Const` never gets its value evaluated
-                    // anywhere (unlike inside a Sub) — a real gap, worth
-                    // flagging. A plain `Public x As Long`/`Static y` etc.
+                    // A plain `Public x As Long`/`Static y` etc.
                     // is a harmless no-op (no separate module scope exists;
                     // `Vm::variables` is one flat namespace) — same as
                     // plain `Dim` inside a Sub, left unflagged.
-                    if self.is_ident("const") {
-                        self.skip_to_eol();
-                        let end = self.peek_span().start;
-                        module_diagnostics.push((
-                            "Module-level 'Const' is not evaluated (module-level constants aren't supported outside a Sub/Function) and was skipped".to_string(),
-                            SourceSpan { start, end },
-                        ));
-                    } else {
-                        // A class module's `Private value As Long` / `Public
-                        // value As Variant` is instance state. We collect
-                        // names for every module because a `.cls` path can
-                        // mark the Program only after parsing; standard
-                        // modules simply never consume this list.
-                        self.parse_module_fields(&mut class_fields, access);
-                    }
+                    // A class module's `Private value As Long` / `Public
+                    // value As Variant` is instance state. We collect names
+                    // for every module because a `.cls` path can mark the
+                    // Program only after parsing; standard modules simply
+                    // never consume this list.
+                    self.parse_module_fields(
+                        if is_class_module {
+                            &mut class_fields
+                        } else {
+                            &mut module_variables
+                        },
+                        access,
+                    )?;
                     continue;
                 }
             }
@@ -584,17 +595,17 @@ impl Parser {
             } else if *self.peek() == Tok::Newline {
                 self.advance();
             } else if self.is_ident("const") {
-                // Bare module-level `Const` (no modifier) — same gap as above.
-                let start = self.peek_span().start;
-                self.skip_to_eol();
-                let end = self.peek_span().start;
-                module_diagnostics.push((
-                    "Module-level 'Const' is not evaluated (module-level constants aren't supported outside a Sub/Function) and was skipped".to_string(),
-                    SourceSpan { start, end },
-                ));
+                module_constants.push(self.parse_module_const(AccessModifier::Public)?);
             } else if self.is_ident("dim") {
                 self.advance();
-                self.parse_module_fields(&mut class_fields, AccessModifier::Private);
+                self.parse_module_fields(
+                    if is_class_module {
+                        &mut class_fields
+                    } else {
+                        &mut module_variables
+                    },
+                    AccessModifier::Private,
+                )?;
             } else {
                 // Unknown module-level line → genuinely unrecognized construct.
                 let start = self.peek_span().start;
@@ -618,22 +629,64 @@ impl Parser {
             type_defs,
             is_class_module,
             class_fields,
+            module_variables,
+            module_constants,
             implements,
             module_diagnostics,
             module_name,
             option_base,
+            option_explicit,
+            option_compare,
+        })
+    }
+
+    fn parse_module_const(&mut self, access: AccessModifier) -> Result<ConstDef, String> {
+        self.expect_ident("const")?;
+        let name = self.consume_ident()?.to_lowercase();
+        let type_name = if self.is_ident("as") {
+            self.advance();
+            Some(self.consume_qualified_type_name()?)
+        } else {
+            None
+        };
+        self.expect_tok(Tok::Eq)?;
+        let value = self.parse_expr()?;
+        self.skip_to_eol();
+        Ok(ConstDef {
+            name,
+            type_name,
+            value,
+            access,
         })
     }
 
     /// Collect comma-separated module/class field declarations while
     /// deliberately ignoring their static VBA types.
-    fn parse_module_fields(&mut self, fields: &mut Vec<ClassFieldDef>, access: AccessModifier) {
+    fn parse_module_fields(
+        &mut self,
+        fields: &mut Vec<ClassFieldDef>,
+        access: AccessModifier,
+    ) -> Result<(), String> {
         loop {
             let Tok::Ident(name) = self.peek().clone() else {
                 self.skip_to_eol();
-                return;
+                return Ok(());
             };
             self.advance();
+            let mut array_dims = Vec::new();
+            let mut is_array = false;
+            if *self.peek() == Tok::LParen {
+                is_array = true;
+                self.advance();
+                if *self.peek() != Tok::RParen {
+                    array_dims.push(self.parse_array_dim()?);
+                    while *self.peek() == Tok::Comma {
+                        self.advance();
+                        array_dims.push(self.parse_array_dim()?);
+                    }
+                }
+                self.expect_tok(Tok::RParen)?;
+            }
             let mut type_name = None;
             while !matches!(self.peek(), Tok::Comma | Tok::Newline | Tok::Eof) {
                 if self.is_ident("as") {
@@ -650,10 +703,12 @@ impl Parser {
                 name,
                 type_name,
                 access,
+                array_dims,
+                is_array,
             });
             if *self.peek() != Tok::Comma {
                 self.skip_to_eol();
-                return;
+                return Ok(());
             }
             self.advance();
         }
@@ -713,7 +768,7 @@ impl Parser {
         self.expect_ident("sub")?;
         let name = self.consume_ident()?;
         self.expect_tok(Tok::LParen)?;
-        let (params, param_types) = self.parse_params()?;
+        let (params, param_types, param_modes) = self.parse_params()?;
         self.expect_tok(Tok::RParen)?;
         self.eat_stmt_end()?;
         let body = self.parse_stmts(|p| p.is_end_kw("sub"))?;
@@ -724,6 +779,7 @@ impl Parser {
             module_name: None,
             params,
             param_types,
+            param_modes,
             access,
             body,
         })
@@ -733,7 +789,7 @@ impl Parser {
         self.expect_ident("function")?;
         let name = self.consume_ident()?;
         self.expect_tok(Tok::LParen)?;
-        let (params, param_types) = self.parse_params()?;
+        let (params, param_types, param_modes) = self.parse_params()?;
         self.expect_tok(Tok::RParen)?;
         // Optional return-type annotation: `Function f(...) As Integer`.
         // Not enforced anywhere (elixcee is dynamically typed at runtime,
@@ -756,6 +812,7 @@ impl Parser {
             module_name: None,
             params,
             param_types,
+            param_modes,
             return_type,
             access,
             body,
@@ -778,7 +835,7 @@ impl Parser {
         };
         let name = self.consume_ident()?;
         self.expect_tok(Tok::LParen)?;
-        let (params, param_types) = self.parse_params()?;
+        let (params, param_types, param_modes) = self.parse_params()?;
         self.expect_tok(Tok::RParen)?;
         let return_type = if self.is_ident("as") {
             self.advance();
@@ -796,49 +853,48 @@ impl Parser {
             kind,
             params,
             param_types,
+            param_modes,
             return_type,
             access,
             body,
         })
     }
 
-    fn parse_params(&mut self) -> Result<(Vec<String>, Vec<Option<String>>), String> {
+    fn parse_params(
+        &mut self,
+    ) -> Result<(Vec<String>, Vec<Option<String>>, Vec<ParamMode>), String> {
         let mut params = vec![];
         let mut param_types = vec![];
+        let mut param_modes = vec![];
         while !matches!(self.peek(), Tok::RParen | Tok::Eof) {
-            // `ByVal`/`ByRef` are recognized and discarded — elixcee's own
-            // call semantics don't distinguish them (every call is
-            // effectively by-value; no ByRef write-back to the caller's
-            // variable is modeled), so skipping the keyword is enough to
-            // keep `params` accurate without implementing ByRef semantics.
-            // Without this, `consume_ident()` below would swallow the
-            // keyword itself as a bogus extra parameter name (confirmed:
-            // `Sub Foo(ByVal x As Integer)` used to silently parse as two
-            // params, "byval" and "x", so `Foo(5)` bound 5 to the phantom
-            // "byval" param and left `x` unbound) — exactly the kind of
-            // wrong `params.len()` the new check-time argument-count check
-            // depends on being accurate.
-            if self.is_ident("byval") || self.is_ident("byref") {
+            let mode = if self.is_ident("byval") {
                 self.advance();
-            }
-            // `Optional`/`ParamArray` give a parameter variable arity
-            // (default values, "any number of trailing args") that this VM
-            // doesn't model at all — rejecting them outright, rather than
-            // silently mis-consuming the keyword as a parameter name (the
-            // same bug ByVal/ByRef had), keeps `params.len()` trustworthy
-            // for every Sub/Function this parser does accept.
-            if self.is_ident("optional") || self.is_ident("paramarray") {
-                return Err(format!(
-                    "parameter modifier '{}' is not supported",
-                    if self.is_ident("optional") {
-                        "Optional"
-                    } else {
-                        "ParamArray"
-                    }
-                ));
-            }
+                ParamMode::ByVal
+            } else if self.is_ident("byref") {
+                self.advance();
+                ParamMode::ByRef
+            } else {
+                // VBA defaults to ByRef when no modifier is written.
+                ParamMode::DefaultByRef
+            };
+            let optional = if self.is_ident("optional") {
+                self.advance();
+                true
+            } else {
+                false
+            };
+            let param_array = if self.is_ident("paramarray") {
+                self.advance();
+                true
+            } else {
+                false
+            };
             let name = self.consume_ident()?;
             params.push(name);
+            if param_array {
+                self.expect_tok(Tok::LParen)?;
+                self.expect_tok(Tok::RParen)?;
+            }
             // optional: As <type>
             let type_name = if self.is_ident("as") {
                 self.advance();
@@ -847,11 +903,28 @@ impl Parser {
                 None
             };
             param_types.push(type_name);
+            let default = if optional && *self.peek() == Tok::Eq {
+                self.advance();
+                Some(self.parse_expr()?)
+            } else {
+                None
+            };
+            let mode = if param_array {
+                ParamMode::ParamArray
+            } else if optional {
+                match mode {
+                    ParamMode::ByVal => ParamMode::OptionalByVal(default),
+                    _ => ParamMode::OptionalByRef(default),
+                }
+            } else {
+                mode
+            };
+            param_modes.push(mode);
             if *self.peek() == Tok::Comma {
                 self.advance();
             }
         }
-        Ok((params, param_types))
+        Ok((params, param_types, param_modes))
     }
 
     // ── Statement dispatch ─────────────────────────────────────────────────────
@@ -1015,9 +1088,22 @@ impl Parser {
             }
             // Access/scope modifiers before Dim/Const inside a sub
             "public" | "private" | "static" | "friend" => {
+                let is_static = first == "static";
                 self.advance(); // consume modifier
                 if self.is_ident("dim") {
-                    self.parse_dim()
+                    let declaration = self.parse_dim()?;
+                    if is_static {
+                        Ok(Stmt::StaticDecl {
+                            declaration: Box::new(declaration),
+                        })
+                    } else {
+                        Ok(declaration)
+                    }
+                } else if is_static {
+                    let declaration = self.parse_dim_declarator()?;
+                    Ok(Stmt::StaticDecl {
+                        declaration: Box::new(declaration),
+                    })
                 } else if self.is_ident("const") {
                     self.parse_const()
                 } else {
@@ -1025,12 +1111,26 @@ impl Parser {
                     Ok(Stmt::Dim)
                 }
             }
-            // Debug.Print / Debug.Assert → no-op
+            // Debug.Print is observable through the VM diagnostic sink;
+            // Debug.Assert is retained so the host can choose an explicit
+            // ignore-or-error policy without GUI interaction.
             "debug" => {
-                self.skip_to_stmt_end();
-                Ok(Stmt::Unsupported {
-                    reason: "Debug.Print/Debug.Assert has no effect (no-op)".to_string(),
-                })
+                self.advance();
+                self.expect_tok(Tok::Dot)?;
+                if self.is_ident("print") {
+                    self.advance();
+                    self.parse_debug_print()
+                } else if self.is_ident("assert") {
+                    self.advance();
+                    Ok(Stmt::DebugAssert {
+                        condition: self.parse_expr()?,
+                    })
+                } else {
+                    self.skip_to_stmt_end();
+                    Ok(Stmt::Unsupported {
+                        reason: "unknown Debug member".to_string(),
+                    })
+                }
             }
             // `Err.Clear` / `Err.Raise ...` — guarded on the exact member
             // name (same precedent as the `thisworkbook`/`activeworkbook`
@@ -1100,10 +1200,17 @@ impl Parser {
             Ok(ForEachSource::Range(addr))
         } else {
             let name = self.consume_ident()?;
-            if *self.peek() == Tok::Dot && self.is_ident_at(1, "keys") {
+            if *self.peek() == Tok::Dot
+                && (self.is_ident_at(1, "keys") || self.is_ident_at(1, "items"))
+            {
+                let member_is_items = self.is_ident_at(1, "items");
                 self.advance();
                 self.advance();
-                Ok(ForEachSource::DictionaryKeys(name))
+                Ok(if member_is_items {
+                    ForEachSource::DictionaryItems(name)
+                } else {
+                    ForEachSource::DictionaryKeys(name)
+                })
             } else {
                 Ok(ForEachSource::ObjectVar(name))
             }
@@ -2320,7 +2427,7 @@ impl Parser {
 
         let prop = self.consume_ident()?;
         match prop.as_str() {
-            "value" | "formula" => {
+            "value" | "value2" | "formula" => {
                 let is_formula = prop == "formula";
                 self.expect_tok(Tok::Eq)?;
                 let value = self.parse_expr()?;
@@ -2587,7 +2694,13 @@ impl Parser {
         self.expect_tok(Tok::RParen)?;
         if *self.peek() == Tok::Dot {
             self.advance();
-            self.expect_ident("value")?;
+            let property = self.consume_ident()?;
+            if !matches!(property.as_str(), "value" | "value2") {
+                return Err(format!(
+                    "unexpected property after Cells(...): {}",
+                    property
+                ));
+            }
         }
         self.expect_tok(Tok::Eq)?;
         let value = self.parse_expr()?;
@@ -2719,7 +2832,10 @@ impl Parser {
                 self.expect_tok(Tok::RParen)?;
                 if *self.peek() == Tok::Dot {
                     self.advance();
-                    self.expect_ident("value")?;
+                    let prop = self.consume_ident()?;
+                    if !matches!(prop.as_str(), "value" | "value2") {
+                        return Err(format!("unexpected property after Cells(...): {}", prop));
+                    }
                 }
                 self.expect_tok(Tok::Eq)?;
                 let value = self.parse_expr()?;
@@ -2738,7 +2854,7 @@ impl Parser {
                     self.advance();
                     let prop = self.consume_ident()?;
                     match prop.as_str() {
-                        "value" => false,
+                        "value" | "value2" => false,
                         "formula" => true,
                         other => {
                             return Err(format!("unexpected property after Range(...): {}", other));
@@ -3163,12 +3279,37 @@ impl Parser {
         if *self.peek() == Tok::RParen {
             return Ok(args);
         }
-        args.push(self.parse_expr()?);
+        args.push(self.parse_call_arg()?);
         while *self.peek() == Tok::Comma {
             self.advance();
-            args.push(self.parse_expr()?);
+            args.push(self.parse_call_arg()?);
         }
         Ok(args)
+    }
+
+    fn parse_call_arg(&mut self) -> Result<Expr, String> {
+        if matches!(self.peek(), Tok::Ident(_)) && *self.peek_at(1) == Tok::ColonEq {
+            let name = self.consume_ident()?;
+            self.advance();
+            return Ok(Expr::NamedArg {
+                name,
+                value: Box::new(self.parse_expr()?),
+            });
+        }
+        self.parse_expr()
+    }
+
+    fn parse_debug_print(&mut self) -> Result<Stmt, String> {
+        let mut values = Vec::new();
+        while !self.is_stmt_end() {
+            values.push(self.parse_expr()?);
+            if *self.peek() == Tok::Comma {
+                self.advance();
+                continue;
+            }
+            break;
+        }
+        Ok(Stmt::DebugPrint { values })
     }
 
     // Precedence climbing, lowest (outermost/loosest-binding) to highest
@@ -3612,6 +3753,7 @@ impl Parser {
             self.expect_ident("find")?;
             self.expect_tok(Tok::LParen)?;
             let mut what_expr = Expr::Str(String::new());
+            let mut match_case = None;
             // parse kwargs: What:=expr, ...
             while *self.peek() != Tok::RParen && *self.peek() != Tok::Eof {
                 let kw_name = self.consume_ident()?;
@@ -3619,6 +3761,8 @@ impl Parser {
                 let val = self.parse_expr()?;
                 if kw_name == "what" {
                     what_expr = val;
+                } else if kw_name == "matchcase" {
+                    match_case = Some(Box::new(val));
                 }
                 if *self.peek() == Tok::Comma {
                     self.advance();
@@ -3631,6 +3775,7 @@ impl Parser {
             return Ok(Expr::CellsFind {
                 what: Box::new(what_expr),
                 find_row,
+                match_case,
             });
         }
         self.expect_tok(Tok::LParen)?;
@@ -3641,7 +3786,7 @@ impl Parser {
         self.expect_tok(Tok::Dot)?;
         let prop = self.consume_ident()?;
         match prop.as_str() {
-            "value" => Ok(Expr::CellRead {
+            "value" | "value2" => Ok(Expr::CellRead {
                 row: Box::new(row),
                 col: Box::new(col),
             }),
@@ -3689,7 +3834,7 @@ impl Parser {
         self.advance(); // consume '.'
         let prop = self.consume_ident()?;
         match prop.as_str() {
-            "value" => Ok(Expr::RangeRead { addr }),
+            "value" | "value2" => Ok(Expr::RangeRead { addr }),
             "offset" => {
                 self.expect_tok(Tok::LParen)?;
                 let row_off = self.parse_expr()?;
@@ -3723,7 +3868,13 @@ impl Parser {
                 self.expect_tok(Tok::RParen)?;
                 if *self.peek() == Tok::Dot {
                     self.advance();
-                    self.expect_ident("value")?;
+                    let value_property = self.consume_ident()?;
+                    if !matches!(value_property.as_str(), "value" | "value2") {
+                        return Err(format!(
+                            "unexpected property after Cells(...): {}",
+                            value_property
+                        ));
+                    }
                 }
                 Ok(Expr::SheetCellRead {
                     sheet: Box::new(sheet),
@@ -3737,7 +3888,13 @@ impl Parser {
                 self.expect_tok(Tok::RParen)?;
                 if *self.peek() == Tok::Dot {
                     self.advance();
-                    self.expect_ident("value")?;
+                    let value_property = self.consume_ident()?;
+                    if !matches!(value_property.as_str(), "value" | "value2") {
+                        return Err(format!(
+                            "unexpected property after Range(...): {}",
+                            value_property
+                        ));
+                    }
                 }
                 Ok(Expr::SheetRangeRead {
                     sheet: Box::new(sheet),
@@ -4191,6 +4348,19 @@ mod tests {
     #[test]
     fn test_cell_write_integer() {
         let body = parse_body("Sub MySub()\n    Cells(1, 1).Value = 42\nEnd Sub\n");
+        assert_eq!(
+            body,
+            vec![Stmt::CellWrite {
+                row: Expr::Integer(1),
+                col: Expr::Integer(1),
+                value: Expr::Integer(42)
+            }]
+        );
+    }
+
+    #[test]
+    fn test_cell_write_accepts_value2_as_value_compatible_alias() {
+        let body = parse_body("Sub MySub()\n    Cells(1, 1).Value2 = 42\nEnd Sub\n");
         assert_eq!(
             body,
             vec![Stmt::CellWrite {
@@ -4951,6 +5121,8 @@ mod tests {
                 name: "total".to_string(),
                 type_name: Some("long".to_string()),
                 access: AccessModifier::Private,
+                array_dims: vec![],
+                is_array: false,
             }]
         );
         assert_eq!(program.subs[0].name, "add");
@@ -5030,33 +5202,46 @@ mod tests {
     }
 
     #[test]
-    fn byval_and_byref_param_modifiers_are_recognized_and_discarded_not_treated_as_a_param_name() {
-        // Regression: `consume_ident()` used to swallow "byval"/"byref"
-        // itself as a bogus extra parameter, so `Sub Foo(ByVal x As
-        // Integer)` parsed as a 2-param sub (`["byval", "x"]`) and a caller
-        // passing one argument bound it to the phantom "byval" param,
-        // leaving `x` unbound.
+    fn byval_and_byref_param_modifiers_are_preserved_as_metadata() {
+        // Regression: the parser used to discard the passing mode entirely.
+        // The VM still uses the legacy value-binding path until V1 alias
+        // binding lands, but the AST now retains enough information to avoid
+        // silently losing the VBA declaration's meaning.
         let prog =
             parse("Sub Foo(ByVal x As Integer, ByRef y As String)\n    a = x\nEnd Sub\n").unwrap();
         assert_eq!(prog.subs[0].params, vec!["x", "y"]);
-    }
-
-    #[test]
-    fn optional_parameter_modifier_is_a_clear_parse_error_not_a_silent_misparse() {
-        let err = parse("Sub Foo(Optional x As Integer)\n    a = x\nEnd Sub\n").unwrap_err();
-        assert!(
-            err.contains("Optional"),
-            "error should name the unsupported modifier: {err}"
+        assert_eq!(
+            prog.subs[0].param_modes,
+            vec![ParamMode::ByVal, ParamMode::ByRef]
         );
     }
 
     #[test]
-    fn paramarray_parameter_modifier_is_a_clear_parse_error_not_a_silent_misparse() {
-        let err = parse("Sub Foo(ParamArray items())\n    a = 1\nEnd Sub\n").unwrap_err();
-        assert!(
-            err.contains("ParamArray"),
-            "error should name the unsupported modifier: {err}"
-        );
+    fn optional_parameter_preserves_its_default_expression() {
+        let prog = parse("Sub Foo(Optional x As Integer = 3)\n    a = x\nEnd Sub\n").unwrap();
+        assert!(matches!(
+            prog.subs[0].param_modes[0],
+            ParamMode::OptionalByRef(Some(Expr::Integer(3)))
+        ));
+    }
+
+    #[test]
+    fn paramarray_parameter_is_retained_as_a_variable_arity_marker() {
+        let prog = parse("Sub Foo(ParamArray items())\n    a = 1\nEnd Sub\n").unwrap();
+        assert!(matches!(prog.subs[0].param_modes[0], ParamMode::ParamArray));
+    }
+
+    #[test]
+    fn named_procedure_arguments_are_kept_in_the_call_ast() {
+        let prog = parse(
+            "Sub Foo(first As Integer, second As Integer)\n    a = first + second\nEnd Sub\nSub Main()\n    Call Foo(second:=2, first:=1)\nEnd Sub\n",
+        )
+        .unwrap();
+        assert!(matches!(
+            prog.subs[1].body[0].stmt,
+            Stmt::CallSub { ref args, .. }
+                if matches!(&args[0], Expr::NamedArg { name, .. } if name == "second")
+        ));
     }
 
     // ── Module-level declarations and access modifiers ─────────────────────────
@@ -5065,6 +5250,7 @@ mod tests {
     fn test_option_explicit_ignored() {
         let prog = parse("Option Explicit\nSub MySub()\n    a = 1\nEnd Sub\n").unwrap();
         assert_eq!(prog.subs[0].name, "mysub");
+        assert!(prog.option_explicit);
     }
 
     #[test]
@@ -5079,6 +5265,34 @@ mod tests {
     fn test_option_base_defaults_to_zero_when_absent() {
         let prog = parse("Sub MySub()\n    a = 1\nEnd Sub\n").unwrap();
         assert_eq!(prog.option_base, 0);
+        assert!(!prog.option_explicit);
+        assert_eq!(prog.option_compare, OptionCompare::Legacy);
+    }
+
+    #[test]
+    fn test_option_compare_is_captured() {
+        let binary = parse("Option Compare Binary\nSub MySub()\nEnd Sub\n").unwrap();
+        assert_eq!(binary.option_compare, OptionCompare::Binary);
+        let text = parse("Option Compare Text\nSub MySub()\nEnd Sub\n").unwrap();
+        assert_eq!(text.option_compare, OptionCompare::Text);
+    }
+
+    #[test]
+    fn standard_module_variables_are_separate_from_class_fields() {
+        let program =
+            parse("Private counter As Long\nSub Main()\n    counter = counter + 1\nEnd Sub\n")
+                .unwrap();
+        assert_eq!(program.module_variables.len(), 1);
+        assert_eq!(program.module_variables[0].name, "counter");
+        assert!(program.class_fields.is_empty());
+    }
+
+    #[test]
+    fn standard_module_array_dimensions_are_preserved() {
+        let program = parse("Private values(1 To 3, 2) As Long\nSub Main()\nEnd Sub\n").unwrap();
+        assert_eq!(program.module_variables.len(), 1);
+        assert_eq!(program.module_variables[0].array_dims.len(), 2);
+        assert!(program.module_variables[0].is_array);
     }
 
     #[test]
@@ -5116,26 +5330,19 @@ mod tests {
     }
 
     #[test]
-    fn test_module_level_const_with_modifier_is_flagged() {
-        // `Public Const` never gets its value evaluated anywhere — a real
-        // gap, unlike a plain declaration, so it's recorded for `check`.
+    fn test_module_level_const_with_modifier_is_parsed() {
         let prog =
             parse("Public Const MAX_RETRIES = 5\nSub MySub()\n    a = 1\nEnd Sub\n").unwrap();
-        assert_eq!(prog.module_diagnostics.len(), 1);
-        assert_eq!(
-            prog.module_diagnostics[0].0,
-            "Module-level 'Const' is not evaluated (module-level constants aren't supported outside a Sub/Function) and was skipped"
-        );
+        assert!(prog.module_diagnostics.is_empty());
+        assert_eq!(prog.module_constants.len(), 1);
+        assert_eq!(prog.module_constants[0].name, "max_retries");
     }
 
     #[test]
-    fn test_module_level_bare_const_is_flagged() {
+    fn test_module_level_bare_const_is_parsed() {
         let prog = parse("Const MAX_RETRIES = 5\nSub MySub()\n    a = 1\nEnd Sub\n").unwrap();
-        assert_eq!(prog.module_diagnostics.len(), 1);
-        assert_eq!(
-            prog.module_diagnostics[0].0,
-            "Module-level 'Const' is not evaluated (module-level constants aren't supported outside a Sub/Function) and was skipped"
-        );
+        assert!(prog.module_diagnostics.is_empty());
+        assert_eq!(prog.module_constants.len(), 1);
     }
 
     #[test]
@@ -5198,10 +5405,15 @@ mod tests {
     // ── Debug.Print and statement-level modifiers ─────────────────────────────
 
     #[test]
-    fn test_debug_print_noop() {
+    fn test_debug_print_is_retained() {
         let body = parse_body("Sub MySub()\n    Debug.Print \"hello\"\n    a = 1\nEnd Sub\n");
-        // Debug.Print is a no-op; only the assignment remains
-        assert_eq!(body.len(), 2); // Stmt::Unsupported (noop) + Assignment
+        assert_eq!(body.len(), 2);
+        assert_eq!(
+            body[0],
+            Stmt::DebugPrint {
+                values: vec![Expr::Str("hello".into())]
+            }
+        );
         assert_eq!(
             body[1],
             Stmt::Assignment {
@@ -5212,8 +5424,9 @@ mod tests {
     }
 
     #[test]
-    fn test_debug_assert_noop() {
+    fn test_debug_assert_is_retained_for_host_policy() {
         let body = parse_body("Sub MySub()\n    Debug.Assert x > 0\n    a = 1\nEnd Sub\n");
+        assert!(matches!(body[0], Stmt::DebugAssert { .. }));
         assert_eq!(
             body[1],
             Stmt::Assignment {
@@ -5228,12 +5441,12 @@ mod tests {
     // test_dim_is_noop below, which are untouched by this) ──────────────────
 
     #[test]
-    fn test_debug_print_reason_is_specific() {
-        let body = parse_body("Sub MySub()\n    Debug.Print \"hello\"\nEnd Sub\n");
+    fn test_unknown_debug_member_reason_is_specific() {
+        let body = parse_body("Sub MySub()\n    Debug.Trace x > 0\nEnd Sub\n");
         assert_eq!(
             body[0],
             Stmt::Unsupported {
-                reason: "Debug.Print/Debug.Assert has no effect (no-op)".into()
+                reason: "unknown Debug member".into()
             }
         );
     }
@@ -5319,7 +5532,14 @@ mod tests {
     fn test_static_dim_inside_sub() {
         let body =
             parse_body("Sub MySub()\n    Static counter As Long\n    counter = 1\nEnd Sub\n");
-        assert_eq!(body[0], Stmt::Dim);
+        assert_eq!(
+            body[0],
+            Stmt::StaticDecl {
+                declaration: Box::new(Stmt::DimBare {
+                    var: "counter".into()
+                })
+            }
+        );
         assert_eq!(
             body[1],
             Stmt::Assignment {

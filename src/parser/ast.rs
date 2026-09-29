@@ -40,6 +40,17 @@ pub enum Expr {
     Str(String),
     Bool(bool),
     Var(String),
+    /// A named procedure argument (`name := expression`). This is kept in the
+    /// expression list so existing call AST shapes remain compatible; the
+    /// VM consumes it only while binding a user-defined Sub/Function.
+    NamedArg {
+        name: String,
+        value: Box<Expr>,
+    },
+    /// An omitted Optional argument produced while normalizing a named call.
+    /// This is an internal call-binding marker, not a VBA expression users
+    /// can write. Keeping it distinct from `Empty` preserves `IsMissing`.
+    OmittedArg,
     BinOp {
         op: VbaBinOp,
         lhs: Box<Expr>,
@@ -66,6 +77,7 @@ pub enum Expr {
     CellsFind {
         what: Box<Expr>,
         find_row: bool,
+        match_case: Option<Box<Expr>>,
     },
     SheetCellRead {
         sheet: Box<Expr>,
@@ -210,6 +222,18 @@ pub enum CalcModeValue {
     Manual,
 }
 
+/// Module-level string comparison mode. `Legacy` preserves elixcee's
+/// historical case-insensitive behavior when a module has no declaration;
+/// explicit `Option Compare Binary` and `Option Compare Text` select VBA's
+/// corresponding comparison rules.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum OptionCompare {
+    #[default]
+    Legacy,
+    Binary,
+    Text,
+}
+
 /// Which dimension a row/column structural edit (`RangeDelete`/`RangeInsert`/
 /// `RowColDelete`/`RowColInsert`) shifts along. `EntireRow`/`Rows(...)` -> `Row`;
 /// `EntireColumn`/`Columns(...)` -> `Column`. See `Vm`'s `shift_rows`/`shift_cols`.
@@ -348,6 +372,14 @@ pub struct ArrayDim {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Stmt {
+    /// `Debug.Print` output, captured by the VM's diagnostic sink.
+    DebugPrint {
+        values: Vec<Expr>,
+    },
+    /// `Debug.Assert condition`; execution policy is selected by the host.
+    DebugAssert {
+        condition: Expr,
+    },
     Assignment {
         var: String,
         value: Expr,
@@ -485,12 +517,9 @@ pub enum Stmt {
     /// are given, a data row is hidden (via the same `Vm.sheet_visibility` a loaded
     /// file's own hidden rows already round-trip through) when its `field`'th column
     /// (1-based, relative to `addr`'s own left edge -- real VBA's own convention)
-    /// doesn't match `criteria1`'s string form. Does NOT persist `<autoFilter
-    /// ref="...">`/dropdown-arrow state itself -- no real fixture in this repo has one,
-    /// and this project's own hard gate is "no writer code for an OOXML element until a
-    /// fixture shows the shape" (see ROADMAP.md's former B5 item). A bare `.AutoFilter`
-    /// (no Field/Criteria1) is a real no-op here, matching real Excel: with no filter
-    /// element, there's nothing to visibly turn on.
+    /// doesn't match `criteria1`'s string form. The VM records the standalone
+    /// `autoFilter` state and composes successive field criteria over the same range;
+    /// a bare `.AutoFilter` creates the state without hiding rows.
     RangeAutoFilter {
         addr: String,
         field: Option<Expr>,
@@ -623,6 +652,11 @@ pub enum Stmt {
     /// `Dim` line with no identifier at all). Never introduces a name. A
     /// genuine `Dim x [As BuiltinType]` is `DimBare` instead, below.
     Dim,
+    /// A procedure-local `Static` declaration. The wrapped declaration keeps
+    /// the existing Dim variants while the VM supplies persistent storage.
+    StaticDecl {
+        declaration: Box<Stmt>,
+    },
     /// `Dim x` or `Dim x As <builtin type>` — a real declaration: `x` now
     /// exists as `Empty` until assigned, matching real VBA (`IsEmpty(x)`
     /// is `True` right after this runs, not an "undefined variable" error
@@ -729,6 +763,7 @@ pub enum ForEachSource {
     Range(String),
     ObjectVar(String),
     DictionaryKeys(String),
+    DictionaryItems(String),
 }
 
 /// A Collection member receiver. `CurrentWith` is resolved against the
@@ -756,11 +791,42 @@ pub enum AccessModifier {
     Friend,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ClassFieldDef {
     pub name: String,
     pub type_name: Option<String>,
     pub access: AccessModifier,
+    /// Array dimensions for module/class fields. Empty means scalar.
+    pub array_dims: Vec<ArrayDim>,
+    /// True when the declaration used parentheses, including an unsized
+    /// dynamic array (`name()`), whose dimensions vector is empty.
+    pub is_array: bool,
+}
+
+/// A module-level constant declaration. The expression is evaluated when the
+/// module is loaded into the headless VM, not as a mutable runtime variable.
+#[derive(Debug, Clone)]
+pub struct ConstDef {
+    pub name: String,
+    pub type_name: Option<String>,
+    pub value: Expr,
+    pub access: AccessModifier,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum ParamMode {
+    /// VBA's omitted modifier. Kept distinct so the compatibility migration
+    /// can improve default-ByRef calls without changing existing literals.
+    DefaultByRef,
+    /// The argument is bound to the caller's lvalue when the VM supports it.
+    ByRef,
+    /// The argument is evaluated as a value and cannot write back.
+    ByVal,
+    /// An optional argument with a compile-time default expression.
+    OptionalByRef(Option<Expr>),
+    OptionalByVal(Option<Expr>),
+    /// A trailing variable-length argument list, represented as an Array.
+    ParamArray,
 }
 
 #[derive(Debug, Clone)]
@@ -772,6 +838,9 @@ pub struct SubDef {
     pub module_name: Option<String>,
     pub params: Vec<String>,
     pub param_types: Vec<Option<String>>,
+    /// Passing mode metadata. Kept parallel to `params`; older hand-built
+    /// ASTs may leave this empty and retain the historical value-binding path.
+    pub param_modes: Vec<ParamMode>,
     pub access: AccessModifier,
     pub body: Vec<SpannedStmt>,
 }
@@ -783,6 +852,7 @@ pub struct FuncDef {
     pub module_name: Option<String>,
     pub params: Vec<String>,
     pub param_types: Vec<Option<String>>,
+    pub param_modes: Vec<ParamMode>,
     pub return_type: Option<String>,
     pub access: AccessModifier,
     pub body: Vec<SpannedStmt>,
@@ -803,6 +873,7 @@ pub struct PropertyDef {
     pub kind: PropertyKind,
     pub params: Vec<String>,
     pub param_types: Vec<Option<String>>,
+    pub param_modes: Vec<ParamMode>,
     pub return_type: Option<String>,
     pub access: AccessModifier,
     pub body: Vec<SpannedStmt>,
@@ -834,6 +905,11 @@ pub struct Program {
     /// access modifiers are intentionally not enforced in this first
     /// class-object subset; names remain case-insensitive.
     pub class_fields: Vec<ClassFieldDef>,
+    /// Mutable scalar declarations owned by a standard module. These are
+    /// separate from procedure locals and persist across procedure calls.
+    pub module_variables: Vec<ClassFieldDef>,
+    /// Module-level constants evaluated before the entrypoint runs.
+    pub module_constants: Vec<ConstDef>,
     /// Class/interface names named by module-level `Implements` clauses.
     pub implements: Vec<String>,
     /// Module-level lines that are unsupported/unevaluated (e.g. a
@@ -849,4 +925,11 @@ pub struct Program {
     /// bound for `Dim`/`ReDim` array declarators that don't give an
     /// explicit `lo To hi`.
     pub option_base: i64,
+    /// Whether the module declares `Option Explicit`. Legacy execution still
+    /// permits implicit variables; strict validation consumes this flag
+    /// separately so existing callers retain their compatibility profile.
+    pub option_explicit: bool,
+    /// Module-level string comparison mode. Absent declarations retain the
+    /// legacy case-insensitive compatibility profile.
+    pub option_compare: OptionCompare,
 }

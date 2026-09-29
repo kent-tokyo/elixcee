@@ -115,6 +115,9 @@ class StreamWriter:
     def append(self, values: Any) -> None: ...
     def close(self) -> None: ...
 
+class InternalError(RuntimeError):
+    """An internal Rust panic contained as a normal Python exception."""
+
 # ── ExcelError ────────────────────────────────────────────────────────────────
 
 class ExcelError:
@@ -151,6 +154,10 @@ class Vm:
         """
         ...
 
+    def set_cancellation(self, cancellation: ReadCancellation | None) -> None:
+        """Attach or clear a host-owned cancellation handle for VBA batches."""
+        ...
+
     # ── VBA execution ──────────────────────────────────────────────────────────
 
     def run(self, vba_code: str, macro_name: str, timeout_ms: int | None = None) -> None:
@@ -159,6 +166,48 @@ class Vm:
         Raises :exc:`SyntaxError` on parse failure, :exc:`TimeoutError` when
         the deadline is exceeded, or :exc:`RuntimeError` on other runtime
         errors.
+        """
+        ...
+
+    def enable_trace(
+        self,
+        execution_id: str,
+        source_hash: str,
+        max_events: int = 4096,
+        max_bytes: int = 262144,
+    ) -> None:
+        """Enable a bounded trace without recording cell values or formulas."""
+        ...
+
+    def take_trace(self) -> list[dict[str, Any]]:
+        """Return and clear the redaction-safe trace from the last run."""
+        ...
+
+    def set_debug_assert_policy(self, policy: str) -> None:
+        """Set ``Debug.Assert`` policy to ``"ignore"`` or ``"error"``."""
+        ...
+
+    @property
+    def last_termination_class(self) -> str | None:
+        """Stable category for the most recent execution, or ``None`` initially.
+
+        Values are ``"success"``, ``"runtime_error"``, ``"timeout"``,
+        ``"canceled"``, ``"policy_blocked"``, ``"parse_error"``, or
+        ``"io_error"``. The normal Python exception is still raised on failure.
+        """
+        ...
+
+    def run_and_save(
+        self,
+        vba_code: str,
+        macro_name: str,
+        output_path: str,
+        timeout_ms: int | None = None,
+    ) -> None:
+        """Execute, recalculate, and atomically save a successful batch.
+
+        The destination is not published when execution or recalculation fails;
+        the caller VM is also unchanged because the batch runs on an isolated fork.
         """
         ...
 
@@ -748,6 +797,12 @@ class Vm:
         Raises ``ValueError`` on a multi-area, malformed, or reversed address,
         or an unknown *sheet* name.
         """
+        ...
+
+    def get_range_formulas(
+        self, addr: str, sheet: str | None = None
+    ) -> list[list[str | None]]:
+        """Read stored formula text; value-only and empty cells return ``None``."""
         ...
 
     def set_range(

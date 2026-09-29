@@ -7,7 +7,7 @@
 //! This keeps every other module's error type untouched.
 
 use crate::parser::ast::SourceSpan;
-use crate::vm::Variant;
+use crate::vm::{TraceEvent, Variant};
 
 /// Where a `SourceSpan` (char offset) lands in a source file — 1-based line
 /// and column, matching editor conventions.
@@ -109,6 +109,11 @@ pub struct ElixceeError {
     /// before/outside macro execution (io errors, `--sheet` setup errors,
     /// or a runtime error that somehow occurs before any statement runs).
     pub location: Option<SourceLocation>,
+    /// VBA `Err` properties captured for an uncaught runtime failure.
+    pub error_evidence: Option<crate::vm::ErrorEvidence>,
+    /// Optional redaction-safe execution events. Empty unless tracing was
+    /// explicitly enabled for the CLI run.
+    pub trace: Vec<TraceEvent>,
 }
 
 impl ElixceeError {
@@ -119,6 +124,8 @@ impl ElixceeError {
             kind: "io_error",
             message,
             location: None,
+            error_evidence: None,
+            trace: vec![],
         }
     }
 
@@ -129,6 +136,8 @@ impl ElixceeError {
             kind: "parse_error",
             message,
             location: None,
+            error_evidence: None,
+            trace: vec![],
         }
     }
 
@@ -140,6 +149,8 @@ impl ElixceeError {
             kind: "sheet_setup_error",
             message,
             location: None,
+            error_evidence: None,
+            trace: vec![],
         }
     }
 
@@ -152,6 +163,8 @@ impl ElixceeError {
             kind,
             message,
             location: None,
+            error_evidence: None,
+            trace: vec![],
         }
     }
 
@@ -170,6 +183,8 @@ impl ElixceeError {
             kind,
             message,
             location: None,
+            error_evidence: None,
+            trace: vec![],
         }
     }
 
@@ -178,6 +193,42 @@ impl ElixceeError {
     pub fn with_location(mut self, location: Option<SourceLocation>) -> Self {
         self.location = location;
         self
+    }
+
+    /// Attach structured VBA error properties without changing the stable
+    /// human-readable message or the legacy JSON shape when absent.
+    pub fn with_error_evidence(mut self, error_evidence: Option<crate::vm::ErrorEvidence>) -> Self {
+        self.error_evidence = error_evidence;
+        self
+    }
+
+    pub fn with_trace(mut self, trace: Vec<TraceEvent>) -> Self {
+        self.trace = trace;
+        self
+    }
+
+    /// Return the stable terminal category used by the run-mode JSON contract.
+    /// The detailed `error.kind` remains available for diagnostics; this field
+    /// lets batch consumers classify completion without parsing messages.
+    pub fn termination_class(&self) -> &'static str {
+        if self.message.starts_with("TIMEOUT:") {
+            "timeout"
+        } else if self.message.starts_with("CANCELED:") {
+            "canceled"
+        } else if matches!(
+            self.kind,
+            "security_blocked_external_effect" | "msgbox_blocked"
+        ) {
+            "policy_blocked"
+        } else if self.kind == "parse_error" {
+            "parse_error"
+        } else if self.kind == "io_error" {
+            "io_error"
+        } else if self.kind == "sheet_setup_error" {
+            "setup_error"
+        } else {
+            "runtime_error"
+        }
     }
 
     /// `messages` carries any MsgBox text recorded before this failure (e.g.
@@ -202,15 +253,65 @@ impl ElixceeError {
             ),
             None => "null".to_string(),
         };
+        let evidence_field = self
+            .error_evidence
+            .as_ref()
+            .map(|evidence| {
+                format!(
+                    ",\"error_evidence\":{{\"number\":{},\"description\":{},\"source\":{},\"help_file\":{},\"help_context\":{}}}",
+                    evidence.number,
+                    json_string(&evidence.description),
+                    json_string(&evidence.source),
+                    json_string(&evidence.help_file),
+                    evidence.help_context,
+                )
+            })
+            .unwrap_or_default();
+        let trace_field = if self.trace.is_empty() {
+            String::new()
+        } else {
+            format!(
+                ",\"trace\":[{}]",
+                self.trace
+                    .iter()
+                    .map(trace_event_json)
+                    .collect::<Vec<_>>()
+                    .join(",")
+            )
+        };
         format!(
-            "{{\"schema_version\":1,\"ok\":false,\"error\":{{\"code\":\"{}\",\"kind\":\"{}\",\"message\":{},\"location\":{}}},\"messages\":{}}}",
+            "{{\"schema_version\":1,\"ok\":false,\"termination_class\":\"{}\",\"error\":{{\"code\":\"{}\",\"kind\":\"{}\",\"message\":{},\"location\":{}}}{},\"messages\":{}{}}}",
+            self.termination_class(),
             self.code,
             self.kind,
             json_string(&self.message),
             location_json,
+            evidence_field,
             messages_json,
+            trace_field,
         )
     }
+}
+
+fn trace_event_json(event: &TraceEvent) -> String {
+    let span = event
+        .span
+        .map(|span| format!("{{\"start\":{},\"end\":{}}}", span.start, span.end))
+        .unwrap_or_else(|| "null".to_string());
+    format!(
+        "{{\"sequence\":{},\"execution_id\":{},\"source_hash\":{},\"kind\":{},\"procedure\":{},\"span\":{},\"detail\":{}}}",
+        event.sequence,
+        json_string(&event.execution_id),
+        json_string(&event.source_hash),
+        json_string(&event.kind),
+        event
+            .procedure
+            .as_deref()
+            .map(json_string)
+            .unwrap_or_else(|| "null".to_string()),
+        span,
+        json_string(&event.detail),
+    )
 }
 
 fn classify_runtime_error(msg: &str) -> (&'static str, &'static str) {
@@ -301,6 +402,39 @@ mod tests {
         );
         assert_eq!(err.code, "E1011");
         assert_eq!(err.kind, "security_blocked_external_effect");
+    }
+
+    #[test]
+    fn json_includes_error_evidence_only_when_attached() {
+        let plain = ElixceeError::runtime_error("boom".to_string());
+        assert!(!plain.to_json(&[]).contains("error_evidence"));
+        let enriched = plain.with_error_evidence(Some(crate::vm::ErrorEvidence {
+            number: 513,
+            description: "boom".to_string(),
+            source: "Module1".to_string(),
+            help_file: "help.chm".to_string(),
+            help_context: 42,
+        }));
+        assert!(enriched.to_json(&[]).contains(
+            "\"error_evidence\":{\"number\":513,\"description\":\"boom\",\"source\":\"Module1\",\"help_file\":\"help.chm\",\"help_context\":42}"
+        ));
+    }
+
+    #[test]
+    fn json_includes_trace_on_runtime_errors_only_when_enabled() {
+        let mut error = ElixceeError::runtime_error("boom".to_string());
+        assert!(!error.to_json(&[]).contains("\"trace\""));
+        error.trace = vec![TraceEvent {
+            sequence: 0,
+            execution_id: "job-7".to_string(),
+            source_hash: "fnv1a64:abc".to_string(),
+            kind: "failure".to_string(),
+            procedure: Some("Main".to_string()),
+            span: None,
+            detail: "runtime failure".to_string(),
+        }];
+        let json = error.to_json(&[]);
+        assert!(json.contains("\"trace\":[{\"sequence\":0,\"execution_id\":\"job-7\""));
     }
 
     #[test]
@@ -410,5 +544,25 @@ mod tests {
             "\"-Infinity\""
         );
         assert_eq!(variant_to_json(&Variant::Float(1.5)), "1.5");
+    }
+
+    #[test]
+    fn termination_class_separates_timeout_cancel_and_policy_failures() {
+        assert_eq!(
+            ElixceeError::runtime_error("TIMEOUT: deadline".to_string()).termination_class(),
+            "timeout"
+        );
+        assert_eq!(
+            ElixceeError::runtime_error("CANCELED: host request".to_string()).termination_class(),
+            "canceled"
+        );
+        assert_eq!(
+            ElixceeError::runtime_error_with_kind(
+                "blocked".to_string(),
+                Some(crate::vm::RuntimeFailureKind::SecurityBlockedExternalEffect),
+            )
+            .termination_class(),
+            "policy_blocked"
+        );
     }
 }

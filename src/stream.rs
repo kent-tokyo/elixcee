@@ -25,7 +25,12 @@ const MAX_STREAM_ROW_BYTES: usize = 16 * 1024 * 1024;
 /// Cumulative accepted-value budget for the append-only writer. Rows are written
 /// directly to ZIP; this is an admission limit, not a measurement of retained RSS.
 const MAX_STREAM_WRITER_BYTES: usize = 64 * 1024 * 1024;
-type StreamRowResult = Result<(u32, Vec<Variant>), String>;
+enum StreamMsg {
+    Row(u32, Vec<Variant>),
+    Error(String),
+    Internal(String),
+    Done,
+}
 
 fn estimated_variant_bytes(value: &Variant) -> usize {
     let payload: usize = match value {
@@ -159,79 +164,89 @@ fn stream_rows(
     sheet: Option<String>,
     max_row_bytes: usize,
     max_columns: usize,
-) -> Result<Receiver<StreamRowResult>, String> {
+) -> Result<Receiver<StreamMsg>, String> {
     let (zip_path, _) = sheet_target(&path, sheet.as_deref())?;
     let (tx, rx) = mpsc::sync_channel(2);
     std::thread::spawn(move || {
-        let result = (|| -> Result<(), String> {
-            let file = File::open(&path).map_err(|e| e.to_string())?;
-            let mut archive = zip::ZipArchive::new(file).map_err(|e| e.to_string())?;
-            reader::validate_zip_archive_for_stream(&mut archive)?;
-            let shared_xml = if archive
-                .file_names()
-                .any(|name| name == "xl/sharedStrings.xml")
-            {
-                reader::zip_read_text_for_stream(&mut archive, "xl/sharedStrings.xml")?
-            } else {
-                String::new()
-            };
-            let shared = reader::xlsx_shared_strings_for_stream(&shared_xml);
-            reader::validate_shared_strings_for_stream(&shared)?;
-            let entry = archive.by_name(&zip_path).map_err(|e| e.to_string())?;
-            let mut input = BufReader::with_capacity(STREAM_BUFFER_BYTES, entry);
-            let mut row_buf = Vec::with_capacity(128 * 1024);
-            let mut token = Vec::with_capacity(1024);
-            let mut in_row = false;
-            loop {
-                token.clear();
-                if input
-                    .read_until(b'>', &mut token)
-                    .map_err(|e| e.to_string())?
-                    == 0
+        let worker_tx = tx.clone();
+        let result =
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| -> Result<bool, String> {
+                let tx = worker_tx;
+                let file = File::open(&path).map_err(|e| e.to_string())?;
+                let mut archive = zip::ZipArchive::new(file).map_err(|e| e.to_string())?;
+                reader::validate_zip_archive_for_stream(&mut archive)?;
+                let shared_xml = if archive
+                    .file_names()
+                    .any(|name| name == "xl/sharedStrings.xml")
                 {
-                    break;
-                }
-                if !in_row {
-                    let trimmed = token.trim_ascii_start();
-                    if trimmed.starts_with(b"<row")
-                        && trimmed
-                            .get(4)
-                            .is_some_and(|b| *b == b' ' || *b == b'>' || *b == b'/')
+                    reader::zip_read_text_for_stream(&mut archive, "xl/sharedStrings.xml")?
+                } else {
+                    String::new()
+                };
+                let shared = reader::xlsx_shared_strings_for_stream(&shared_xml);
+                reader::validate_shared_strings_for_stream(&shared)?;
+                let entry = archive.by_name(&zip_path).map_err(|e| e.to_string())?;
+                let mut input = BufReader::with_capacity(STREAM_BUFFER_BYTES, entry);
+                let mut row_buf = Vec::with_capacity(128 * 1024);
+                let mut token = Vec::with_capacity(1024);
+                let mut in_row = false;
+                loop {
+                    token.clear();
+                    if input
+                        .read_until(b'>', &mut token)
+                        .map_err(|e| e.to_string())?
+                        == 0
                     {
-                        in_row = true;
-                        row_buf.clear();
+                        break;
+                    }
+                    if !in_row {
+                        let trimmed = token.trim_ascii_start();
+                        if trimmed.starts_with(b"<row")
+                            && trimmed
+                                .get(4)
+                                .is_some_and(|b| *b == b' ' || *b == b'>' || *b == b'/')
+                        {
+                            in_row = true;
+                            row_buf.clear();
+                            append_row_token(&mut row_buf, &token, max_row_bytes)?;
+                            if trimmed.ends_with(b"/>") {
+                                if let Some((row_number, row)) =
+                                    parse_stream_row(&row_buf, &shared, max_columns, false)?
+                                    && tx.send(StreamMsg::Row(row_number, row)).is_err()
+                                {
+                                    return Ok(false);
+                                }
+                                in_row = false;
+                            }
+                        }
+                    } else {
                         append_row_token(&mut row_buf, &token, max_row_bytes)?;
-                        if trimmed.ends_with(b"/>") {
+                        if is_row_close(&token) {
                             if let Some((row_number, row)) =
-                                parse_stream_row(&row_buf, &shared, max_columns, false)?
-                                && tx.send(Ok((row_number, row))).is_err()
+                                parse_stream_row(&row_buf, &shared, max_columns, true)?
+                                && tx.send(StreamMsg::Row(row_number, row)).is_err()
                             {
-                                return Ok(());
+                                return Ok(false);
                             }
                             in_row = false;
                         }
                     }
-                } else {
-                    append_row_token(&mut row_buf, &token, max_row_bytes)?;
-                    if is_row_close(&token) {
-                        if let Some((row_number, row)) =
-                            parse_stream_row(&row_buf, &shared, max_columns, true)?
-                            && tx.send(Ok((row_number, row))).is_err()
-                        {
-                            return Ok(());
-                        }
-                        in_row = false;
-                    }
                 }
-            }
-            if in_row {
-                return Err("worksheet row is unterminated".to_string());
-            }
-            Ok(())
-        })();
-        if let Err(err) = result {
-            let _ = tx.send(Err(err));
-        }
+                if in_row {
+                    return Err("worksheet row is unterminated".to_string());
+                }
+                Ok(true)
+            }));
+        let message = match result {
+            Ok(Ok(true)) => StreamMsg::Done,
+            Ok(Ok(false)) => return,
+            Ok(Err(err)) => StreamMsg::Error(err),
+            Err(payload) => StreamMsg::Internal(format!(
+                "elixcee internal error while streaming worksheet rows: {}",
+                crate::panic_payload_message(payload.as_ref())
+            )),
+        };
+        let _ = tx.send(message);
     });
     Ok(rx)
 }
@@ -296,7 +311,7 @@ pub struct PyStreamReader {
     rows_read: usize,
 }
 
-type RowReceiver = Mutex<Receiver<StreamRowResult>>;
+type RowReceiver = Mutex<Receiver<StreamMsg>>;
 
 pub(crate) fn stream_reader_from_path(
     path: &str,
@@ -387,7 +402,7 @@ impl PyStreamReader {
             }
         };
         match next {
-            Ok(Ok((row_number, row))) => {
+            Ok(StreamMsg::Row(row_number, row)) => {
                 let values = PyList::new(py, row.iter().map(|v| variant_to_py(py, v)))?
                     .into_any()
                     .unbind();
@@ -406,7 +421,18 @@ impl PyStreamReader {
                     Ok(Some(values))
                 }
             }
-            Ok(Err(err)) => Err(PyErr::new::<pyo3::exceptions::PyIOError, _>(err)),
+            Ok(StreamMsg::Error(err)) => {
+                self.receiver = None;
+                Err(PyErr::new::<pyo3::exceptions::PyIOError, _>(err))
+            }
+            Ok(StreamMsg::Internal(err)) => {
+                self.receiver = None;
+                Err(crate::InternalError::new_err(err))
+            }
+            Ok(StreamMsg::Done) => {
+                self.receiver = None;
+                Ok(None)
+            }
             Err(RecvTimeoutError::Timeout) => {
                 Err(PyErr::new::<pyo3::exceptions::PyTimeoutError, _>(format!(
                     "stream reader timed out after {} ms",
@@ -415,7 +441,9 @@ impl PyStreamReader {
             }
             Err(RecvTimeoutError::Disconnected) => {
                 self.receiver = None;
-                Ok(None)
+                Err(crate::InternalError::new_err(
+                    "elixcee internal error: stream worker stopped before the end of the worksheet; rows may be missing",
+                ))
             }
         }
     }

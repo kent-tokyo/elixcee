@@ -1655,8 +1655,15 @@ fn xml_unescape_cow(s: &str) -> Cow<'_, str> {
     while let Some(amp) = rest.find('&') {
         out.push_str(&rest[..amp]);
         let after = &rest[amp + 1..];
+        // MAX_ENTITY_BODY_LEN is a byte bound. Search the bounded window as
+        // bytes so a multi-byte UTF-8 character cannot be split by a `&str`
+        // slice. `;` is ASCII, so a position found here is always a valid
+        // character boundary for the entity slice below.
         let window_end = after.len().min(MAX_ENTITY_BODY_LEN);
-        let decoded = after[..window_end].find(';').and_then(|semi| {
+        let semi_pos = after.as_bytes()[..window_end]
+            .iter()
+            .position(|&byte| byte == b';');
+        let decoded = semi_pos.and_then(|semi| {
             let entity = &after[..semi];
             let ch = match entity {
                 "amp" => Some('&'),
@@ -7356,6 +7363,18 @@ mod merge_tests {
             xml_unescape("a &notarealentity forever"),
             "a &notarealentity forever"
         );
+    }
+
+    #[test]
+    fn xml_unescape_does_not_slice_through_multibyte_text() {
+        for prefix_len in 0..=MAX_ENTITY_BODY_LEN {
+            let input = format!("{}&amp;フフフ 商事", "x".repeat(prefix_len));
+            let result = std::panic::catch_unwind(|| xml_unescape(&input));
+            assert_eq!(
+                result.unwrap(),
+                format!("{}&フフフ 商事", "x".repeat(prefix_len))
+            );
+        }
     }
 
     // ── read() item 1: empty-string cell fix ────────────────────────────────

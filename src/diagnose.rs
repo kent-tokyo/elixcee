@@ -30,7 +30,8 @@
 use crate::diagnostics::{SourceLocation, json_string};
 use crate::parser::{Program, ast::SourceSpan};
 use crate::vm::{
-    HiddenCellsObservation, Interval, Rect, ResolutionEvidence, ResolutionFailureKind, Vm,
+    ArgumentFailure, ErrorEvidence, HiddenCellsObservation, Interval, Rect, ResolutionEvidence,
+    ResolutionFailureKind, TraceEvent, Vm,
 };
 
 /// The outcome of running one macro under strict-resolution diagnosis.
@@ -65,6 +66,16 @@ pub struct Diagnosis {
     /// folded into `root_causes` (which means "why it failed").
     pub hidden_cells: Option<HiddenCellsObservation>,
     pub messages: Vec<String>,
+    /// `Debug.Print` records kept separate from MsgBox messages and stdout.
+    pub debug_output: Vec<String>,
+    /// Structured user-procedure argument evidence, when binding failed.
+    pub argument_failure: Option<ArgumentFailure>,
+    /// Structured `Err` properties captured at an uncaught runtime failure.
+    pub error_evidence: Option<ErrorEvidence>,
+    /// Optional redaction-safe execution events. Empty unless the caller
+    /// explicitly enables tracing on the VM (the CLI diagnosis path keeps it
+    /// disabled by default).
+    pub trace: Vec<TraceEvent>,
 }
 
 #[derive(Debug)]
@@ -386,6 +397,10 @@ pub fn run_diagnosis(
             root_cause: None,
             hidden_cells: vm.hidden_cells_observation(),
             messages: vm.take_messages(),
+            debug_output: vm.take_debug_output(),
+            argument_failure: vm.take_argument_failure(),
+            error_evidence: vm.take_error_evidence(),
+            trace: vm.take_trace(),
         }),
         Err(message) => {
             let root_cause = vm.take_resolution_failure().map(RootCause::from_kind);
@@ -406,6 +421,10 @@ pub fn run_diagnosis(
                 root_cause,
                 hidden_cells,
                 messages: vm.take_messages(),
+                debug_output: vm.take_debug_output(),
+                argument_failure: vm.take_argument_failure(),
+                error_evidence: vm.take_error_evidence(),
+                trace: vm.take_trace(),
             })
         }
     }
@@ -633,10 +652,64 @@ pub fn to_json(
         Some(obs) => format!(",\"observations\":{}", observations_json(Some(obs))),
         None => String::new(),
     };
+    let debug_field = if diag.debug_output.is_empty() {
+        String::new()
+    } else {
+        format!(
+            ",\"debug_output\":[{}]",
+            diag.debug_output
+                .iter()
+                .map(|line| json_string(line))
+                .collect::<Vec<_>>()
+                .join(",")
+        )
+    };
+    let argument_field = match &diag.argument_failure {
+        Some(failure) => format!(
+            ",\"argument_failure\":{{\"procedure\":{},\"parameter\":{},\"position\":{},\"message\":{}}}",
+            json_string(&failure.procedure),
+            failure
+                .parameter
+                .as_deref()
+                .map(json_string)
+                .unwrap_or_else(|| "null".to_string()),
+            failure.position,
+            json_string(&failure.message),
+        ),
+        None => String::new(),
+    };
+    let error_field = match &diag.error_evidence {
+        Some(error) => format!(
+            ",\"error_evidence\":{{\"number\":{},\"description\":{},\"source\":{},\"help_file\":{},\"help_context\":{}}}",
+            error.number,
+            json_string(&error.description),
+            json_string(&error.source),
+            json_string(&error.help_file),
+            error.help_context,
+        ),
+        None => String::new(),
+    };
+    let trace_field = if diag.trace.is_empty() {
+        String::new()
+    } else {
+        format!(
+            ",\"trace\":[{}]",
+            diag.trace
+                .iter()
+                .map(trace_event_json)
+                .collect::<Vec<_>>()
+                .join(",")
+        )
+    };
     if diag.ok {
         return format!(
-            "{{\"schema_version\":1,\"ok\":true,\"messages\":{}{}}}",
-            messages_json, observations_field
+            "{{\"schema_version\":1,\"ok\":true,\"messages\":{}{}{}{}{}{}}}",
+            messages_json,
+            observations_field,
+            debug_field,
+            argument_field,
+            error_field,
+            trace_field
         );
     }
     let root_causes = match &diag.root_cause {
@@ -644,12 +717,37 @@ pub fn to_json(
         None => "[]".to_string(),
     };
     format!(
-        "{{\"schema_version\":1,\"ok\":false,\"message\":{},\"location\":{},\"root_causes\":{},\"messages\":{}{}}}",
+        "{{\"schema_version\":1,\"ok\":false,\"message\":{},\"location\":{},\"root_causes\":{},\"messages\":{}{}{}{}{}{}}}",
         json_string(diag.message.as_deref().unwrap_or("")),
         location_json(location),
         root_causes,
         messages_json,
         observations_field,
+        debug_field,
+        argument_field,
+        error_field,
+        trace_field,
+    )
+}
+
+fn trace_event_json(event: &TraceEvent) -> String {
+    let span = event
+        .span
+        .map(|span| format!("{{\"start\":{},\"end\":{}}}", span.start, span.end))
+        .unwrap_or_else(|| "null".to_string());
+    format!(
+        "{{\"sequence\":{},\"execution_id\":{},\"source_hash\":{},\"kind\":{},\"procedure\":{},\"span\":{},\"detail\":{}}}",
+        event.sequence,
+        json_string(&event.execution_id),
+        json_string(&event.source_hash),
+        json_string(&event.kind),
+        event
+            .procedure
+            .as_deref()
+            .map(json_string)
+            .unwrap_or_else(|| "null".to_string()),
+        span,
+        json_string(&event.detail),
     )
 }
 
@@ -1292,6 +1390,10 @@ mod tests {
             root_cause: Some(RootCause::from_kind(kind.clone())),
             hidden_cells: None,
             messages: vec![],
+            debug_output: vec![],
+            argument_failure: None,
+            error_evidence: None,
+            trace: vec![],
         };
         let full_json = to_json(&diag, None, None);
         let root_causes_fragment = format!("\"root_causes\":{}", root_causes_json(Some(&kind)));
@@ -1370,6 +1472,10 @@ mod tests {
             },
             hidden_cells,
             messages: vec![],
+            debug_output: vec![],
+            argument_failure: None,
+            error_evidence: None,
+            trace: vec![],
         }
     }
 
@@ -1382,6 +1488,49 @@ mod tests {
             !to_json(&diagnosis_with_hidden_cells(false, None), None, None)
                 .contains("observations")
         );
+    }
+
+    #[test]
+    fn to_json_includes_debug_output_only_when_present() {
+        let mut diag = diagnosis_with_hidden_cells(true, None);
+        assert!(!to_json(&diag, None, None).contains("debug_output"));
+        diag.debug_output = vec!["value\t7".to_string()];
+        let json = to_json(&diag, None, None);
+        assert!(json.contains("\"debug_output\":[\"value\\t7\"]"));
+    }
+
+    #[test]
+    fn to_json_includes_error_evidence_only_when_present() {
+        let mut diag = diagnosis_with_hidden_cells(false, None);
+        assert!(!to_json(&diag, None, None).contains("error_evidence"));
+        diag.error_evidence = Some(ErrorEvidence {
+            number: 513,
+            description: "boom".to_string(),
+            source: "MySource".to_string(),
+            help_file: "help.chm".to_string(),
+            help_context: 42,
+        });
+        let json = to_json(&diag, None, None);
+        assert!(json.contains(
+            "\"error_evidence\":{\"number\":513,\"description\":\"boom\",\"source\":\"MySource\",\"help_file\":\"help.chm\",\"help_context\":42}"
+        ));
+    }
+
+    #[test]
+    fn to_json_includes_trace_only_when_present() {
+        let mut diag = diagnosis_with_hidden_cells(true, None);
+        assert!(!to_json(&diag, None, None).contains("\"trace\""));
+        diag.trace = vec![TraceEvent {
+            sequence: 0,
+            execution_id: "job-7".to_string(),
+            source_hash: "sha256:abc".to_string(),
+            kind: "entry".to_string(),
+            procedure: Some("MySub".to_string()),
+            span: None,
+            detail: "Sub MySub".to_string(),
+        }];
+        let json = to_json(&diag, None, None);
+        assert!(json.contains("\"trace\":[{\"sequence\":0,\"execution_id\":\"job-7\""));
     }
 
     #[test]

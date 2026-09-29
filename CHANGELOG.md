@@ -4,6 +4,282 @@
 
 ## [Unreleased]
 
+## [1.0.13] - 2026-09-29
+
+- Fixed a UTF-8 boundary panic when an XML entity was followed by multibyte text
+  in an inline-string cell. The reader now searches the bounded entity window as
+  bytes, while slicing the decoded entity only at a valid character boundary.
+- Added `elixcee.InternalError` for internal panics from workbook loading,
+  macro diagnosis, and streaming reads. A stream worker now sends an explicit
+  end marker; an unexpected worker exit is reported instead of silently
+  truncating the row stream.
+
+- VBA `IsObject` now distinguishes declared object variables holding
+  `Nothing` from `Empty`, `Null`, and scalar variables without collapsing the
+  object state into a scalar value.
+- VBA object arrays now expose their declared `LBound`/`UBound` and return
+  `True` from `IsArray`. Uninitialized elements preserve `Nothing` through
+  `Set` and `ReDim Preserve`; member access still raises the existing object
+  not-set error.
+- VBA user-defined procedure calls now re-apply declared scalar type coercion
+  during `ByRef` write-back, including array elements. Integer-width checks are
+  therefore enforced after the callee changes a typed argument, instead of
+  silently restoring an untyped `Variant` value.
+- Typed VBA boundaries now preserve whole-day `Date` variants, quantize
+  `Currency` values to four decimal places, and reject `Null` when a declared
+  `String` parameter would otherwise erase the distinction by converting it to
+  an empty string. Fractional Date/time storage remains an explicit follow-up.
+- VBA `ByRef` binding now writes back local UDT fields, nested UDT fields, and
+  fields of UDT array elements through the same caller-side alias boundary.
+  Module-level UDT fields now use an explicit module-scope target and preserve
+  their owner across procedure calls. Module-level UDT array elements now use
+  the same scoped path. Complex object/property lvalues remain outside this
+  increment. Direct field assignment for module-level UDT arrays is also
+  supported, so initialization and subsequent ByRef calls share one storage.
+- Typed argument conversion failures now populate the structured
+  `ArgumentFailure` evidence with the procedure, parameter, position, and
+  conversion detail instead of exposing only an unstructured runtime string.
+- Scalar class Property lvalues passed to `ByRef` now round-trip through
+  `Property Get`, the callee, and `Property Let`, preserving the headless
+  object-model boundary without treating the property as a UDT field.
+- VBA `ByRef` binding now writes back local UDT fields, nested UDT fields, and
+  fields of UDT array elements through the same caller-side alias boundary.
+  Module-level UDT and complex object/property lvalues remain outside this
+  increment.
+- VBA binder now preserves omitted Optional parameters in the middle of a
+  named call, keeping their default value and `IsMissing` state distinct from
+  `Empty`. OptionalByRef literals are accepted as non-write-back temporaries;
+  explicit ByRef lvalue rejection remains unchanged. The same behavior now
+  covers user-defined Functions and class Property Get index arguments; named
+  parameter matching is case-insensitive. Property Get now also accepts
+  omitted trailing or named Optional index arguments and preserves `IsMissing`.
+  Property Let／Set index binding now applies the same optional-argument
+  normalization while keeping the final assigned value/object separate.
+  Object-returning Property Get uses the same normalization and object type
+  checks, and scalar ByRef index arguments now write back from the getter to
+  the caller. Class Function scalar ByRef, Optional, and named arguments now use
+  the same alias, default, and `IsMissing` paths. Property Let now writes back a
+  ByRef value argument from both indexed-property and no-index
+  `object.Property = expression` paths. Object-return class Functions now use
+  the same Optional, named-argument, `IsMissing`, and scalar ByRef write-back
+  paths. Object-return class Functions now also preserve object ByRef identity
+  when the callee replaces the reference. Property Set now writes back a ByRef object value when the property
+  replaces the caller's object reference. Standard-module Subs with object
+  parameters now use the same object-aware binder, and nested calls synchronize
+  only the current ByRef frame so same-named outer parameters are preserved.
+  Standard-module Variant-return Functions now bind object parameters through
+  the same identity-preserving path.
+  Standard-module Functions now also support object returns through the
+  `Set result = Make(...)` path while preserving Collection default members.
+  Class Subs now preserve the same
+  object ByRef identity when the callee assigns a new object reference.
+- Python `Vm` execution now exposes additive `last_termination_class`, using
+  the same stable categories as CLI for `run`, event dispatch, and
+  `run_and_save` while preserving the existing Python exception types.
+- The local VBA workflow runner now verifies and records `termination_class`
+  for both successful and expected-error CLI cases, in addition to checking
+  the detailed error kind.
+- V8 adds a measurement-only native `benchmark_vba_vm` binary and records a
+  parse/I/O-excluded 10,000-row VM baseline with p50/p95 and raw samples.
+- V6 records a local Python wheel self-check across all six workflow cases:
+  five successful `run_and_save` outputs report `success`, while the failure
+  boundary reports `runtime_error` and preserves its existing output.
+- `test-workbook` now supports bounded range assertions for scalar values and
+  stored formula presence/absence, with the existing error assertion preserved.
+- V7aのXLSM provenance境界に標準ライブラリのみの回帰セルフチェックを追加し、埋め込み`vbaProject.bin`、パッケージ内ソース、別渡し`.bas`、OOXML側の`codeName`／VBA relationship、module identity未取得、実行未実施、展開サイズ上限拒否を自動検証するようにした。
+- V4a workflow runner now verifies declared `formulas_absent` cells from saved worksheet XML, so Value2 matrix transfer tests assert both values and formula removal after publication.
+- V4a workflow coverage now also verifies declared `formulas_present` cells, distinguishing calculated-value transfer from source-formula retention.
+- CLI V5b failure-injection coverage now runs 100 failed jobs, verifies each existing output remains byte-identical, and confirms a subsequent independent job succeeds without state contamination.
+- CLI V5c adds `run --cancel-file` for host/CI cancellation and covers 100 preexisting-cancel cases without publishing output.
+- Python V5c coverage adds 100 canceled `Vm.run_and_save` cases, checking destination and caller VM isolation plus an independent follow-up VM.
+- Writer V5c now checks cancellation at each streamed XML write boundary and cleans the temporary output through a Drop guard on all failed save paths.
+- V6 workflow validation now supports a local expected-error case without changing the external `not_measured` oracle class, covering runtime-error classification and output preservation.
+- V6 local workflow runner now supports a reproducible JSON report with manifest/workbook/source/binary hashes, local result classes, output hashes, and failures kept separate from external oracle measurement.
+- V6 workflow reports now include the bounded CLI trace event count and digest without copying trace values into the report.
+- V8 adds a dependency-free local VBA workflow wall-time benchmark with p50/p95, output stability, and explicit separation from RSS and Excel/xlflow measurements.
+- V8 local measurement now optionally records child-process RSS with an explicit
+  `ps`-polling caveat; the macOS arm64 baseline is documented separately from
+  non-RSS wall-time measurements and from external Excel/xlflow comparison.
+- V8 local workflow benchmarks now perform five configurable warmup runs by
+  default and exclude them from reported p50/p95 samples.
+- V8 adds a reproducible VBA-free equal-workbook measurement across 17 cells,
+  1,000×10, and 10,000×10 fixtures. The current local p50 ratios versus
+  openpyxl are 2.04×, 6.58×, and 9.88× respectively; this is not an
+  Excel/xlflow or VBA speed claim.
+- V8 regression confirmation against the v1.0.11 tag is mixed: the current
+  build is faster on 1,000×10, but the 17-cell p95 regressed by 22.4% and the
+  10,000×10 p50 by 5.5%. The performance gate remains open pending diagnosis.
+- V8 hot-path follow-up avoids repeated VM cancellation-field lookup during
+  ordinary saves while preserving cancellation semantics. Against clean
+  v1.0.12, the 10-round confirmation's largest observed p95 delta was +4.9%,
+  below the local 10% investigation threshold. Three-OS and external oracle
+  gates remain pending.
+- V6 CLI JSON now exposes an additive `termination_class` field for stable
+  success, runtime-error, timeout, cancellation, policy, setup, parse, and I/O
+  classification without message parsing.
+- VBA: extend headless `Cells.Find` with the Excel-facing `MatchCase` named
+  argument. The default remains case-insensitive; `MatchCase:=True` performs
+  an exact text match. Parser, static-check, runtime, and regression coverage
+  were added without introducing GUI or COM dependencies.
+- Python: make `Vm.run_and_save` execute on an isolated VM fork and publish the
+  fork only after macro execution, recalculation, and atomic save all succeed.
+  A failed batch now preserves both the destination and the reusable caller VM.
+- Writer: validate the closed temporary ZIP and required OOXML root parts before
+  atomic publication. This is a structural safety gate, not a full Excel oracle.
+- Python: expose `Vm.set_cancellation(ReadCancellation | None)` so hosts can
+  cancel VBA execution and recalculation cooperatively from another thread.
+- Writer: honor the same cancellation flag before starting a save and again
+  immediately before atomic publish, cleaning the temporary output when canceled.
+- CLI: add an end-to-end regression covering VBA execution, formula recalculation,
+  JSON cell projection, and XLSX output from one headless job.
+- CLI: add a failure-path regression proving that a runtime error after an
+  earlier cell write leaves an existing output file unchanged.
+- Compatibility corpus: align the Transfer workflow with the declared Sheet1
+  fixture and execute it through the CLI integration test; oracle measurement
+  remains explicitly `not_measured`.
+- Compatibility corpus: add a dependency-free local runner for all declared
+  workflows, keeping local self-checks separate from Excel/xlflow measurement.
+- Compatibility corpus: add a Sort／AutoFilter／Find workflow fixture that
+  verifies a representative headless table-processing path through the CLI.
+- VBA: assign a rectangular `Range.Value`/`Value2` array in row-major order,
+  while rejecting shape mismatches before mutating the destination. Scalar
+  range fill behavior remains unchanged and formula text is cleared by value
+  assignment as expected.
+- Compatibility corpus: add a module-level Collection/Dictionary alias
+  workflow that verifies cross-procedure identity through the headless CLI.
+- Compatibility corpus: add a Value2 matrix workflow covering formula-result,
+  empty-cell, and row-major range transfer through save and readback.
+- VBA: preserve Empty and Excel Error variants during rectangular `Value2`
+  array transfer, with regression coverage for the mixed-value case.
+- Parser: accept `Cells(row, col).Value2` on the same value-writing path as
+  `.Value`, covering the scalar syntax used by headless workbook macros.
+- CLI: use the verified save boundary so successful runs publish only after
+  the generated workbook passes an elixcee reader roundtrip.
+- CLI: cover save-to-directory failure injection and verify that the existing
+  output directory remains untouched.
+- Trace: expose redaction-safe `recalculate_*` and `save_*` phase boundaries
+  in CLI JSON, including save failures, while keeping workbook values out.
+- Compatibility corpus: make the local workflow runner read published XLSX
+  values back with the Python standard library, so output validation covers
+  the save boundary as well as the CLI JSON response.
+- CI: run the V0 workflow manifest validator and local release-binary
+  self-check in the `compat-vba` job.
+- Planning: add scoped V0–V9 phases for headless workbook VBA processing, with
+  argument semantics first and a pinned xlflow/Excel comparison protocol.
+  This updates priorities and acceptance criteria, not runtime capabilities.
+- VBA: retain explicit `ByRef`/`ByVal` parameter metadata and write back scalar
+  variables for explicit `ByRef` calls in user-defined Subs and Functions.
+- VBA: add partial `Optional` defaults and trailing `ParamArray` binding for
+  user-defined Subs and Functions, including compile-time variable-arity checks.
+  Add call-frame `IsMissing` observation without conflating it with `Empty`.
+  Add named-argument binding for user-defined Subs and Functions.
+  Add scalar write-back for implicit `ByRef` variable arguments while retaining
+  literal/expression compatibility. Strict `Missing` Variant representation,
+  arrays, and objects remain pending.
+  Preserve scalar ByRef aliasing during a call: when the same caller variable is
+  passed to multiple ByRef parameters, statement-boundary synchronization makes
+  both parameters observe the shared storage instead of applying stale final
+  copies. Nested/property/array-element alias cases remain pending.
+  Basic one- and multi-dimensional VBA array elements can now participate in
+  user-defined Sub/Function `ByRef` calls and are written back to the caller,
+  including when the callee is in another loaded module.
+  Class-module Sub calls now use the same basic ByRef scalar/array-element
+  write-back path. Property Get/Let/Set index arguments now use the same
+  basic path; Property value-argument ByRef remains a separate follow-up.
+  Add `get_range_formulas` to inspect stored formula text separately from
+  calculated values, including formula removal after a raw range replacement.
+  Standard-module object aliases now resolve through the shared object lookup,
+  so `Set alias = moduleCollection` preserves Collection identity.
+  The same identity regression is covered for module-level
+  `Scripting.Dictionary` aliases.
+  Parse and load module-level `Const` declarations into an immutable,
+  module-scoped constant table. Declared scalar types are coerced at load time,
+  constants can be read by procedures, and assignment attempts fail instead
+  of mutating a normal runtime variable. Module variables remain pending.
+  Add explicit `Option Compare Binary` and `Option Compare Text` handling for
+  VBA string operators; modules without a declaration retain the legacy
+  case-insensitive compatibility profile. Class-module scoping and worksheet
+  formula comparison remain separate pending work.
+  Add standard-module scalar variables with typed default values, shared
+  procedure visibility, and persistence across repeated entrypoint calls.
+  Fixed-dimension and dynamic module arrays now support bounds-aware read/write,
+  `LBound`/`UBound`, `ReDim Preserve`, and `Erase`. Complex object declarations
+  and initializer expressions remain pending.
+  Add basic standard-module object declarations for `Worksheet`, `Range`, and
+  `Collection`, including `Nothing` initialization, `Set`, persistence, and
+  worksheet/range qualification. Module-level Collection references are also
+  retained as GC roots across procedure calls. Object initializer expressions,
+  object arrays, and complete object semantics remain pending.
+  `Scripting.Dictionary` declarations in standard modules now use the same
+  VM-local adapter without enabling external COM access.
+  Dictionary `With` blocks now resolve `Add`, `Count`, and `Item` against the
+  same persistent module object.
+  `Debug.Assert` is retained as a statement with an explicit headless
+  `ignore` (default) or `error` VM policy, exposed through Python and CLI
+  `--debug-assert`; no VBE/GUI break is attempted.
+  Add a dependency-free XLSM provenance auditor that distinguishes preserved
+  `vbaProject.bin` from separately supplied VBA source without executing it.
+  Add procedure-local `Static` declarations with persistent values across
+  repeated calls, while keeping their storage separate from ordinary locals.
+  The supported boundary covers scalar and existing array declaration forms;
+  class/static scope composition and full VBA initialization semantics remain
+  pending.
+- VBA: coerce scalar `Integer`/`Long`, floating-point, `String`, and `Boolean`
+  arguments at user-defined Sub/Function call boundaries. Date, Currency,
+  object, array, and full overflow semantics remain pending; `Byte`/`Integer`/
+  `Long` declared ranges now reject out-of-range values.
+- VBA conversion boundaries: add `CByte` and reject post-rounding values
+  outside the `Byte`, `Integer`, or `Long` range while preserving VBA's
+  half-to-even conversion behavior.
+- VBA scope metadata: retain `Option Explicit` in the parsed `Program` while
+  preserving the legacy implicit-variable execution profile. The strict
+  diagnose profile now rejects basic undeclared reads and assignment targets
+  before execution;
+  module/static declarations and complex object/array declaration analysis
+  remain pending.
+- VBA diagnostics: retain `Debug.Print` as VM output separate from MsgBox and
+  stdout, with bounded record/byte storage and an explicit truncation marker.
+  The `diagnose` JSON contract exposes non-empty records as `debug_output`.
+  Argument binding failures also expose procedure, parameter, and one-based
+  position evidence as `argument_failure`.
+  Uncaught runtime failures now expose structured `Err` fields as
+  `error_evidence` in the diagnose JSON contract, including `Err.Raise`
+  source and help metadata when supplied.
+  The same optional `error_evidence` object is now included by the CLI
+  `--json` runtime-error path when structured VBA error state is available.
+  Add an opt-in, bounded, redaction-safe VM/Python trace with execution ID, source
+  hash, procedure/span, entry/exit, statement, cell-change, and failure
+  events. Trace values are never recorded and the default remains disabled.
+  The CLI now exposes the same facility with `--trace <execution-id>` and
+  emits trace records in successful `--json` results with a stable source
+  bundle identity.
+  Runtime and recalculation failures in CLI `--json` now include the same trace
+  field when `--trace` is enabled; trace remains omitted when disabled.
+  Dictionary Item assignment now updates an existing key or adds a new key,
+  preserving the VM-local CompareMode and capacity guard.
+  Range `.Value2` now follows the existing scalar/2D `.Value` path for VBA
+  reads and writes, including preservation of Excel error variants.
+  Collection and Dictionary key iteration now have regression coverage for
+  mutation during iteration and retain the start-of-iteration snapshot.
+  Dictionary key normalization now keeps numeric and string keys distinct;
+  text CompareMode remains limited to string keys.
+  `For Each value In dictionary.Items` now iterates a value snapshot while
+  retaining object identity for object-valued entries.
+  Add Python `Vm.run_and_save` as an explicit headless batch boundary: execute a
+  macro, recalculate (including spills), and save atomically only after success.
+  Execution/recalculation failures do not publish a partial destination; batch
+  validation, cancellation, and failure-injection coverage remain pending.
+  The CLI run path now also recalculates formulas and dynamic-array spills
+  before producing JSON or publishing `--output`, keeping observed and saved
+  workbook state aligned.
+  Add a host-owned cooperative cancellation flag to the VM. Loop execution and
+  formula recalculation now stop with a typed `CANCELED` result, and the CLI
+  signal watcher remains active through VBA execution and recalculation instead
+  of only covering workbook loading. Python cancellation handles and
+  save-phase cancellation remain pending.
+  Debug.Assert policy, call-site diagnostics, and execution trace identity
+  remain pending.
+
 ## [1.0.12] - 2026-09-12
 
 - Maintenance: split Playground sheet rendering into visible-window, row,

@@ -11,8 +11,8 @@ use std::{
 use elixcee::{
     check, diagnose, diagnoseworkbook,
     diagnostics::{self, ElixceeError},
-    parser, reader, save_workbook, snapshot, testworkbook,
-    vm::{Variant, Vm, serial_to_display},
+    parser, reader, save_workbook_verified, snapshot, testworkbook,
+    vm::{DebugAssertPolicy, Variant, Vm, serial_to_display},
 };
 
 static CLI_SIGNAL_CANCELLED: AtomicBool = AtomicBool::new(false);
@@ -98,6 +98,9 @@ fn usage() -> ! {
            --sheet <name>   Active sheet name (default: first sheet in --file)\n\
            --external-links <preserve|reject>  External-link policy (default: preserve; never fetches URLs)\n\
            --output <path>  Save result cells to spreadsheet (.xlsx / .xlsm / .ods)\n\
+           --trace <id>     Enable bounded redaction-safe execution trace\n\
+           --cancel-file <path>  Cancel the run when this host-owned file exists\n\
+           --debug-assert <ignore|error>  Headless Debug.Assert policy (default: ignore)\n\
            --json           Emit a single JSON object (result or error) instead of plain text\n\
            --version, -V    Print the version number and exit\n\
          \n\
@@ -175,6 +178,13 @@ fn load_one_module(path: &str) -> Result<LoadedModule, LoadModuleError> {
         .is_some_and(|extension| extension.eq_ignore_ascii_case("cls"))
     {
         program.is_class_module = true;
+        // The parser cannot know that a source without the exported
+        // `VERSION ... CLASS` header will later be identified by its `.cls`
+        // extension. Reclassify declarations collected provisionally as
+        // standard-module variables so class instances receive their fields.
+        program
+            .class_fields
+            .extend(program.module_variables.drain(..));
     }
     let name = program
         .module_name
@@ -920,6 +930,54 @@ fn col_to_letters(mut col: u32) -> String {
     String::from_utf8(bytes).unwrap()
 }
 
+fn source_bundle_hash(modules: &[LoadedModule]) -> String {
+    // Stable, dependency-free identity for the exact source bundle supplied
+    // to this CLI. This is an execution-trace identity, not a cryptographic
+    // integrity claim; callers needing provenance should record the files'
+    // cryptographic digest alongside the trace.
+    let mut hash = 0xcbf29ce484222325u64;
+    for module in modules {
+        for byte in module
+            .name
+            .bytes()
+            .chain([0u8].into_iter())
+            .chain(module.source.bytes())
+        {
+            hash ^= u64::from(byte);
+            hash = hash.wrapping_mul(0x100000001b3);
+        }
+    }
+    format!("fnv1a64:{hash:016x}")
+}
+
+fn trace_events_to_json(events: &[elixcee::vm::TraceEvent]) -> String {
+    let values = events
+        .iter()
+        .map(|event| {
+            let span = event
+                .span
+                .map(|span| format!("{{\"start\":{},\"end\":{}}}", span.start, span.end))
+                .unwrap_or_else(|| "null".to_string());
+            format!(
+                "{{\"sequence\":{},\"execution_id\":{},\"source_hash\":{},\"kind\":{},\"procedure\":{},\"span\":{},\"detail\":{}}}",
+                event.sequence,
+                diagnostics::json_string(&event.execution_id),
+                diagnostics::json_string(&event.source_hash),
+                diagnostics::json_string(&event.kind),
+                event
+                    .procedure
+                    .as_deref()
+                    .map(diagnostics::json_string)
+                    .unwrap_or_else(|| "null".to_string()),
+                span,
+                diagnostics::json_string(&event.detail),
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(",");
+    format!("[{values}]")
+}
+
 fn format_variant(v: &Variant) -> String {
     match v {
         Variant::Integer(n) => n.to_string(),
@@ -1012,6 +1070,9 @@ fn main() {
     let mut sheet_name: Option<String> = None;
     let mut output: Option<String> = None;
     let mut json = false;
+    let mut trace_id: Option<String> = None;
+    let mut cancel_file: Option<String> = None;
+    let mut debug_assert_policy = DebugAssertPolicy::Ignore;
     let mut external_links = reader::ExternalLinksPolicy::Preserve;
 
     let mut i = 1;
@@ -1048,6 +1109,28 @@ fn main() {
             "--json" => {
                 json = true;
             }
+            "--trace" => {
+                i += 1;
+                trace_id = args
+                    .get(i)
+                    .cloned()
+                    .or_else(|| die("--trace requires an execution id"));
+            }
+            "--cancel-file" => {
+                i += 1;
+                cancel_file = args
+                    .get(i)
+                    .cloned()
+                    .or_else(|| die("--cancel-file requires a path"));
+            }
+            "--debug-assert" => {
+                i += 1;
+                debug_assert_policy = match args.get(i).map(String::as_str) {
+                    Some("ignore") => DebugAssertPolicy::Ignore,
+                    Some("error") => DebugAssertPolicy::Error,
+                    _ => die("--debug-assert requires ignore or error"),
+                };
+            }
             "--help" | "-h" => usage(),
             arg if arg.starts_with('-') => die(&format!("unknown option: {}", arg)),
             _ => positionals.push(args[i].clone()),
@@ -1072,15 +1155,23 @@ fn main() {
 
     let mut vm = Vm::new();
     vm.print_msgbox = !json;
+    vm.debug_assert_policy = debug_assert_policy;
+    if let Some(execution_id) = trace_id.as_deref() {
+        vm.enable_trace(execution_id, source_bundle_hash(&modules), 4096);
+    }
 
     let cancellation = Arc::new(AtomicBool::new(false));
     let watcher_stop = Arc::new(AtomicBool::new(false));
-    let watcher =
-        start_cli_cancellation_watcher(None, Arc::clone(&cancellation), watcher_stop.clone());
+    let watcher = start_cli_cancellation_watcher(
+        cancel_file,
+        Arc::clone(&cancellation),
+        watcher_stop.clone(),
+    );
+    vm.set_cancellation(Some(Arc::clone(&cancellation)));
     let read_options = reader::ReadOptions {
         max_work_units: Some(reader::DEFAULT_READ_MAX_WORK_UNITS),
         timeout_ms: None,
-        cancellation: Some(cancellation),
+        cancellation: Some(Arc::clone(&cancellation)),
         external_links,
     };
 
@@ -1123,9 +1214,6 @@ fn main() {
             die(&e)
         }
     }
-    watcher_stop.store(true, Ordering::Relaxed);
-    let _ = watcher.join();
-
     let start = std::time::Instant::now();
     let run_result = if modules.len() == 1 {
         vm.run_sub(&modules[0].program, &macro_name)
@@ -1138,6 +1226,8 @@ fn main() {
     };
     let duration_ms = start.elapsed().as_secs_f64() * 1000.0;
     if let Err(e) = run_result {
+        watcher_stop.store(true, Ordering::Relaxed);
+        let _ = watcher.join();
         // MsgBox text shown before the failure must still reach the agent —
         // take_messages() before fail_json, not after (fail_json never returns).
         if json {
@@ -1155,37 +1245,71 @@ fn main() {
             } else {
                 None
             };
-            fail_json(
-                ElixceeError::runtime_error_with_kind(e, vm.take_runtime_failure())
-                    .with_location(location),
-                &vm.take_messages(),
-            )
+            let error = ElixceeError::runtime_error_with_kind(e, vm.take_runtime_failure())
+                .with_location(location)
+                .with_error_evidence(vm.take_error_evidence())
+                .with_trace(vm.take_trace());
+            let messages = vm.take_messages();
+            fail_json(error, &messages)
         } else {
             die(&format!("runtime error: {}", e))
         }
     }
 
+    // Make the headless file path explicit: a successful VBA mutation is not
+    // yet a publishable workbook result until formulas and dynamic-array
+    // spills have been recalculated. This also keeps the JSON cell projection
+    // and the saved workbook on the same post-calculation state.
+    vm.trace_phase("recalculate_start", "workbook");
+    if let Err(e) = vm.recalculate_all_with_spills() {
+        vm.trace_phase("recalculate_failure", "workbook");
+        watcher_stop.store(true, Ordering::Relaxed);
+        let _ = watcher.join();
+        if json {
+            let error = ElixceeError::runtime_error_with_kind(e, vm.take_runtime_failure())
+                .with_error_evidence(vm.take_error_evidence())
+                .with_trace(vm.take_trace());
+            fail_json(error, &vm.take_messages());
+        } else {
+            die(&format!("recalculation error: {}", e));
+        }
+    }
+    vm.trace_phase("recalculate_end", "workbook");
+
+    watcher_stop.store(true, Ordering::Relaxed);
+    let _ = watcher.join();
+
     if json {
         // Do the (optional) save first so a write failure doesn't leave a
         // success object already printed — --json must emit exactly one
         // JSON object on stdout.
-        if let Some(ref path) = output
-            && let Err(e) = save_workbook(&vm, path)
-        {
-            // The macro already ran successfully — don't drop any MsgBox
-            // text it showed just because the save step failed after.
-            fail_json(
-                ElixceeError::io_error(format!("cannot write '{}': {}", path, e)),
-                &vm.take_messages(),
-            );
+        if let Some(ref path) = output {
+            vm.trace_phase("save_start", "workbook");
+            if let Err(e) = save_workbook_verified(&vm, path) {
+                vm.trace_phase("save_failure", "workbook");
+                // The macro already ran successfully — don't drop any MsgBox
+                // text it showed just because the save step failed after.
+                let error = ElixceeError::io_error(format!("cannot write '{}': {}", path, e))
+                    .with_trace(vm.take_trace());
+                let messages = vm.take_messages();
+                fail_json(error, &messages);
+            }
+            vm.trace_phase("save_end", "workbook");
         }
         let messages = vm.take_messages();
+        let trace = vm.take_trace();
+        let trace_field = if trace.is_empty() {
+            String::new()
+        } else {
+            format!(",\"trace\":{}", trace_events_to_json(&trace))
+        };
         println!(
-            "{{\"schema_version\":1,\"ok\":true,\"entrypoint\":{},\"duration_ms\":{:.3},\"cells\":{},\"messages\":{}}}",
-            diagnostics::json_string(&macro_name),
-            duration_ms,
-            cells_to_json(&vm),
-            messages_to_json(&messages),
+            "{{\"schema_version\":1,\"ok\":true,\"termination_class\":\"success\",\"entrypoint\":{entrypoint},\"duration_ms\":{duration_ms:.3},\"cells\":{cells},\"messages\":{messages}{trace_field}}}",
+            entrypoint = diagnostics::json_string(&macro_name),
+            duration_ms = duration_ms,
+            cells = cells_to_json(&vm),
+            messages = messages_to_json(&messages),
+            trace_field = trace_field,
         );
         return;
     }
@@ -1209,7 +1333,9 @@ fn main() {
 
     // Save output file if requested
     if let Some(ref path) = output {
-        save_workbook(&vm, path)
+        vm.trace_phase("save_start", "workbook");
+        save_workbook_verified(&vm, path)
             .unwrap_or_else(|e| die(&format!("cannot write '{}': {}", path, e)));
+        vm.trace_phase("save_end", "workbook");
     }
 }

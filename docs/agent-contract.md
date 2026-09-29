@@ -42,6 +42,7 @@ additional fields and must not parse human-readable messages to identify a categ
 {
   "schema_version": 1,
   "ok": true,
+  "termination_class": "success",
   "entrypoint": "Main",
   "duration_ms": 0,
   "cells": [{"address": "A1", "value": 42}],
@@ -50,6 +51,10 @@ additional fields and must not parse human-readable messages to identify a categ
 ```
 
 - `duration_ms` measures macro execution, not the whole read/save process.
+- `termination_class` is a stable machine-readable terminal category. Success
+  is `success`; failures include `parse_error`, `io_error`, `setup_error`,
+  `runtime_error`, `timeout`, `canceled`, and `policy_blocked`. Consumers must
+  use this field rather than parsing the human-readable message.
 - `cells` is the active sheet only, sorted by row then column, with A1 addresses.
 - Values are JSON numbers, booleans, strings, or null. Empty and VBA Null both
   serialize as null; dates use display strings, Excel errors their error strings.
@@ -65,6 +70,7 @@ additional fields and must not parse human-readable messages to identify a categ
 {
   "schema_version": 1,
   "ok": false,
+  "termination_class": "runtime_error",
   "error": {
     "code": "E1001",
     "kind": "undefined_variable",
@@ -77,6 +83,16 @@ additional fields and must not parse human-readable messages to identify a categ
 
 The example message is illustrative; exact prose is not stable.
 Location is a 1-based character line/column when resolvable, otherwise null.
+
+## Python execution status
+
+The Python `Vm` keeps the same stable category on
+`vm.last_termination_class` after `run`, `run_with_events`, `run_event`,
+`run_worksheet_change`, or `run_and_save`. It is `None` before the first
+execution, `success` after success, and one of the error categories above after
+failure. Python still raises its existing `SyntaxError`, `TimeoutError`,
+`RuntimeError`, or `OSError`; the property is an additive machine-readable
+status and is not a replacement for exception handling.
 Runtime locations identify a statement, not necessarily its offending token.
 Multi-module runtime errors currently lack per-module locations; parse diagnostics
 can locate the offending source. I/O/setup errors have null locations.
@@ -222,8 +238,10 @@ Macro naming follows run-mode's single/multi-module rules.
 | boundary_string | empty string, "test", 1,000 repetitions of "a" |
 
 The runner always checks `no_panic`, `no_runtime_error`, and `no_timeout`.
-The supported range assertion is `no_excel_errors`; a missing referenced sheet is
-an error, not an empty successful assertion. Timeout is cooperative VM checking.
+Supported range assertions are `no_excel_errors`, `formula_present`,
+`formula_absent`, and `equals:<literal>` (`empty`, `true`, `false`, an integer,
+a number, or an unquoted string). A missing referenced sheet is an error, not an
+empty successful assertion. Timeout is cooperative VM checking.
 
 Success: `{"schema_version":1,"ok":true,"seed":42,"cases_run":100}`.
 

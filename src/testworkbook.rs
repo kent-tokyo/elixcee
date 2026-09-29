@@ -28,6 +28,9 @@
 //! dotted keys, trailing junk after a value) is a hard parse error, not a
 //! silent skip — a silently-misparsed fixture that still "runs" would
 //! produce a confusing green result instead of a clear failure.
+//!
+//! Range assertions include `no_excel_errors`, `formula_present`,
+//! `formula_absent`, and `equals:<literal>` for a scalar expected value.
 
 use crate::diagnostics::{json_string, variant_to_json};
 use crate::parser::ast::Program;
@@ -59,6 +62,103 @@ pub struct InputSpec {
 pub struct AssertionSpec {
     pub range: String,
     pub rule: String,
+}
+
+fn parse_equals_value(rule: &str) -> Result<Variant, String> {
+    let literal = rule.strip_prefix("equals:").ok_or_else(|| {
+        format!(
+            "invalid equals assertion '{}': expected equals:<value>",
+            rule
+        )
+    })?;
+    match literal {
+        "empty" => Ok(Variant::Empty),
+        "true" => Ok(Variant::Boolean(true)),
+        "false" => Ok(Variant::Boolean(false)),
+        value => {
+            if let Ok(number) = value.parse::<i64>() {
+                Ok(Variant::Integer(number))
+            } else if let Ok(number) = value.parse::<f64>() {
+                Ok(Variant::Float(number))
+            } else {
+                Ok(Variant::Str(value.to_string()))
+            }
+        }
+    }
+}
+
+fn evaluate_assertion(vm: &Vm, spec: &AssertionSpec) -> Result<Option<FailureDetail>, String> {
+    let (sheet, (r1, c1), (r2, c2)) = parse_sheet_range_addr(&spec.range, &vm.active_sheet)
+        .ok_or_else(|| format!("invalid range '{}'", spec.range))?;
+    let cells = vm.get_sheet_cells(&sheet).ok_or_else(|| {
+        format!(
+            "assertion range '{}': sheet '{}' does not exist",
+            spec.range, sheet
+        )
+    })?;
+    let expected = spec
+        .rule
+        .strip_prefix("equals:")
+        .map(|_| parse_equals_value(&spec.rule))
+        .transpose()?;
+
+    for r in r1..=r2 {
+        for c in c1..=c2 {
+            let address = format!("{}!{}{}", sheet, col_to_letters(c), r);
+            let content = cells.get(&(r, c));
+            let failure = match spec.rule.as_str() {
+                "no_excel_errors" => content.and_then(|cell| match &cell.value {
+                    Variant::Error(error) => Some(FailureDetail {
+                        rule: spec.rule.clone(),
+                        address: Some(address.clone()),
+                        actual: Some(error.as_str().to_string()),
+                        message: None,
+                    }),
+                    _ => None,
+                }),
+                "formula_present" => {
+                    (!content.is_some_and(|cell| cell.formula.is_some())).then(|| FailureDetail {
+                        rule: spec.rule.clone(),
+                        address: Some(address.clone()),
+                        actual: Some("formula_absent".to_string()),
+                        message: None,
+                    })
+                }
+                "formula_absent" => {
+                    content
+                        .filter(|cell| cell.formula.is_some())
+                        .map(|cell| FailureDetail {
+                            rule: spec.rule.clone(),
+                            address: Some(address.clone()),
+                            actual: Some(cell.formula.clone().unwrap_or_default()),
+                            message: None,
+                        })
+                }
+                _ if expected.is_some() => {
+                    let actual = content
+                        .map(|cell| &cell.value)
+                        .cloned()
+                        .unwrap_or(Variant::Empty);
+                    expected
+                        .as_ref()
+                        .filter(|value| actual != **value)
+                        .map(|_| FailureDetail {
+                            rule: spec.rule.clone(),
+                            address: Some(address.clone()),
+                            actual: Some(variant_to_json(&actual)),
+                            message: None,
+                        })
+                }
+                other => {
+                    return Err(format!("unknown assertion rule '{}'", other));
+                }
+            };
+            if failure.is_some() {
+                return Ok(failure);
+            }
+        }
+    }
+    Ok(None)
 }
 
 // ── Minimal TOML-subset parser ────────────────────────────────────────────────
@@ -578,49 +678,15 @@ pub fn run_fixture(
         }
 
         for spec in &fixture.assertions {
-            match spec.rule.as_str() {
-                "no_excel_errors" => {
-                    let (sheet, (r1, c1), (r2, c2)) =
-                        parse_sheet_range_addr(&spec.range, &vm.active_sheet)
-                            .ok_or_else(|| format!("invalid range '{}'", spec.range))?;
-                    // A missing sheet is a fixture/config problem (typo, or
-                    // the macro genuinely didn't produce the expected
-                    // sheet) — hard error rather than silently treating
-                    // "sheet doesn't exist" as "no errors found".
-                    let cells = vm.get_sheet_cells(&sheet).ok_or_else(|| {
-                        format!(
-                            "assertion range '{}': sheet '{}' does not exist",
-                            spec.range, sheet
-                        )
-                    })?;
-                    for r in r1..=r2 {
-                        for c in c1..=c2 {
-                            if let Some(content) = cells.get(&(r, c))
-                                && let Variant::Error(e) = &content.value
-                            {
-                                return Ok(FixtureResult::Failed {
-                                    seed: base_seed,
-                                    case_index,
-                                    inputs_used,
-                                    failure: FailureDetail {
-                                        rule: "no_excel_errors".to_string(),
-                                        address: Some(format!(
-                                            "{}!{}{}",
-                                            sheet,
-                                            col_to_letters(c),
-                                            r
-                                        )),
-                                        actual: Some(e.as_str().to_string()),
-                                        message: None,
-                                    },
-                                    resolution_kind: None,
-                                    hidden_cells: hidden_cells.clone(),
-                                });
-                            }
-                        }
-                    }
-                }
-                other => return Err(format!("unknown assertion rule '{}'", other)),
+            if let Some(failure) = evaluate_assertion(&vm, spec)? {
+                return Ok(FixtureResult::Failed {
+                    seed: base_seed,
+                    case_index,
+                    inputs_used,
+                    failure,
+                    resolution_kind: None,
+                    hidden_cells: hidden_cells.clone(),
+                });
             }
         }
 
@@ -993,6 +1059,67 @@ rule = "no_excel_errors"
                 panic!("a macro that never divides should never fail no_excel_errors")
             }
         }
+    }
+
+    #[test]
+    fn run_fixture_supports_value_and_formula_state_assertions() {
+        let path = std::env::temp_dir().join("elixcee_testworkbook_value_formula.xlsx");
+        build_workbook_fixture(path.to_str().unwrap());
+        let program = parser::parse(
+            "Sub Main()\n    Cells(1, 1).Value = 7\n    Range(\"B1\").Formula = \"=1+2\"\nEnd Sub\n",
+        )
+        .unwrap();
+        let programs = vec![("main".to_string(), program)];
+        let fixture = Fixture {
+            name: "value and formula assertions".to_string(),
+            workbook: path.to_str().unwrap().to_string(),
+            vba_files: vec![],
+            macro_name: "Main".to_string(),
+            cases: 1,
+            seed: 1,
+            timeout_secs: 5,
+            inputs: vec![InputSpec {
+                range: "Sheet1!C1".to_string(),
+                strategy: "boundary_numeric".to_string(),
+            }],
+            assertions: vec![
+                AssertionSpec {
+                    range: "Sheet1!A1".to_string(),
+                    rule: "equals:7".to_string(),
+                },
+                AssertionSpec {
+                    range: "Sheet1!B1".to_string(),
+                    rule: "formula_present".to_string(),
+                },
+                AssertionSpec {
+                    range: "Sheet1!A1".to_string(),
+                    rule: "formula_absent".to_string(),
+                },
+            ],
+        };
+
+        let result = run_fixture(
+            &fixture,
+            &programs,
+            &fixture.workbook,
+            None,
+            None,
+            None,
+            false,
+        )
+        .unwrap();
+        assert!(matches!(result, FixtureResult::Passed { cases_run: 1, .. }));
+
+        let empty_vm = Vm::new();
+        let missing_formula = AssertionSpec {
+            range: "Sheet1!C1".to_string(),
+            rule: "formula_present".to_string(),
+        };
+        assert!(
+            evaluate_assertion(&empty_vm, &missing_formula)
+                .unwrap()
+                .is_some()
+        );
     }
 
     // ── Milestone B6d: resolution_kind capture + strict flag ────────────────

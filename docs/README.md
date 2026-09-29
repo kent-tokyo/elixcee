@@ -1,10 +1,10 @@
 # Documentation map
 
-Documentation version: **1.0.12**. API/coverage pages describe this version;
+Documentation version: **1.0.13**. API/coverage pages describe this version;
 dated benchmark records retain their original baseline and source hashes.
 The JavaScript package remains private at 0.0.0-development.
-The current branch may contain unreleased changes; the published 1.0.12
-contract ends at the `[1.0.12]` section of the changelog.
+The current branch may contain unreleased changes; the published 1.0.13
+contract ends at the `[1.0.13]` section of the changelog.
 The current Unreleased section records maintenance and validation changes that
 have not been included in a numbered release.
 Recent maintenance also keeps the Playground rendering and keyboard-binding
@@ -23,6 +23,7 @@ replacement.
 | Install and first example | [English](../README.md), [日本語](../README_ja.md), [中文](../README_zh.md) |
 | Browser-first beginner workflow | [Playground](../playground/README.md) with an in-page English/Japanese/Simplified Chinese switch |
 | Current priorities and remaining gates | [Roadmap](../ROADMAP.md) |
+| Headless file processing: VBA implementation phases and xlflow comparison protocol | [VBA strengthening plan](headless-vba-plan.md) (planned, not current API coverage) |
 | Roadmap dependency classification | [Dependency audit](roadmap-dependency-audit-2026-09-10.md) |
 | VBA and formula coverage | [FUNCTIONS](../FUNCTIONS.md) |
 | Formula argument/mode contracts | [formula-contracts.json](../compat/formula-contracts.json); validate with `python3 -B scripts/check-formula-dispatch.py --check-docs --check-contracts` |

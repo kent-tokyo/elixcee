@@ -1,9 +1,27 @@
 # elixcee Roadmap
 
-更新日: 2026-09-12。対象versionは **1.0.12** です。
+更新日: 2026-09-29。対象versionは **1.0.13** です。
 完了項目は記載した実装・測定の範囲に限ります。公開先の状態はリリースごとに別途確認します。
 版ごとの変更は [CHANGELOG](CHANGELOG.md)、実装範囲は
 [FUNCTIONS](FUNCTIONS.md)、保証範囲は [v1契約](docs/v1-support-contract.md) を参照してください。
+
+この文書は、最初に現在地と優先順位を示し、その後に各trackの詳細を折りたたんで掲載します。
+日付付きの実装履歴はCHANGELOG、個別の測定値は[測定索引](docs/measurements/README.md)を正本とし、
+ROADMAPへ新しい作業日誌を積み増しません。
+
+## トラック一覧
+
+| Track | 役割 | 現在の扱い | 詳細の正本 |
+|---|---|---|---|
+| G0–G6 | Workbook、OOXML、数式、Writer | 主軸・部分完了 | [OOXML matrix](compat/ooxml-feature-matrix.json)、[FUNCTIONS](FUNCTIONS.md) |
+| V0–V9 | ヘッドレスVBA実行・診断 | 主軸・部分完了 | [VBA詳細計画](docs/headless-vba-plan.md) |
+| S0–S5 | 入力・実行・出力の安全性 | 継続gate | [security model](docs/xlsx-security-model.md) |
+| L0–L10 | 共有runtime、依存再計算、CI品質保証 | 支援・部分完了 | [CI診断](docs/ci-vba-diagnostics.md) |
+| C0–C5 | Rust／Python／WASM配布 | 支援・部分完了 | [crate matrix](docs/crate-api-matrix.json) |
+| B0–B12 | Playground／browser spreadsheet | 補助・部分完了 | [Playground](playground/README.md) |
+
+主目的はG／V／Sです。C／Lはその配布と品質保証を支え、Bはnativeの
+read→edit→calculate→VBA→saveを遅らせない範囲で進めます。
 
 ## 方針と完了の定義
 
@@ -19,16 +37,52 @@ JavaScript互換APIは別トラックで、`packages/xlsx` はprivate・未公�
 
 ## 次の実行順
 
-1. **G0–G1 土台**: 下記3領域の現状を固定し、Writerの入力受け入れを先に有界化する。
-2. **G2 OOXML保持**: owner XML・relationship・partを一組として往復検証する。保持と編集・再計算は分離する。
-3. **G3–G4 数式**: シート横断の評価基盤を整え、既存関数の意味論校正と不足機能追加を小さな組に分ける。
-4. **G5 メモリ**: 通常保存のpassthrough遅延処理と、追記専用Writerの行数非依存メモリを別々に実装・測定する。
-5. **G6 判定**: quiet-host再測定、Excel oracle、3 OS、配布・安全性ゲート。以下の性能バックログも継続する。
-6. **LogiSheets対抗 L0–L6**: workbook数式・共有runtime・操作履歴を、既存の安全性と互換性ゲートを維持したまま段階導入する。
-7. **品質保証トラック L7–L10**: Rubberduck後のCI診断、公開可能なworkbook pair benchmark、snapshot／依存関係、動的配列oracleを分離して進める。
-8. **Browser Spreadsheetトラック B0–B5**: playgroundを実演用グリッドから、XLSXを読み込んで編集・再計算・ダウンロードできる安全なブラウザーUIへ段階拡張する。UIとVBA実行は別ゲートで扱う。
-9. **Web Excel parityトラック B6–B12**: Excel for the webの主要な編集・計算・可視化ワークフローを、ローカルブラウザーで再現できる段階的な互換プロファイルとして実装する。Microsoft 365の認証、共同編集、OneDrive／SharePointサービス自体は対象外とし、ファイル互換性・操作性・計算結果を優先する。
-10. **Crate／WASM配布トラック C0–C5**: PlaygroundのRust／WASM workbook runtimeを再利用可能なcrateとして公開し、UIは別の静的フロントエンドとして配布する。crateが提供しないJS Writer機能やMicrosoft 365サービスを、crateの機能として誤って宣伝しない。
+主目的は **Excelなしでファイルを読み、編集・計算して安全に保存すること** です。
+VBAは既存のデータ処理をこの流れに取り込む手段として強化します。
+xlflowのExcel／VBE操作機能を再現する方向には広げません。
+以下は未完項目の優先順であり、既存の完了項目をやり直す指示ではありません。
+
+1. **正しさと安全性（G0–G2・S）**: 誤計算、データ破損、保存時のExcel修復警告、資源上限の回帰を先に解消する。OOXML保持と編集対応は分離する。
+2. **既存マクロの引数意味論（V0–V1）**: 比較条件を固定し、現在区別されないByRef／ByVal、Optional／ParamArrayを段階修正する。実装したように見えて異なる結果を出す経路を優先する。
+3. **ファイル処理の実用範囲（V2–V4・G3–G4）**: 型・scope、診断、範囲一括転記を整え、編集後の再計算と接続する。関数の数だけでなく、実務fixtureの完遂率を判定する。
+4. **安全なバッチ処理（V5–V6・L7–L10）**: イベント、失敗時の出力非公開、再現可能な診断・テストを既存のsnapshot／CI契約へ統合する。
+5. **性能と配布ゲート（V8・G5–G6・C0–C5）**: 正しさを固定後、ファイル全体の処理時間・ピークメモリ・3 OSを検証する。Rust／Python、公開crate、private JS packageの配布境界は維持する。
+6. **条件付き拡張（V7・V9）**: 埋め込みVBAの読み込み・複数ブック・ブラウザー共通サブセットは、対象ファイル処理への寄与と資源予算を確認して個別に着手する。次候補の必須条件にはしない。
+7. **継続トラック（L0–L6・B0–B12）**: 共有runtimeと操作履歴、playgroundの編集・計算・exportを継続する。VBA強化のために新しいGUI／共同編集／Microsoft 365サービスを必須化しない。
+
+## ヘッドレスファイル処理のVBA強化（V0–V9）
+
+比較対象は **xlflow v0.31.2＋Microsoft Excel**。xlflowはExcelを使う開発・実行ツールであり、
+elixceeと同種の独立VBAエンジンではありません。「超える」の判定は、固定したヘッドレス業務処理での
+正しさ・完遂率・処理時間・安全な失敗に限定します。現時点で比較測定済みとは主張しません。
+
+[詳細実装計画・比較方法・次候補の完了条件](docs/headless-vba-plan.md) を計画の正本とします。
+下表はphaseの責務を示します。各phaseの実装済み／未完項目は詳細計画で管理します。
+
+| Phase | 優先度 | 実装単位と完了条件 |
+|---|---|---|
+| V0 比較契約 | P0 | ソース・入出力・oracleの由来と対象母数を固定。既存回帰と独立Excel測定を分離 |
+| V1 呼出し | P0 | ByRefのalias、ByVal、一時値、Optional／Missing、ParamArray、名前付き引数を共通binderへ |
+| V2 型・scope | P1 | 宣言型と変換、配列境界、Option Explicit／module scopeを小分けに校正 |
+| V3 診断 | P1 | 型付きエラー、Debug.Print、ソース位置、上限付きtrace。実行結果を変えず再現可能にする（V3a／V3b／V3c基盤を部分実装） |
+| V4 データ操作 | P1 | Range一括値・型・形状、既存Collection／Dictionary／class連携を実務fixtureで補強 |
+| V5 実行境界 | P1 | 再計算・イベント・中断・保存を一貫させ、失敗出力を公開しないバッチ経路 |
+| V6 CLI／Python | P1 | 既存の実行・診断・test-workbookを型付き引数、期待値、再実行へ拡張 |
+| V7 ファイル統合 | 条件付き | 埋め込みVBAのsource provenanceと制限を監査し、不足分だけ追加。複数ブックは別gate。opaque保持／別渡しソース／未取得identityの回帰済み |
+| V8 性能・判定 | P2 | 同一条件のread→edit／VBA→calculate→saveとVM単体を別測定。正しさ／p95／RSSを併記 |
+| V9 配布・横展開 | P2／一部条件付き | native 3 OS・Rust／Python契約。ブラウザー対応はB5／B11の別gateで判断 |
+
+現在地:
+
+- V0–V6の基本経路、V7aのprovenance監査、V8のローカル測定protocolは実装済みですが、各phase全体は未完です。
+- 次はV1／V2の残る呼出し・型意味論、V3cのevent種別、V6の全公開経路への接続を優先します。
+- 3 OS、VM RSS、Excel／xlflow oracle、必要性を確認した場合のOLE source解析は後続gateです。
+- G2の保存互換性またはG4の計算結果に退行があれば、性能や公開の判定を止めます。
+
+完全VBA互換、任意COM／UI操作、フルRust VMのブラウザー同梱は約束しません。
+
+<details>
+<summary>補助トラック詳細: Browser Spreadsheet／Crate・WASM／Web Excel parity</summary>
 
 ## Browser Spreadsheetトラック（B0–B5）
 
@@ -251,6 +305,11 @@ B0–B5の基盤の上に、Web版Excelで頻繁に使われる機能を優先�
 - **P2 Excel workflow**: B8の高度な再計算、B9のPivot／Drawing、B10のXLSM／外部リンク境界、B11の自動化・診断を満たす。
 - **P3 Web-grade parity**: B12の性能・アクセシビリティ・セキュリティ・複数ブラウザー・実Excel再openゲートを満たす。P3でもMicrosoft 365のアカウント、共有、同時編集、クラウド保存は実装範囲外とする。
 
+</details>
+
+<details>
+<summary>競合ウォッチとL7–L10品質保証の詳細</summary>
+
 ## 競合ウォッチ反映（2026-09-11）
 
 Rubberduckの公式リポジトリは2026-03-08にアーカイブされ、最後に確認できる
@@ -278,6 +337,24 @@ Excel oracleを確認したうえで、合成または再配布可能な小規�
 - [x] **L9a dependency projection BUILD**: Python `Vm.snapshot(include_dependencies=True)`へ、数式の直接セル参照／範囲参照をbounded・決定論的な`dependencies`配列として追加した。既定snapshotは不変で、範囲をセル単位へ展開しない。parse failure、cycle、unresolved reference、入力／出力候補もL9本体で接続済み。
 - [x] **L10 formula oracle BUILD/MEASURE**: HyperFormula 3.4.0を固定dev dependencyとして補助oracle化し、VSTACK/HSTACK/UNIQUE/SORT/XIRRの5 probeを実行して5/5一致を記録した。LibreOfficeの`#NAME?`結果は一致扱いにせず、Excel oracleとは分離する。[測定記録](docs/measurements/formula-hyperformula-dynamic-2026-09-11.json)
 - [ ] **L10b 外部benchmark gate**: Workbook Time Machine／SpreadsheetBench 2はライセンス、再配布条件、タスク変換、期待値の出所を確認できた範囲だけ採用する。外部datasetの存在だけで品質向上や競合優位を主張しない。
+
+</details>
+
+## 主軸trackのphase要約
+
+| Phase | 状態 | 次の出口条件 |
+|---|---|---|
+| G0 現状固定 | 完了 | matrixと実装の継続同期 |
+| G1 Writer上限 | BUILD完了・測定部分 | 3 OSの上限近傍・RSS校正 |
+| G2 OOXML接続 | 部分 | 一般編集とExcel再openを機能別に検証 |
+| G3 Workbook計算 | 部分 | 構造変更、cycle／spill／volatileをoracle校正 |
+| G4 関数互換 | 部分 | 型、丸め、日付、2D shape、Error順をoracle校正 |
+| G5 保存メモリ | 部分 | 残る二重保持を削減し、3 OSでRSS・同値を測定 |
+| G6 公開判定 | 外部gateを含む部分 | G2–G5、fresh audit、clean install、3 OSを統合 |
+| S0–S5 Security | 継続 | 長時間fuzz、CPU／RSS、Linux／Windows、供給網確認 |
+
+<details>
+<summary>G0–G6およびL0–L6の詳細な実装証跡</summary>
 
 ## 互換性・数式・省メモリ強化（G0–G6）
 
@@ -340,7 +417,6 @@ EPPlus／Aspose.Cellsとの一般的な同等性や、関数名の個数だけ�
 - [x] G2d Chart data-label position BUILD: 既存Chartの最初の`c:dLbls/c:dLblPos@val`を`Vm.set_chart_data_labels_position`（Python binding／型stub含む）からOOXML定義値に限定して追加／更新できるようにした。既存data-label属性・子要素を保持し、Chart作成、描画再現、Excel再openは未完。
 - [x] G2d Chart data-label number-format BUILD: 既存Chartの最初の`c:dLbls/c:numFmt@formatCode`を`Vm.set_chart_data_labels_number_format`（Python binding／型stub含む）から検証付きで追加／更新できるようにした。`sourceLinked`と他のdata-label内容を保持し、Chart作成、描画再現、Excel再openは未完。
 - [x] G2d Chart data-label separator BUILD: 既存Chartの最初の`c:dLbls/c:separator@val`を`Vm.set_chart_data_labels_separator`（Python binding／型stub含む）から検証付きで追加／更新できるようにした。既存data-label属性・子要素を保持し、Chart作成、描画再現、Excel再openは未完。
-- [x] G2d Chart data-label number-format BUILD: 既存Chartの最初の`c:dLbls/c:numFmt@formatCode`を`Vm.set_chart_data_labels_number_format`（Python binding／型stub含む）から検証付きで追加／更新できるようにした。`sourceLinked`と他のdata-label内容を保持し、Chart作成、描画再現、Excel再openは未完。
 - [x] VBA event trigger BUILD: Python `Vm.set_cell(..., trigger_events=True)`で、直前にparse済みVBAの`Worksheet_Change(Target)`を変更対象A1へ自動dispatchできるようにした。既存のEnableEvents・再入抑止・timeoutを適用し、既定の`trigger_events=False`と明示dispatch APIは維持する。同一Program内の複数handler順序とExcel oracleは未完。
 - [x] VBA cell-write consistency BUILD: Python `Vm.set_cell`をVM共通の値書込み経路へ接続し、1-based座標検証、variant budget、undo、spill解放、formula AST／dirty依存無効化を一括適用するようにした。イベントtriggerは明示opt-inのまま維持し、Excel oracleは未完。
 - [x] G2d Drawing anchor BUILD: 既存Drawing XMLの指定したtwo-cell anchorについて、1-basedのfrom/toセルを`Vm.set_drawing_anchor`（Python binding／型stub含む）から限定更新できるようにした。anchor index・one-cell anchor・欠損marker・逆順座標は拒否し、shape content／offset／relationshipは保持する。Drawing作成・一般shape編集・row/column変更への自動追従・Excel再openは未完。
@@ -712,6 +788,11 @@ LogiSheetsの公開metadataは実装・測定・運用実績の証拠ではな�
 [Aspose.Cells計算仕様](https://docs.aspose.com/cells/net/calculate-formulas/)、
 [OOXML PivotCaches](https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.spreadsheet.pivotcaches?view=openxml-3.0.1)。
 
+</details>
+
+<details>
+<summary>性能バックログと測定履歴</summary>
+
 ## 性能バックログ（優先順）
 
 | 優先度 | 未完了の作業 | 完了条件 |
@@ -796,6 +877,11 @@ formula dirty propagationの同日controlled matrixでは、single-input chain 1
 中央値比とpaired speedupは別の指標です。既存XML要素数制限は緩めていません。
 過去の競合比を掛け合わせて、最新実装の競合比とすることもしません。
 
+</details>
+
+<details>
+<summary>XLSX／VBA／数式の既存実装証跡</summary>
+
 ## XLSX編集互換性トラック
 
 各行は残る評価・拡張範囲です。既存APIがあることと、全ケースの互換性を証明したことを分けます。
@@ -814,6 +900,9 @@ formula dirty propagationの同日controlled matrixでは、single-input chain 1
 [limits](docs/limits.md) と [architecture](docs/xlsx-architecture.md) を参照してください。
 
 ## VBA・数式の残作業
+
+新規VBA作業の優先順位・担当phaseは [V0–V9詳細計画](docs/headless-vba-plan.md) に集約します。
+下記は既存の実装証跡です。追加計画はこれらを再実装するものではありません。
 
 - [x] Range相対参照、default Item/Value、Worksheet/Workbookの基本member、SpecialCells拡張。
 - [x] VM-local Collectionとexport済みclass moduleのobject連携、Property・interface dispatch。
@@ -841,6 +930,8 @@ formula dirty propagationの同日controlled matrixでは、single-input chain 1
 
 ローカルsynthetic fixtureの通過数を、実Excelの意味論一致件数として扱いません。
 [互換性ハーネス](compat/README.md) と [CLI契約](docs/agent-contract.md) が検証の入口です。
+
+</details>
 
 ## セキュリティトラック
 
@@ -895,6 +986,10 @@ formula dirty propagationの同日controlled matrixでは、single-input chain 1
 | 外部サービス・将来公開に依存 | LogiSheets固定版の取得を伴う競合比較、外部レビュー、registry／GitHub Release／tag公開 | 取得元・固定version・公開状態を別途記録。未実施の推測は完了扱いにしない |
 
 現在の候補版では、自己完結ローカルゲートとmacOS測定を完了した項目だけを `[x]` とし、上表の外部依存項目は未完のまま維持する。
+
+<details>
+<summary>G4の追加実装証跡</summary>
+
 - [x] G4 MATCH近似検索の安全境界: `match_type=1/-1`で入力範囲をそれぞれ昇順／降順として検証し、未ソート範囲を`#N/A`、比較不能な値を`#VALUE!`にする回帰を追加した。Excelの全型変換とoracle校正は未完。
 - [x] G4 LOOKUP近似検索の安全境界: 昇順lookup vectorを検証し、未ソート範囲を`#N/A`、比較不能な値を`#VALUE!`にする回帰を追加した。Excelの全型変換とoracle校正は未完。
 - [x] G4 VLOOKUP/HLOOKUP近似検索の安全境界: デフォルト近似モードでキー列／キー行の昇順を検証し、未ソート範囲を`#N/A`、比較不能な値を`#VALUE!`にする回帰を追加した。Excelの全型変換とoracle校正は未完。
@@ -921,3 +1016,5 @@ formula dirty propagationの同日controlled matrixでは、single-input chain 1
 - [x] G4 classic dispersion array flatten: `STDEV.S`／`STDEV.P`／`VAR.S`／`VAR.P`がbounded dynamic arrayを要素単位で集計する経路を追加し、sample/populationの分母を回帰した。Error伝播とExcel oracle校正は未完。
 - [x] G4 paired-statistics array flatten: `CORREL`／`COVARIANCE.S`／`COVARIANCE.P`と回帰・検定系が2本のbounded dynamic arrayを要素単位でflattenし、等長検証する経路を共通化した。Error伝播とExcel oracle校正は未完。
 - [x] G4 reference-producing formula expansion: `INDIRECT`をA1範囲・絶対R1C1範囲・`a1`指定へ接続し、`OFFSET`の元range寸法・height／widthをbounded矩形配列として集計・spill経路へ渡すようにした。相対R1C1、sheet-qualified／外部参照、Excel oracle校正は未完。
+
+</details>

@@ -6,8 +6,9 @@ use crate::check;
 use crate::formula;
 use crate::parser::ast::{
     AccessModifier, ArrayDim, Axis, CalcModeValue, CaseMatch, ClassFieldDef, CollectionTarget,
-    Expr, ForEachSource, FuncDef, ObjectExpr, ObjectTarget, Program, PropertyDef, PropertyKind,
-    SourceSpan, SpannedStmt, Stmt, SubDef, VbaBinOp, WithMember, WithTarget, XlDir, XlEndProp,
+    Expr, ForEachSource, FuncDef, ObjectExpr, ObjectTarget, OptionCompare, ParamMode, Program,
+    PropertyDef, PropertyKind, SourceSpan, SpannedStmt, Stmt, SubDef, VbaBinOp, WithMember,
+    WithTarget, XlDir, XlEndProp,
 };
 use crate::parser::{self, EntrypointResolution};
 use crate::reader::{
@@ -28,6 +29,9 @@ pub const DEFAULT_MAX_VBA_ARRAY_ELEMENTS: usize = MAX_ARRAY_ELEMENTS;
 /// Default maximum number of materialized cells retained across VBA sheets.
 pub const DEFAULT_MAX_VBA_CELLS: usize = 5_000_000;
 const MAX_AUTOMATIC_WORKSHEET_CHANGES: usize = 64;
+const MAX_DEBUG_OUTPUT_RECORDS: usize = 4_096;
+const MAX_DEBUG_OUTPUT_BYTES: usize = 1 << 20;
+const DEFAULT_MAX_TRACE_EVENTS: usize = 4_096;
 
 fn is_blocked_external_effect(reason: &str) -> bool {
     let lower = reason.to_ascii_lowercase();
@@ -243,6 +247,64 @@ pub enum RuntimeFailureKind {
     ObjectVariableNotSet,
     SecurityBlockedExternalEffect,
     Generic,
+}
+
+/// Headless policy for a failed `Debug.Assert`. GUI/VBE break behavior is not
+/// available in this runtime, so the host must choose whether assertions are
+/// ignored for compatibility or surfaced as a runtime failure.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum DebugAssertPolicy {
+    #[default]
+    Ignore,
+    Error,
+}
+
+/// Structured evidence for a user-defined procedure argument failure.
+/// `position` is one-based, matching VBA diagnostics; zero means the failure
+/// was about the call as a whole (for example an unknown named argument).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ArgumentFailure {
+    pub procedure: String,
+    pub parameter: Option<String>,
+    pub position: usize,
+    pub message: String,
+}
+
+/// Structured `Err` state captured when a VBA run fails. This is separate
+/// from the human-facing error string and mirrors the fields available to
+/// `Err.Number`, `Err.Description`, and related expressions.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ErrorEvidence {
+    pub number: i64,
+    pub description: String,
+    pub source: String,
+    pub help_file: String,
+    pub help_context: i64,
+}
+
+/// One redaction-safe event from an explicitly enabled execution trace.
+/// Values are intentionally absent so workbook contents are not exported.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TraceEvent {
+    pub sequence: u64,
+    pub execution_id: String,
+    pub source_hash: String,
+    pub kind: String,
+    pub procedure: Option<String>,
+    pub span: Option<SourceSpan>,
+    pub detail: String,
+}
+
+const DEFAULT_MAX_TRACE_BYTES: usize = 256 * 1024;
+const BYREF_ARRAY_PREFIX: &str = "__elixcee_byref_array__";
+const BYREF_RECORD_PREFIX: &str = "__elixcee_byref_record__";
+const BYREF_RECORD_ARRAY_PREFIX: &str = "__elixcee_byref_record_array__";
+const BYREF_PROPERTY_PREFIX: &str = "__elixcee_byref_property__";
+
+#[derive(Debug, Clone, Copy)]
+enum ByRefArrayOwner<'a> {
+    Local(&'a str),
+    Module(Option<&'a str>, &'a str),
 }
 
 impl RuntimeFailureKind {
@@ -800,6 +862,158 @@ enum RuntimeArg {
     Object(ObjectRef),
 }
 
+fn normalize_named_args(
+    params: &[String],
+    modes: &[ParamMode],
+    args: &[Expr],
+) -> Result<Vec<Expr>, String> {
+    if !args.iter().any(|arg| matches!(arg, Expr::NamedArg { .. })) {
+        return Ok(args.to_vec());
+    }
+    if modes
+        .iter()
+        .any(|mode| matches!(mode, ParamMode::ParamArray))
+    {
+        return Err("named arguments cannot be combined with ParamArray yet".to_string());
+    }
+    let mut slots: Vec<Option<Expr>> = vec![None; params.len()];
+    let mut positional = 0usize;
+    let mut named_seen = false;
+    for arg in args {
+        match arg {
+            Expr::NamedArg { name, value } => {
+                named_seen = true;
+                let index = params
+                    .iter()
+                    .position(|param| param.eq_ignore_ascii_case(name))
+                    .ok_or_else(|| format!("unknown named argument '{name}'"))?;
+                if slots[index].is_some() {
+                    return Err(format!("duplicate named argument '{name}'"));
+                }
+                slots[index] = Some((**value).clone());
+            }
+            value => {
+                if named_seen {
+                    return Err("positional argument cannot follow a named argument".to_string());
+                }
+                while positional < slots.len() && slots[positional].is_some() {
+                    positional += 1;
+                }
+                if positional == slots.len() {
+                    return Err("too many positional arguments".to_string());
+                }
+                slots[positional] = Some(value.clone());
+                positional += 1;
+            }
+        }
+    }
+    slots
+        .into_iter()
+        .enumerate()
+        .map(|(index, value)| {
+            value
+                .or_else(|| {
+                    modes
+                        .get(index)
+                        .is_some_and(|mode| {
+                            matches!(
+                                mode,
+                                ParamMode::OptionalByRef(_) | ParamMode::OptionalByVal(_)
+                            )
+                        })
+                        .then_some(Expr::OmittedArg)
+                })
+                .ok_or_else(|| format!("missing argument '{}' in named call", params[index]))
+        })
+        .collect()
+}
+
+fn normalize_optional_args(
+    params: &[String],
+    modes: &[ParamMode],
+    args: &[Expr],
+) -> Result<Vec<Expr>, String> {
+    let mut normalized = normalize_named_args(params, modes, args)?;
+    if normalized.len() > params.len() {
+        return Err(format!(
+            "too many arguments: expected at most {}, got {}",
+            params.len(),
+            normalized.len()
+        ));
+    }
+    while normalized.len() < params.len() {
+        let index = normalized.len();
+        if !matches!(
+            modes.get(index),
+            Some(ParamMode::OptionalByRef(_) | ParamMode::OptionalByVal(_))
+        ) {
+            return Err(format!("missing argument '{}'", params[index]));
+        }
+        normalized.push(Expr::OmittedArg);
+    }
+    Ok(normalized)
+}
+
+fn coerce_declared_argument(value: Variant, type_name: Option<&str>) -> Result<Variant, String> {
+    let Some(type_name) = type_name.map(str::to_ascii_lowercase) else {
+        return Ok(value);
+    };
+    match type_name.as_str() {
+        "variant" | "object" => Ok(value),
+        "byte" | "integer" | "long" | "longlong" => {
+            let integer = to_i64_rounded(&value)?;
+            let (lower, upper) = match type_name.as_str() {
+                "byte" => (0, 255),
+                "integer" => (i16::MIN as i64, i16::MAX as i64),
+                "long" => (i32::MIN as i64, i32::MAX as i64),
+                _ => (i64::MIN, i64::MAX),
+            };
+            if !(lower..=upper).contains(&integer) {
+                return Err(format!(
+                    "value {} is outside the declared {} range",
+                    integer, type_name
+                ));
+            }
+            Ok(Variant::Integer(integer))
+        }
+        "single" | "double" | "decimal" => Ok(Variant::Float(to_f64(&value)?)),
+        "currency" => {
+            // Variant currently stores Currency as f64. Keep the documented
+            // four-decimal Currency scale at the typed boundary rather than
+            // silently retaining arbitrary binary-float precision.
+            let scaled = (to_f64(&value)? * 10_000.0).round_ties_even();
+            Ok(Variant::Float(scaled / 10_000.0))
+        }
+        "date" => match value {
+            Variant::Date(serial) => Ok(Variant::Date(serial)),
+            Variant::Integer(serial) => Ok(Variant::Date(serial)),
+            Variant::Float(serial)
+                if serial.is_finite()
+                    && serial.fract() == 0.0
+                    && serial >= i64::MIN as f64
+                    && serial <= i64::MAX as f64 =>
+            {
+                Ok(Variant::Date(serial as i64))
+            }
+            Variant::Null => Err("Invalid use of Null".into()),
+            other => Err(format!("Cannot convert '{}' to Date", vba_to_str(&other))),
+        },
+        "string" => {
+            if matches!(value, Variant::Null) {
+                return Err("Invalid use of Null".into());
+            }
+            Ok(Variant::Str(vba_to_str(&value)))
+        }
+        "boolean" => Ok(Variant::Boolean(match value {
+            Variant::Boolean(value) => value,
+            other => to_f64(&other)? != 0.0,
+        })),
+        // User-defined types and object classes are validated by their own
+        // dispatch paths. Do not coerce them into a scalar representation.
+        _ => Ok(value),
+    }
+}
+
 struct SavedRuntimeBinding {
     name: String,
     scalar: Option<Variant>,
@@ -1045,6 +1259,10 @@ enum WithValue {
     /// A built-in Collection identity. Member reads/method statements use
     /// the same CollectionTarget::CurrentWith path as a named variable.
     Collection(u64),
+    /// A VM-local `Scripting.Dictionary` identity. Keeping this as an
+    /// explicit With value lets `.Count` and method calls use the same
+    /// object-target path as a named module variable.
+    Dictionary(u64),
     /// A VBA class-module instance.
     Class(u64, Option<String>),
     /// `With Worksheets("X")`, or a `Set`-assigned Worksheet object
@@ -1238,6 +1456,18 @@ pub struct Vm {
     /// Worksheet_Change owner selection.
     sheet_code_names: HashMap<String, String>,
     pub variables: HashMap<String, Variant>,
+    /// Immutable module-level constants, keyed by `(module scope, name)`.
+    /// They stay separate from `variables` so VBA cannot accidentally assign
+    /// through the ordinary mutable-variable path.
+    module_constants: HashMap<(Option<String>, String), Variant>,
+    /// Mutable standard-module variables, keyed by module scope and name.
+    /// Unlike procedure locals, these values survive calls and are not exposed
+    /// through the public local-variable map.
+    module_variables: HashMap<(Option<String>, String), Variant>,
+    /// Object references declared at standard-module scope, kept separately
+    /// from procedure-local object bindings so `Set` state survives calls.
+    module_object_variables: HashMap<(Option<String>, String), ObjectRef>,
+    module_object_types: HashMap<(Option<String>, String), String>,
     /// Module scope of the currently executing standard/class procedure.
     /// Bare UDT names resolve against this module before the compatibility
     /// fallback to the flat type namespace.
@@ -1249,6 +1479,7 @@ pub struct Vm {
     pub enable_events: bool,
     pub error_on_msgbox: bool,
     pub print_msgbox: bool,
+    pub debug_assert_policy: DebugAssertPolicy,
     /// Every MsgBox message shown during the current `run_sub` call, in
     /// order — populated regardless of `print_msgbox`, so callers (e.g. the
     /// `--json` CLI path) can surface them without relying on stdout
@@ -1256,6 +1487,18 @@ pub struct Vm {
     /// `take_messages()` to read (and drain) it. Private so external callers
     /// can't mutate it directly.
     msgbox_log: Vec<String>,
+    /// `Debug.Print` records, kept separate from MsgBox and stdout.
+    debug_output: Vec<String>,
+    debug_output_bytes: usize,
+    debug_output_truncated: bool,
+    /// Opt-in, bounded, redaction-safe execution trace.
+    trace_events: Vec<TraceEvent>,
+    trace_execution_id: Option<String>,
+    trace_source_hash: Option<String>,
+    trace_max_events: usize,
+    trace_max_bytes: usize,
+    trace_bytes: usize,
+    trace_truncated: bool,
     /// Span of the statement currently executing (set on every `exec_stmt`
     /// call, at every nesting level) — so a caller can locate where a
     /// runtime error happened via `current_span()` after `run_sub` fails.
@@ -1266,6 +1509,8 @@ pub struct Vm {
     /// The string returned by `run_sub` remains the human-facing contract;
     /// machine-readable consumers can use this side channel instead.
     last_runtime_failure: Option<RuntimeFailureKind>,
+    last_argument_failure: Option<ArgumentFailure>,
+    last_error_evidence: Option<ErrorEvidence>,
     /// Non-zero while an explicit event is being dispatched. A nested event
     /// is suppressed rather than recursively re-entering VBA.
     event_dispatch_depth: usize,
@@ -1451,6 +1696,9 @@ pub struct Vm {
     /// timeout guard). `None` (the default) means no limit — every existing
     /// caller (run-mode, `check`, `snapshot`, Python bindings) is unaffected.
     pub deadline: Option<std::time::Instant>,
+    /// Cooperative cancellation flag shared with a host or CLI watcher.
+    /// `None` preserves the zero-overhead default for direct Rust callers.
+    cancellation: Option<Arc<std::sync::atomic::AtomicBool>>,
     /// Deterministic execution budget counted across statements and loop
     /// iterations. `None` means unlimited; `Vm::new` uses
     /// `DEFAULT_MAX_VBA_INSTRUCTIONS`, while trusted callers may opt out.
@@ -1757,6 +2005,24 @@ pub struct Vm {
     /// restore the outer target exactly. Every bare `.member` statement or
     /// expression resolves against `last()`, wherever in the AST it sits.
     with_stack: Vec<WithValue>,
+    /// Names of Optional parameters omitted in each active call frame.
+    /// This is deliberately separate from `Variant::Empty`: `IsMissing` is
+    /// about call-site omission, not the current value of a variable.
+    missing_parameter_frames: Vec<HashSet<String>>,
+    /// Active scalar ByRef aliases. Each map is one procedure frame and maps
+    /// its local parameter name to the caller's lvalue. The interpreter keeps
+    /// the existing variable map for compatibility, then synchronizes these
+    /// aliases at statement boundaries so `Call Add(x, x)` observes the same
+    /// storage rather than two copied values.
+    byref_aliases: Vec<HashMap<String, String>>,
+    /// Active object ByRef aliases. Object identity is stored separately in
+    /// `object_variables`, so object references do not share the scalar
+    /// Variant alias map.
+    object_byref_aliases: Vec<HashMap<String, String>>,
+    /// Persistent values for procedure-local `Static` declarations.
+    static_variables: HashMap<(String, String), Variant>,
+    /// Static names registered by the currently executing procedure frames.
+    active_static_names: Vec<Vec<String>>,
     /// Real VBA `Err.Number` — the runtime error number of the most recent
     /// failure caught by `On Error Resume Next`/`On Error GoTo <label>`, or
     /// set directly by `Err.Raise`. 0 means no error since the start of
@@ -1794,6 +2060,11 @@ pub struct Vm {
     /// per-module `Option Base` scoping (this codebase's execution model
     /// is already a single flat `Vm` across all loaded modules).
     option_base: i64,
+    /// Active module's string comparison mode. `Legacy` keeps the historical
+    /// case-insensitive behavior for programs without a declaration.
+    option_compare: OptionCompare,
+    /// Per-module comparison modes used by multi-module procedure calls.
+    option_compare_by_module: HashMap<String, OptionCompare>,
 }
 
 impl Vm {
@@ -1823,14 +2094,31 @@ impl Vm {
             active_sheet: "sheet1".into(),
             sheet_code_names: HashMap::new(),
             variables: HashMap::new(),
+            module_constants: HashMap::new(),
+            module_variables: HashMap::new(),
+            module_object_variables: HashMap::new(),
+            module_object_types: HashMap::new(),
             current_module_scope: None,
             calc_mode: CalculationMode::Automatic,
             enable_events: true,
             error_on_msgbox: false,
             print_msgbox: false,
+            debug_assert_policy: DebugAssertPolicy::Ignore,
             msgbox_log: Vec::new(),
+            debug_output: Vec::new(),
+            debug_output_bytes: 0,
+            debug_output_truncated: false,
+            trace_events: Vec::new(),
+            trace_execution_id: None,
+            trace_source_hash: None,
+            trace_max_events: DEFAULT_MAX_TRACE_EVENTS,
+            trace_max_bytes: DEFAULT_MAX_TRACE_BYTES,
+            trace_bytes: 0,
+            trace_truncated: false,
             current_span: None,
             last_runtime_failure: None,
+            last_argument_failure: None,
+            last_error_evidence: None,
             event_dispatch_depth: 0,
             auto_event_program: None,
             auto_event_suppression_depth: 0,
@@ -1894,6 +2182,7 @@ impl Vm {
             defined_names_may_be_stale: false,
             sheet_renames_since_load: HashMap::new(),
             deadline: None,
+            cancellation: None,
             max_instructions: Some(DEFAULT_MAX_VBA_INSTRUCTIONS),
             instruction_count: 0,
             max_call_depth: Some(DEFAULT_MAX_VBA_CALL_DEPTH),
@@ -1947,6 +2236,11 @@ impl Vm {
             deferred_gc_error: None,
             collection_iteration_roots: Vec::new(),
             with_stack: Vec::new(),
+            missing_parameter_frames: Vec::new(),
+            byref_aliases: Vec::new(),
+            object_byref_aliases: Vec::new(),
+            static_variables: HashMap::new(),
+            active_static_names: Vec::new(),
             err_number: 0,
             err_description: String::new(),
             err_source: String::new(),
@@ -1954,6 +2248,8 @@ impl Vm {
             err_help_context: 0,
             pending_raised_error: None,
             option_base: 0,
+            option_compare: OptionCompare::Legacy,
+            option_compare_by_module: HashMap::new(),
         }
     }
 
@@ -2014,13 +2310,43 @@ impl Vm {
     fn check_deadline(&mut self) -> Result<(), String> {
         self.charge_instruction()?;
         self.loop_iters = self.loop_iters.wrapping_add(1);
-        if self.loop_iters.is_multiple_of(256)
-            && let Some(deadline) = self.deadline
-            && std::time::Instant::now() >= deadline
-        {
-            return Err("TIMEOUT: loop execution exceeded the configured deadline".to_string());
+        if self.loop_iters.is_multiple_of(256) {
+            if self
+                .cancellation
+                .as_ref()
+                .is_some_and(|flag| flag.load(Ordering::Relaxed))
+            {
+                return Err("CANCELED: VBA execution was canceled".to_string());
+            }
+            if let Some(deadline) = self.deadline
+                && std::time::Instant::now() >= deadline
+            {
+                return Err("TIMEOUT: loop execution exceeded the configured deadline".to_string());
+            }
         }
         Ok(())
+    }
+
+    /// Install or clear a cooperative cancellation flag for VBA execution
+    /// and formula recalculation. The flag is intentionally host-owned so a
+    /// signal watcher can cancel work without exposing arbitrary thread
+    /// control inside the VM.
+    pub fn set_cancellation(&mut self, cancellation: Option<Arc<std::sync::atomic::AtomicBool>>) {
+        self.cancellation = cancellation;
+    }
+
+    /// Return whether the host has requested cooperative cancellation.
+    /// Writers use this immediately before publishing an output artifact.
+    pub(crate) fn cancellation_requested(&self) -> bool {
+        self.cancellation_flag()
+            .is_some_and(|flag| flag.load(Ordering::Relaxed))
+    }
+
+    /// Borrow the host-owned cancellation flag for hot writer paths. Keeping
+    /// the optional flag itself avoids re-reading the VM field at every XML
+    /// write while preserving the no-cancellation default.
+    pub(crate) fn cancellation_flag(&self) -> Option<&std::sync::atomic::AtomicBool> {
+        self.cancellation.as_deref()
     }
 
     fn charge_instruction(&mut self) -> Result<(), String> {
@@ -4001,6 +4327,33 @@ impl Vm {
         self.read_rect_uncached(key, r1, c1, r2, c2)
     }
 
+    /// Reads only the stored formula text for a rectangular region. Empty or
+    /// value-only cells return `None`; calculated values are deliberately not
+    /// duplicated here. This keeps formula-preservation checks independent of
+    /// the value read path and avoids exposing internal `CellContent` maps.
+    pub fn read_formula_rect(
+        &self,
+        key: &str,
+        r1: u32,
+        c1: u32,
+        r2: u32,
+        c2: u32,
+    ) -> Vec<Vec<Option<String>>> {
+        let empty = HashMap::new();
+        let cells = self.get_sheet_cells(&key.to_lowercase()).unwrap_or(&empty);
+        (r1..=r2)
+            .map(|row| {
+                (c1..=c2)
+                    .map(|col| {
+                        cells
+                            .get(&(row, col))
+                            .and_then(|content| content.formula.clone())
+                    })
+                    .collect()
+            })
+            .collect()
+    }
+
     fn read_rect_uncached(
         &self,
         key: &str,
@@ -5023,9 +5376,8 @@ impl Vm {
                     },
                 ),
                 ObjectRef::Worksheet(key) => WithValue::Sheet(key),
-                ObjectRef::Workbook | ObjectRef::Nothing | ObjectRef::Dictionary(_) => {
-                    WithValue::Unmodeled
-                }
+                ObjectRef::Dictionary(id) => WithValue::Dictionary(id),
+                ObjectRef::Workbook | ObjectRef::Nothing => WithValue::Unmodeled,
             },
             WithTarget::Cells(row, col) => {
                 let r = to_cell_index(self.eval_expr(row)?, "row")?;
@@ -5046,16 +5398,16 @@ impl Vm {
             // use. A name that is neither is left Unmodeled (a no-op body)
             // rather than erroring — the pre-existing behavior for a
             // `With <unknown>` target.
-            WithTarget::Var(name) => match self.object_variables.get(name) {
-                Some(ObjectRef::Range(r)) => WithValue::Range(r.clone()),
-                Some(ObjectRef::Collection(id)) => WithValue::Collection(*id),
+            WithTarget::Var(name) => match self.object_variable_ref(name) {
+                Some(ObjectRef::Range(r)) => WithValue::Range(r),
+                Some(ObjectRef::Collection(id)) => WithValue::Collection(id),
                 Some(ObjectRef::Class(id)) => {
-                    WithValue::Class(*id, self.object_variable_types.get(name).cloned())
+                    WithValue::Class(id, self.object_variable_types.get(name).cloned())
                 }
-                Some(ObjectRef::Worksheet(key)) => WithValue::Sheet(key.clone()),
+                Some(ObjectRef::Worksheet(key)) => WithValue::Sheet(key),
                 Some(ObjectRef::Nothing) => return Err(OBJECT_NOT_SET.to_string()),
                 Some(ObjectRef::Workbook) => WithValue::Unmodeled,
-                Some(ObjectRef::Dictionary(_)) => WithValue::Unmodeled,
+                Some(ObjectRef::Dictionary(id)) => WithValue::Dictionary(id),
                 None => WithValue::Record(name.clone()),
             },
             WithTarget::Unmodeled => WithValue::Unmodeled,
@@ -5123,6 +5475,7 @@ impl Vm {
             // the active sheet is the closest available reading.
             WithValue::Range(_)
             | WithValue::Collection(_)
+            | WithValue::Dictionary(_)
             | WithValue::Class(_, _)
             | WithValue::Record(_)
             | WithValue::Unmodeled => self.active_sheet.clone(),
@@ -5184,7 +5537,7 @@ impl Vm {
         match self.current_with()? {
             WithValue::Range(r) => {
                 let f = fields.first().map(String::as_str).unwrap_or("");
-                if f == "value" || f == "formula" {
+                if matches!(f, "value" | "value2" | "formula") {
                     self.write_range_ref_value(&r, f == "formula", &v)?;
                 }
                 // Any other property write on a Range is a harmless no-op,
@@ -5199,7 +5552,7 @@ impl Vm {
                     .class_property_for(id, field, PropertyKind::Let, static_type.as_deref())
                     .is_ok()
                 {
-                    self.call_property_let(id, field, &[], v, static_type.as_deref())?;
+                    self.call_property_let(id, field, &[], v, None, static_type.as_deref())?;
                 } else {
                     self.set_class_field(id, field, v)?;
                 }
@@ -5223,7 +5576,7 @@ impl Vm {
                 };
                 self.set_worksheet_property(&Expr::Str(key), property, &value)?;
             }
-            WithValue::Collection(_) | WithValue::Unmodeled => {}
+            WithValue::Collection(_) | WithValue::Dictionary(_) | WithValue::Unmodeled => {}
             WithValue::Record(var) => {
                 // `.a = 1` / `.a.b = 1` on a UDT target — the same
                 // `nested_set` path `Stmt::RecordSetNested` uses, which also
@@ -5249,7 +5602,7 @@ impl Vm {
     /// record), not start erroring. That is the whole difference between
     /// "declared object variable, unset" and "not an object variable".
     fn require_live_object(&self, var: &str) -> Result<(), String> {
-        if matches!(self.object_variables.get(var), Some(ObjectRef::Nothing)) {
+        if matches!(self.object_variable_ref(var), Some(ObjectRef::Nothing)) {
             return Err(OBJECT_NOT_SET.to_string());
         }
         Ok(())
@@ -5257,7 +5610,7 @@ impl Vm {
 
     fn collection_id(&self, var: &str) -> Result<u64, String> {
         self.require_live_object(var)?;
-        match self.object_variables.get(var) {
+        match self.object_variable_ref(var).as_ref() {
             Some(ObjectRef::Collection(id)) => Ok(*id),
             Some(_) => Err(format!("'{}' is not a Collection object variable", var)),
             None => Err(format!("'{}' is Nothing — Set was never called", var)),
@@ -5282,6 +5635,7 @@ impl Vm {
             ObjectTarget::CurrentWith => Ok(match self.current_with()? {
                 WithValue::Range(value) => Some(ObjectRef::Range(value)),
                 WithValue::Collection(id) => Some(ObjectRef::Collection(id)),
+                WithValue::Dictionary(id) => Some(ObjectRef::Dictionary(id)),
                 WithValue::Class(id, _) => Some(ObjectRef::Class(id)),
                 WithValue::Sheet(value) => Some(ObjectRef::Worksheet(value)),
                 WithValue::Record(_) | WithValue::Unmodeled => None,
@@ -5414,7 +5768,13 @@ impl Vm {
         type_name.is_some_and(|name| {
             matches!(
                 name,
-                "object" | "range" | "worksheet" | "workbook" | "collection"
+                "object"
+                    | "range"
+                    | "worksheet"
+                    | "workbook"
+                    | "collection"
+                    | "dictionary"
+                    | "scripting.dictionary"
             ) || self.class_defs.contains_key(name)
         })
     }
@@ -5519,6 +5879,18 @@ impl Vm {
 
     fn assign_scalar_variable(&mut self, name: &str, value: Variant) -> Result<(), String> {
         self.check_variant_budget(&value)?;
+        if self.is_module_constant(name) {
+            return Err(format!(
+                "Cannot assign to constant '{}': constant is read-only",
+                name
+            ));
+        }
+        if !self.variables.contains_key(name)
+            && let Some(key) = self.module_variable_key(name)
+        {
+            self.module_variables.insert(key, value);
+            return Ok(());
+        }
         if !self.variables.contains_key(name)
             && let Some(id) = self.current_class_instance_id()
             && self.class_declares_field(id, name)
@@ -5526,6 +5898,129 @@ impl Vm {
             return self.set_class_field(id, name, value);
         }
         self.variables.insert(name.to_string(), value);
+        Ok(())
+    }
+
+    fn is_module_constant(&self, name: &str) -> bool {
+        let key = name.to_lowercase();
+        self.module_constants.keys().any(|(scope, constant)| {
+            constant == &key
+                && (scope.is_none() || scope.as_deref() == self.current_module_scope.as_deref())
+        })
+    }
+
+    fn module_variable_key(&self, name: &str) -> Option<(Option<String>, String)> {
+        let name = name.to_lowercase();
+        let scoped = (self.current_module_scope.clone(), name.clone());
+        if self.module_variables.contains_key(&scoped) {
+            return Some(scoped);
+        }
+        let global = (None, name);
+        self.module_variables
+            .contains_key(&global)
+            .then_some(global)
+    }
+
+    fn module_object_key(&self, name: &str) -> Option<(Option<String>, String)> {
+        let name = name.to_lowercase();
+        let scoped = (self.current_module_scope.clone(), name.clone());
+        if self.module_object_variables.contains_key(&scoped) {
+            return Some(scoped);
+        }
+        let global = (None, name);
+        self.module_object_variables
+            .contains_key(&global)
+            .then_some(global)
+    }
+
+    fn default_module_variable(type_name: Option<&str>) -> Variant {
+        match type_name.unwrap_or("variant").to_lowercase().as_str() {
+            "byte" | "integer" | "long" | "longlong" => Variant::Integer(0),
+            "single" | "double" | "currency" | "decimal" => Variant::Float(0.0),
+            "date" => Variant::Date(0),
+            "boolean" => Variant::Boolean(false),
+            "string" => Variant::Str(String::new()),
+            _ => Variant::Empty,
+        }
+    }
+
+    fn load_module_variables(&mut self, program: &Program) -> Result<(), String> {
+        // Module-level variables are loaded before the normal procedure cache
+        // is built. Register this module's UDTs first so a `Public p As
+        // Point` variable is initialized as a record rather than Empty.
+        for td in &program.type_defs {
+            self.type_defs
+                .entry(td.name.clone())
+                .or_insert_with(|| td.fields.clone());
+            if let Some(module_name) = program.module_name.as_deref() {
+                self.type_defs
+                    .entry(format!("{}.{}", module_name.to_lowercase(), td.name))
+                    .or_insert_with(|| td.fields.clone());
+            }
+        }
+        let scope = program.module_name.as_ref().map(|name| name.to_lowercase());
+        for variable in &program.module_variables {
+            let key = (scope.clone(), variable.name.clone());
+            if self.module_variables.contains_key(&key) {
+                continue;
+            }
+            if !variable.is_array && self.is_object_type_name(variable.type_name.as_deref()) {
+                if let Some(type_name) = variable.type_name.as_deref() {
+                    self.module_object_types
+                        .insert(key.clone(), type_name.to_string());
+                }
+                self.module_object_variables
+                    .entry(key)
+                    .or_insert(ObjectRef::Nothing);
+                continue;
+            }
+            let value = if !variable.is_array {
+                if let Some(fields) = variable
+                    .type_name
+                    .as_deref()
+                    .and_then(|type_name| self.resolve_type_fields(type_name))
+                {
+                    make_record_default(&fields, &self.type_defs, program.module_name.as_deref())
+                } else {
+                    Self::default_module_variable(variable.type_name.as_deref())
+                }
+            } else if variable.array_dims.is_empty() {
+                Variant::VbaArray(VbaArray {
+                    bounds: vec![],
+                    elements: vec![],
+                })
+            } else {
+                let bounds = self.eval_array_bounds(&variable.array_dims)?;
+                let mut array = VbaArray::new_zeroed(bounds)?;
+                if let Some(fields) = variable
+                    .type_name
+                    .as_deref()
+                    .and_then(|type_name| self.resolve_type_fields(type_name))
+                {
+                    let default = make_record_default(
+                        &fields,
+                        &self.type_defs,
+                        program.module_name.as_deref(),
+                    );
+                    array.elements.fill(default);
+                }
+                Variant::VbaArray(array)
+            };
+            self.check_variant_budget(&value)?;
+            self.module_variables.insert(key, value);
+        }
+        Ok(())
+    }
+
+    fn load_module_constants(&mut self, program: &Program) -> Result<(), String> {
+        let scope = program.module_name.as_ref().map(|name| name.to_lowercase());
+        for constant in &program.module_constants {
+            let value = self.eval_expr(&constant.value)?;
+            let value = coerce_declared_argument(value, constant.type_name.as_deref())?;
+            self.check_variant_budget(&value)?;
+            self.module_constants
+                .insert((scope.clone(), constant.name.clone()), value);
+        }
         Ok(())
     }
 
@@ -5665,6 +6160,11 @@ impl Vm {
         if let Some(value) = self.object_variables.get(name) {
             return Ok(value.clone());
         }
+        if let Some(key) = self.module_object_key(name)
+            && let Some(value) = self.module_object_variables.get(&key)
+        {
+            return Ok(value.clone());
+        }
         if let Some(id) = self.current_class_instance_id()
             && let Some(value) = self.class_object_field(id, name)
         {
@@ -5673,15 +6173,28 @@ impl Vm {
         Err(format!("Object variable '{}' is not set", name))
     }
 
+    fn object_variable_ref(&self, name: &str) -> Option<ObjectRef> {
+        self.object_variables.get(name).cloned().or_else(|| {
+            self.module_object_key(name)
+                .and_then(|key| self.module_object_variables.get(&key).cloned())
+        })
+    }
+
     fn object_target_static_type(&self, target: &ObjectTarget) -> Option<String> {
         match target {
-            ObjectTarget::Variable(name) => {
-                self.object_variable_types.get(name).cloned().or_else(|| {
+            ObjectTarget::Variable(name) => self
+                .object_variable_types
+                .get(name)
+                .cloned()
+                .or_else(|| {
+                    self.module_object_key(name)
+                        .and_then(|key| self.module_object_types.get(&key).cloned())
+                })
+                .or_else(|| {
                     self.current_class_instance_id()
                         .and_then(|id| self.class_field_def(id, name))
                         .and_then(|field| field.type_name.clone())
-                })
-            }
+                }),
             ObjectTarget::CurrentWith => match self.with_stack.last() {
                 Some(WithValue::Class(_, static_type)) => static_type.clone(),
                 _ => None,
@@ -5852,13 +6365,39 @@ impl Vm {
                 args.len()
             ));
         }
-        let values = args
-            .iter()
-            .enumerate()
-            .map(|(index, expr)| {
-                self.eval_runtime_arg(expr, sub.param_types.get(index).and_then(Option::as_deref))
-            })
-            .collect::<Result<Vec<_>, _>>()?;
+        let mut values = Vec::with_capacity(args.len());
+        let mut targets = Vec::with_capacity(args.len());
+        let mut object_targets = Vec::with_capacity(args.len());
+        for (index, expr) in args.iter().enumerate() {
+            let type_name = sub.param_types.get(index).and_then(Option::as_deref);
+            let mode = sub
+                .param_modes
+                .get(index)
+                .cloned()
+                .unwrap_or(ParamMode::DefaultByRef);
+            let (target, object_target) = if self.is_object_type_name(type_name) {
+                let object_target = match (&mode, expr) {
+                    (ParamMode::ByRef | ParamMode::OptionalByRef(_), Expr::Var(name))
+                    | (ParamMode::DefaultByRef, Expr::Var(name)) => Some(name.clone()),
+                    (ParamMode::OptionalByRef(_), _) => None,
+                    (ParamMode::ByRef, _) => {
+                        return Err(format!(
+                            "ByRef object argument {} of '{}' must be an object variable",
+                            index + 1,
+                            method
+                        ));
+                    }
+                    _ => None,
+                };
+                (None, object_target)
+            } else {
+                let target = self.scalar_byref_target(&mode, expr, method, index + 1)?;
+                (target, None)
+            };
+            values.push(self.eval_runtime_arg(expr, type_name)?);
+            targets.push(target);
+            object_targets.push(object_target);
+        }
         let mut saved_scalar = Vec::new();
         let mut saved_object = Vec::new();
         let mut saved_types = Vec::new();
@@ -5883,9 +6422,46 @@ impl Vm {
             procedure_name: sub.name.clone(),
             error_mode: ErrorMode::Disabled,
         });
+        let previous_module_scope = self.current_module_scope.clone();
+        self.current_module_scope = sub.module_name.clone();
+        self.byref_aliases.push(
+            targets
+                .iter()
+                .enumerate()
+                .filter_map(|(index, target)| {
+                    target
+                        .as_ref()
+                        .map(|target| (sub.params[index].clone(), target.clone()))
+                })
+                .collect(),
+        );
+        self.object_byref_aliases.push(
+            object_targets
+                .iter()
+                .enumerate()
+                .filter_map(|(index, target)| {
+                    target
+                        .as_ref()
+                        .map(|target| (sub.params[index].clone(), target.clone()))
+                })
+                .collect(),
+        );
         let result = self.exec_body(&sub.body, |flag| matches!(flag, ExitKind::Sub));
+        self.object_byref_aliases.pop();
+        self.byref_aliases.pop();
+        self.current_module_scope = previous_module_scope;
         self.call_stack.pop();
         self.current_class_instances.pop();
+        let updated: Vec<Option<Variant>> = sub
+            .params
+            .iter()
+            .map(|name| self.variables.get(name).cloned())
+            .collect();
+        let updated_objects: Vec<Option<ObjectRef>> = sub
+            .params
+            .iter()
+            .map(|name| self.object_variables.get(name).cloned())
+            .collect();
         for (name, old) in saved_scalar {
             if let Some(value) = old {
                 self.variables.insert(name, value);
@@ -5907,6 +6483,24 @@ impl Vm {
                 self.object_variable_types.remove(&name);
             }
         }
+        for (index, target) in targets.iter().enumerate() {
+            if let Some(target) = target
+                && let Some(value) = updated.get(index).and_then(Option::clone)
+            {
+                self.assign_declared_byref_target(
+                    target,
+                    value,
+                    sub.param_types.get(index).and_then(Option::as_deref),
+                )?;
+            }
+        }
+        for (index, target) in object_targets.iter().enumerate() {
+            if let Some(target) = target
+                && let Some(value) = updated_objects.get(index).and_then(Option::clone)
+            {
+                self.assign_object_variable(target.clone(), value)?;
+            }
+        }
         result
     }
 
@@ -5924,24 +6518,118 @@ impl Vm {
         if self.is_object_type_name(function.return_type.as_deref()) {
             return Err(format!("Object Function '{}' requires Set", method));
         }
-        if args.len() != function.params.len() {
+        let normalized_args = normalize_named_args(&function.params, &function.param_modes, args)
+            .map_err(|message| format!("Function '{}': {message}", method))?;
+        let args = normalized_args.as_slice();
+        let has_param_array = function
+            .param_modes
+            .iter()
+            .any(|mode| matches!(*mode, ParamMode::ParamArray));
+        let required = function
+            .param_modes
+            .iter()
+            .filter(|mode| {
+                !matches!(
+                    **mode,
+                    ParamMode::OptionalByRef(_)
+                        | ParamMode::OptionalByVal(_)
+                        | ParamMode::ParamArray
+                )
+            })
+            .count();
+        if args.len() < required || (!has_param_array && args.len() > function.params.len()) {
             return Err(format!(
-                "'{}' expects {} argument(s), got {}",
+                "'{}' expects at least {} argument(s), got {}",
                 method,
-                function.params.len(),
+                required,
                 args.len()
             ));
         }
-        let values = args
-            .iter()
-            .enumerate()
-            .map(|(index, expr)| {
-                self.eval_runtime_arg(
-                    expr,
-                    function.param_types.get(index).and_then(Option::as_deref),
-                )
-            })
-            .collect::<Result<Vec<_>, _>>()?;
+        let mut targets = Vec::with_capacity(function.params.len());
+        let mut values = Vec::with_capacity(function.params.len());
+        let mut missing = HashSet::new();
+        let mut arg_index = 0usize;
+        for (index, mode) in function.param_modes.iter().enumerate() {
+            if matches!(mode, ParamMode::ParamArray) {
+                let rest = args[arg_index..]
+                    .iter()
+                    .map(|expr| self.eval_expr(expr))
+                    .collect::<Result<Vec<_>, _>>()?;
+                values.push(RuntimeArg::Scalar(Variant::Array(rest)));
+                targets.push(None);
+                arg_index = args.len();
+                continue;
+            }
+            let Some(expr) = args.get(arg_index) else {
+                let default = match mode {
+                    ParamMode::OptionalByRef(default) | ParamMode::OptionalByVal(default) => {
+                        default.as_ref()
+                    }
+                    _ => None,
+                }
+                .ok_or_else(|| {
+                    format!(
+                        "Function '{}': missing argument '{}'",
+                        method, function.params[index]
+                    )
+                })?;
+                let type_name = function.param_types.get(index).and_then(Option::as_deref);
+                values.push(self.eval_runtime_arg(default, type_name)?);
+                targets.push(None);
+                missing.insert(function.params[index].clone());
+                continue;
+            };
+            if matches!(expr, Expr::OmittedArg) {
+                let default = match mode {
+                    ParamMode::OptionalByRef(default) | ParamMode::OptionalByVal(default) => {
+                        default.as_ref()
+                    }
+                    _ => None,
+                }
+                .ok_or_else(|| {
+                    format!(
+                        "Function '{}': missing argument '{}'",
+                        method, function.params[index]
+                    )
+                })?;
+                let type_name = function.param_types.get(index).and_then(Option::as_deref);
+                values.push(self.eval_runtime_arg(default, type_name)?);
+                targets.push(None);
+                missing.insert(function.params[index].clone());
+                arg_index += 1;
+                continue;
+            }
+            let type_name = function.param_types.get(index).and_then(Option::as_deref);
+            let target = if self.is_object_type_name(type_name) {
+                None
+            } else {
+                match (mode, expr) {
+                    (ParamMode::ByRef | ParamMode::OptionalByRef(_), Expr::Var(name))
+                    | (ParamMode::DefaultByRef, Expr::Var(name)) => Some(name.clone()),
+                    (
+                        ParamMode::ByRef | ParamMode::OptionalByRef(_),
+                        Expr::FuncCall { name, args },
+                    )
+                    | (ParamMode::DefaultByRef, Expr::FuncCall { name, args })
+                        if self.is_array_variable(name) =>
+                    {
+                        Some(self.array_byref_target(name, args)?)
+                    }
+                    (ParamMode::OptionalByRef(_), _) => None,
+                    (ParamMode::ByRef, _) => {
+                        return Err(format!(
+                            "ByRef argument {} of '{}' must be a scalar variable or array element",
+                            index + 1,
+                            method
+                        ));
+                    }
+                    _ => None,
+                }
+            };
+            targets.push(target);
+            values.push(self.eval_runtime_arg(expr, type_name)?);
+            arg_index += 1;
+        }
         let mut saved_scalar = Vec::new();
         let mut saved_object = Vec::new();
         let mut saved_types = Vec::new();
@@ -5968,9 +6656,23 @@ impl Vm {
             procedure_name: return_name.clone(),
             error_mode: ErrorMode::Disabled,
         });
+        self.byref_aliases.push(
+            targets
+                .iter()
+                .enumerate()
+                .filter_map(|(index, target)| {
+                    target
+                        .as_ref()
+                        .map(|target| (function.params[index].clone(), target.clone()))
+                })
+                .collect(),
+        );
+        self.missing_parameter_frames.push(missing);
         let result = self.exec_body(&function.body, |flag| {
             matches!(flag, ExitKind::Function | ExitKind::Sub)
         });
+        self.missing_parameter_frames.pop();
+        self.byref_aliases.pop();
         self.call_stack.pop();
         self.current_class_instances.pop();
         let value = self
@@ -6001,6 +6703,22 @@ impl Vm {
                 self.object_variable_types.remove(&name);
             }
         }
+        let updated: Vec<Option<Variant>> = function
+            .params
+            .iter()
+            .map(|name| self.variables.get(name).cloned())
+            .collect();
+        for (index, target) in targets.iter().enumerate() {
+            if let Some(target) = target
+                && let Some(value) = updated.get(index).and_then(Option::clone)
+            {
+                self.assign_declared_byref_target(
+                    target,
+                    value,
+                    function.param_types.get(index).and_then(Option::as_deref),
+                )?;
+            }
+        }
         result.map(|_| value)
     }
 
@@ -6021,24 +6739,137 @@ impl Vm {
             .filter(|type_name| self.is_object_type_name(Some(type_name)))
             .ok_or_else(|| format!("Class function '{}' does not return an object", method))?
             .to_string();
-        if args.len() != function.params.len() {
+        let normalized_args = normalize_named_args(&function.params, &function.param_modes, args)
+            .map_err(|message| format!("Function '{}': {message}", method))?;
+        let args = normalized_args.as_slice();
+        let has_param_array = function
+            .param_modes
+            .iter()
+            .any(|mode| matches!(*mode, ParamMode::ParamArray));
+        let required = function
+            .param_modes
+            .iter()
+            .filter(|mode| {
+                !matches!(
+                    **mode,
+                    ParamMode::OptionalByRef(_)
+                        | ParamMode::OptionalByVal(_)
+                        | ParamMode::ParamArray
+                )
+            })
+            .count();
+        if args.len() < required || (!has_param_array && args.len() > function.params.len()) {
             return Err(format!(
-                "'{}' expects {} argument(s), got {}",
+                "'{}' expects at least {} argument(s), got {}",
                 method,
-                function.params.len(),
+                required,
                 args.len()
             ));
         }
-        let values = args
-            .iter()
-            .enumerate()
-            .map(|(index, expr)| {
-                self.eval_runtime_arg(
-                    expr,
-                    function.param_types.get(index).and_then(Option::as_deref),
-                )
-            })
-            .collect::<Result<Vec<_>, _>>()?;
+        let mut targets = Vec::with_capacity(function.params.len());
+        let mut object_targets = Vec::with_capacity(function.params.len());
+        let mut values = Vec::with_capacity(function.params.len());
+        let mut missing = HashSet::new();
+        let mut arg_index = 0usize;
+        for (index, mode) in function.param_modes.iter().enumerate() {
+            if matches!(mode, ParamMode::ParamArray) {
+                let rest = args[arg_index..]
+                    .iter()
+                    .map(|expr| self.eval_expr(expr))
+                    .collect::<Result<Vec<_>, _>>()?;
+                values.push(RuntimeArg::Scalar(Variant::Array(rest)));
+                targets.push(None);
+                object_targets.push(None);
+                arg_index = args.len();
+                continue;
+            }
+            let Some(expr) = args.get(arg_index) else {
+                let default = match mode {
+                    ParamMode::OptionalByRef(default) | ParamMode::OptionalByVal(default) => {
+                        default.as_ref()
+                    }
+                    _ => None,
+                }
+                .ok_or_else(|| {
+                    format!(
+                        "Function '{}': missing argument '{}'",
+                        method, function.params[index]
+                    )
+                })?;
+                let type_name = function.param_types.get(index).and_then(Option::as_deref);
+                values.push(self.eval_runtime_arg(default, type_name)?);
+                targets.push(None);
+                object_targets.push(None);
+                missing.insert(function.params[index].clone());
+                continue;
+            };
+            if matches!(expr, Expr::OmittedArg) {
+                let default = match mode {
+                    ParamMode::OptionalByRef(default) | ParamMode::OptionalByVal(default) => {
+                        default.as_ref()
+                    }
+                    _ => None,
+                }
+                .ok_or_else(|| {
+                    format!(
+                        "Function '{}': missing argument '{}'",
+                        method, function.params[index]
+                    )
+                })?;
+                let type_name = function.param_types.get(index).and_then(Option::as_deref);
+                values.push(self.eval_runtime_arg(default, type_name)?);
+                targets.push(None);
+                object_targets.push(None);
+                missing.insert(function.params[index].clone());
+                arg_index += 1;
+                continue;
+            }
+            let type_name = function.param_types.get(index).and_then(Option::as_deref);
+            let (target, object_target) = if self.is_object_type_name(type_name) {
+                let object_target = match (mode, expr) {
+                    (ParamMode::ByRef | ParamMode::OptionalByRef(_), Expr::Var(name))
+                    | (ParamMode::DefaultByRef, Expr::Var(name)) => Some(name.clone()),
+                    (ParamMode::OptionalByRef(_), _) => None,
+                    (ParamMode::ByRef, _) => {
+                        return Err(format!(
+                            "ByRef object argument {} of '{}' must be an object variable",
+                            index + 1,
+                            method
+                        ));
+                    }
+                    _ => None,
+                };
+                (None, object_target)
+            } else {
+                let target = match (mode, expr) {
+                    (ParamMode::ByRef | ParamMode::OptionalByRef(_), Expr::Var(name))
+                    | (ParamMode::DefaultByRef, Expr::Var(name)) => Some(name.clone()),
+                    (
+                        ParamMode::ByRef | ParamMode::OptionalByRef(_),
+                        Expr::FuncCall { name, args },
+                    )
+                    | (ParamMode::DefaultByRef, Expr::FuncCall { name, args })
+                        if self.is_array_variable(name) =>
+                    {
+                        Some(self.array_byref_target(name, args)?)
+                    }
+                    (ParamMode::OptionalByRef(_), _) => None,
+                    (ParamMode::ByRef, _) => {
+                        return Err(format!(
+                            "ByRef argument {} of '{}' must be a scalar variable or array element",
+                            index + 1,
+                            method
+                        ));
+                    }
+                    _ => None,
+                };
+                (target, None)
+            };
+            targets.push(target);
+            object_targets.push(object_target);
+            values.push(self.eval_runtime_arg(expr, type_name)?);
+            arg_index += 1;
+        }
         let mut saved_scalar = Vec::new();
         let mut saved_object = Vec::new();
         let mut saved_types = Vec::new();
@@ -6069,9 +6900,35 @@ impl Vm {
             procedure_name: return_name.clone(),
             error_mode: ErrorMode::Disabled,
         });
+        self.byref_aliases.push(
+            targets
+                .iter()
+                .enumerate()
+                .filter_map(|(index, target)| {
+                    target
+                        .as_ref()
+                        .map(|target| (function.params[index].clone(), target.clone()))
+                })
+                .collect(),
+        );
+        self.object_byref_aliases.push(
+            object_targets
+                .iter()
+                .enumerate()
+                .filter_map(|(index, target)| {
+                    target
+                        .as_ref()
+                        .map(|target| (function.params[index].clone(), target.clone()))
+                })
+                .collect(),
+        );
+        self.missing_parameter_frames.push(missing);
         let result = self.exec_body(&function.body, |flag| {
             matches!(flag, ExitKind::Function | ExitKind::Sub)
         });
+        self.missing_parameter_frames.pop();
+        self.object_byref_aliases.pop();
+        self.byref_aliases.pop();
         self.call_stack.pop();
         self.current_class_instances.pop();
         let value = self
@@ -6079,6 +6936,11 @@ impl Vm {
             .remove(&return_name)
             .unwrap_or(ObjectRef::Nothing);
         self.object_variable_types.remove(&return_name);
+        let updated_objects: Vec<Option<ObjectRef>> = function
+            .params
+            .iter()
+            .map(|name| self.object_variables.get(name).cloned())
+            .collect();
         if let Some(old) = old_return_scalar {
             self.variables.insert(return_name.clone(), old);
         }
@@ -6109,6 +6971,29 @@ impl Vm {
                 self.object_variable_types.remove(&name);
             }
         }
+        let updated: Vec<Option<Variant>> = function
+            .params
+            .iter()
+            .map(|name| self.variables.get(name).cloned())
+            .collect();
+        for (index, target) in targets.iter().enumerate() {
+            if let Some(target) = target
+                && let Some(value) = updated.get(index).and_then(Option::clone)
+            {
+                self.assign_declared_byref_target(
+                    target,
+                    value,
+                    function.param_types.get(index).and_then(Option::as_deref),
+                )?;
+            }
+        }
+        for (index, target) in object_targets.iter().enumerate() {
+            if let Some(target) = target
+                && let Some(value) = updated_objects.get(index).and_then(Option::clone)
+            {
+                self.assign_object_variable(target.clone(), value)?;
+            }
+        }
         result?;
         if !self.object_ref_matches_type(&value, &return_type) {
             return Err(format!(
@@ -6134,24 +7019,44 @@ impl Vm {
         if self.is_object_type_name(property.return_type.as_deref()) {
             return Err(format!("Object Property Get '{}' requires Set", name));
         }
-        if args.len() != property.params.len() {
-            return Err(format!(
-                "Property Get '{}' expects {} argument(s), got {}",
-                name,
-                property.params.len(),
-                args.len()
-            ));
+        let normalized_args =
+            normalize_optional_args(&property.params, &property.param_modes, args)
+                .map_err(|message| format!("Property Get '{}': {message}", name))?;
+        let mut values = Vec::with_capacity(normalized_args.len());
+        let mut targets = Vec::with_capacity(normalized_args.len());
+        let mut missing = HashSet::new();
+        for (index, expr) in normalized_args.iter().enumerate() {
+            let type_name = property.param_types.get(index).and_then(Option::as_deref);
+            let mode = property
+                .param_modes
+                .get(index)
+                .cloned()
+                .unwrap_or(ParamMode::DefaultByRef);
+            if matches!(expr, Expr::OmittedArg) {
+                let default = match &mode {
+                    ParamMode::OptionalByRef(default) | ParamMode::OptionalByVal(default) => {
+                        default.as_ref()
+                    }
+                    _ => None,
+                }
+                .ok_or_else(|| {
+                    format!(
+                        "Property Get '{}': missing argument '{}'",
+                        name, property.params[index]
+                    )
+                })?;
+                values.push(self.eval_runtime_arg(default, type_name)?);
+                targets.push(None);
+                missing.insert(property.params[index].clone());
+                continue;
+            }
+            targets.push(if self.is_object_type_name(type_name) {
+                None
+            } else {
+                self.property_byref_target(&mode, expr, name, index + 1)?
+            });
+            values.push(self.eval_runtime_arg(expr, type_name)?);
         }
-        let values = args
-            .iter()
-            .enumerate()
-            .map(|(index, expr)| {
-                self.eval_runtime_arg(
-                    expr,
-                    property.param_types.get(index).and_then(Option::as_deref),
-                )
-            })
-            .collect::<Result<Vec<_>, _>>()?;
         let saved = self.bind_runtime_args(&property.params, &property.param_types, values);
         let return_name = property.name.clone();
         let old = self.variables.remove(&return_name);
@@ -6162,7 +7067,21 @@ impl Vm {
         });
         let previous_module_scope = self.current_module_scope.clone();
         self.current_module_scope = property.module_name.clone();
+        self.byref_aliases.push(
+            targets
+                .iter()
+                .enumerate()
+                .filter_map(|(index, target)| {
+                    target
+                        .as_ref()
+                        .map(|target| (property.params[index].clone(), target.clone()))
+                })
+                .collect(),
+        );
+        self.missing_parameter_frames.push(missing);
         let result = self.exec_body(&property.body, |flag| matches!(flag, ExitKind::Function));
+        self.missing_parameter_frames.pop();
+        self.byref_aliases.pop();
         self.current_module_scope = previous_module_scope;
         self.call_stack.pop();
         self.current_class_instances.pop();
@@ -6173,7 +7092,23 @@ impl Vm {
         if let Some(old) = old {
             self.variables.insert(return_name, old);
         }
+        let updated: Vec<Option<Variant>> = property
+            .params
+            .iter()
+            .map(|param| self.variables.get(param).cloned())
+            .collect();
         self.restore_runtime_args(saved);
+        for (index, target) in targets.iter().enumerate() {
+            if let Some(target) = target
+                && let Some(value) = updated.get(index).and_then(Option::clone)
+            {
+                self.assign_declared_byref_target(
+                    target,
+                    value,
+                    property.param_types.get(index).and_then(Option::as_deref),
+                )?;
+            }
+        }
         result.map(|_| value)
     }
 
@@ -6195,24 +7130,44 @@ impl Vm {
             .filter(|type_name| self.is_object_type_name(Some(type_name)))
             .ok_or_else(|| format!("Property Get '{}' does not return an object", name))?
             .to_string();
-        if args.len() != property.params.len() {
-            return Err(format!(
-                "Property Get '{}' expects {} argument(s), got {}",
-                name,
-                property.params.len(),
-                args.len()
-            ));
+        let normalized_args =
+            normalize_optional_args(&property.params, &property.param_modes, args)
+                .map_err(|message| format!("Property Get '{}': {message}", name))?;
+        let mut missing = HashSet::new();
+        let mut targets = Vec::with_capacity(normalized_args.len());
+        let mut values = Vec::with_capacity(normalized_args.len());
+        for (index, expr) in normalized_args.iter().enumerate() {
+            let type_name = property.param_types.get(index).and_then(Option::as_deref);
+            let mode = property
+                .param_modes
+                .get(index)
+                .cloned()
+                .unwrap_or(ParamMode::DefaultByRef);
+            if matches!(expr, Expr::OmittedArg) {
+                let default = match &mode {
+                    ParamMode::OptionalByRef(default) | ParamMode::OptionalByVal(default) => {
+                        default.as_ref()
+                    }
+                    _ => None,
+                }
+                .ok_or_else(|| {
+                    format!(
+                        "Property Get '{}': missing argument '{}'",
+                        name, property.params[index]
+                    )
+                })?;
+                missing.insert(property.params[index].clone());
+                targets.push(None);
+                values.push(self.eval_runtime_arg(default, type_name)?);
+                continue;
+            }
+            targets.push(if self.is_object_type_name(type_name) {
+                None
+            } else {
+                self.property_byref_target(&mode, expr, name, index + 1)?
+            });
+            values.push(self.eval_runtime_arg(expr, type_name)?);
         }
-        let values = args
-            .iter()
-            .enumerate()
-            .map(|(index, expr)| {
-                self.eval_runtime_arg(
-                    expr,
-                    property.param_types.get(index).and_then(Option::as_deref),
-                )
-            })
-            .collect::<Result<Vec<_>, _>>()?;
         let saved = self.bind_runtime_args(&property.params, &property.param_types, values);
         let return_name = property.name.clone();
         let old_scalar = self.variables.remove(&return_name);
@@ -6227,7 +7182,21 @@ impl Vm {
         });
         let previous_module_scope = self.current_module_scope.clone();
         self.current_module_scope = property.module_name.clone();
+        self.byref_aliases.push(
+            targets
+                .iter()
+                .enumerate()
+                .filter_map(|(index, target)| {
+                    target
+                        .as_ref()
+                        .map(|target| (property.params[index].clone(), target.clone()))
+                })
+                .collect(),
+        );
+        self.missing_parameter_frames.push(missing);
         let result = self.exec_body(&property.body, |flag| matches!(flag, ExitKind::Function));
+        self.missing_parameter_frames.pop();
+        self.byref_aliases.pop();
         self.current_module_scope = previous_module_scope;
         self.call_stack.pop();
         self.current_class_instances.pop();
@@ -6245,7 +7214,23 @@ impl Vm {
         if let Some(old) = old_type {
             self.object_variable_types.insert(return_name, old);
         }
+        let updated: Vec<Option<Variant>> = property
+            .params
+            .iter()
+            .map(|param| self.variables.get(param).cloned())
+            .collect();
         self.restore_runtime_args(saved);
+        for (index, target) in targets.iter().enumerate() {
+            if let Some(target) = target
+                && let Some(value) = updated.get(index).and_then(Option::clone)
+            {
+                self.assign_declared_byref_target(
+                    target,
+                    value,
+                    property.param_types.get(index).and_then(Option::as_deref),
+                )?;
+            }
+        }
         result?;
         if !self.object_ref_matches_type(&value, &return_type) {
             return Err(format!(
@@ -6262,6 +7247,7 @@ impl Vm {
         name: &str,
         args: &[Expr],
         value: Variant,
+        value_target: Option<String>,
         static_type: Option<&str>,
     ) -> Result<(), String> {
         let (property, interface_dispatch) =
@@ -6269,28 +7255,51 @@ impl Vm {
         if !interface_dispatch {
             self.enforce_access(id, name, property.access)?;
         }
-        if property.params.len() != args.len() + 1 {
-            return Err(format!(
-                "Property Let '{}' expects {} index argument(s), got {}",
-                name,
-                property.params.len().saturating_sub(1),
-                args.len()
-            ));
-        }
         let value_index = property.params.len() - 1;
+        let normalized_args = normalize_optional_args(
+            &property.params[..value_index],
+            &property.param_modes[..value_index],
+            args,
+        )
+        .map_err(|message| format!("Property Let '{}': {message}", name))?;
         if self.is_object_type_name(property.param_types[value_index].as_deref()) {
             return Err(format!("Object property '{}' requires Property Set", name));
         }
-        let mut values = args
-            .iter()
-            .enumerate()
-            .map(|(index, expr)| {
-                self.eval_runtime_arg(
-                    expr,
-                    property.param_types.get(index).and_then(Option::as_deref),
-                )
-            })
-            .collect::<Result<Vec<_>, _>>()?;
+        let mut values = Vec::with_capacity(property.params.len());
+        let mut targets = Vec::with_capacity(normalized_args.len());
+        let mut missing = HashSet::new();
+        for (index, expr) in normalized_args.iter().enumerate() {
+            let type_name = property.param_types.get(index).and_then(Option::as_deref);
+            let mode = property
+                .param_modes
+                .get(index)
+                .cloned()
+                .unwrap_or(ParamMode::DefaultByRef);
+            if matches!(expr, Expr::OmittedArg) {
+                let default = match &mode {
+                    ParamMode::OptionalByRef(default) | ParamMode::OptionalByVal(default) => {
+                        default.as_ref()
+                    }
+                    _ => None,
+                }
+                .ok_or_else(|| {
+                    format!(
+                        "Property Let '{}': missing argument '{}'",
+                        name, property.params[index]
+                    )
+                })?;
+                values.push(self.eval_runtime_arg(default, type_name)?);
+                targets.push(None);
+                missing.insert(property.params[index].clone());
+                continue;
+            }
+            targets.push(if self.is_object_type_name(type_name) {
+                None
+            } else {
+                self.property_byref_target(&mode, expr, name, index + 1)?
+            });
+            values.push(self.eval_runtime_arg(expr, type_name)?);
+        }
         values.push(RuntimeArg::Scalar(value));
         let saved = self.bind_runtime_args(&property.params, &property.param_types, values);
         self.current_class_instances.push(id);
@@ -6300,12 +7309,79 @@ impl Vm {
         });
         let previous_module_scope = self.current_module_scope.clone();
         self.current_module_scope = property.module_name.clone();
+        self.byref_aliases.push(
+            targets
+                .iter()
+                .enumerate()
+                .filter_map(|(index, target)| {
+                    target
+                        .as_ref()
+                        .map(|target| (property.params[index].clone(), target.clone()))
+                })
+                .collect(),
+        );
+        self.missing_parameter_frames.push(missing);
         let result = self.exec_body(&property.body, |flag| matches!(flag, ExitKind::Sub));
+        self.missing_parameter_frames.pop();
+        self.byref_aliases.pop();
         self.current_module_scope = previous_module_scope;
         self.call_stack.pop();
         self.current_class_instances.pop();
+        let updated: Vec<Option<Variant>> = property
+            .params
+            .iter()
+            .map(|param| self.variables.get(param).cloned())
+            .collect();
         self.restore_runtime_args(saved);
+        for (index, target) in targets.iter().enumerate() {
+            if let Some(target) = target
+                && let Some(value) = updated.get(index).and_then(Option::clone)
+            {
+                self.assign_declared_byref_target(
+                    target,
+                    value,
+                    property.param_types.get(index).and_then(Option::as_deref),
+                )?;
+            }
+        }
+        if let Some(target) = value_target
+            && let Some(value) = updated.get(value_index).and_then(Option::clone)
+        {
+            self.assign_declared_byref_target(
+                &target,
+                value,
+                property
+                    .param_types
+                    .get(value_index)
+                    .and_then(Option::as_deref),
+            )?;
+        }
         result
+    }
+
+    fn call_property_let_expr(
+        &mut self,
+        id: u64,
+        name: &str,
+        args: &[Expr],
+        value_expr: &Expr,
+        static_type: Option<&str>,
+    ) -> Result<(), String> {
+        let (property, _) = self.class_property_for(id, name, PropertyKind::Let, static_type)?;
+        let value_index = property
+            .params
+            .len()
+            .checked_sub(1)
+            .ok_or_else(|| format!("Property Let '{}' has no value parameter", name))?;
+        let mode = property
+            .param_modes
+            .get(value_index)
+            .cloned()
+            .unwrap_or(ParamMode::DefaultByRef);
+        let value_target = self.property_byref_target(&mode, value_expr, name, value_index + 1)?;
+        let value = self.eval_expr(value_expr)?;
+        self.check_variant_budget(&value)?;
+        self.call_property_let(id, name, args, value, value_target, static_type)
     }
 
     fn call_property_set(
@@ -6314,6 +7390,7 @@ impl Vm {
         name: &str,
         args: &[Expr],
         value: ObjectRef,
+        value_target: Option<String>,
         static_type: Option<&str>,
     ) -> Result<(), String> {
         let (property, interface_dispatch) =
@@ -6321,15 +7398,13 @@ impl Vm {
         if !interface_dispatch {
             self.enforce_access(id, name, property.access)?;
         }
-        if property.params.len() != args.len() + 1 {
-            return Err(format!(
-                "Property Set '{}' expects {} index argument(s), got {}",
-                name,
-                property.params.len().saturating_sub(1),
-                args.len()
-            ));
-        }
         let value_index = property.params.len() - 1;
+        let normalized_args = normalize_optional_args(
+            &property.params[..value_index],
+            &property.param_modes[..value_index],
+            args,
+        )
+        .map_err(|message| format!("Property Set '{}': {message}", name))?;
         if !self.is_object_type_name(property.param_types[value_index].as_deref()) {
             return Err(format!(
                 "Property Set '{}' requires an object parameter",
@@ -6341,16 +7416,41 @@ impl Vm {
         {
             return Err(format!("Property Set '{}' requires '{}'", name, type_name));
         }
-        let mut values = args
-            .iter()
-            .enumerate()
-            .map(|(index, expr)| {
-                self.eval_runtime_arg(
-                    expr,
-                    property.param_types.get(index).and_then(Option::as_deref),
-                )
-            })
-            .collect::<Result<Vec<_>, _>>()?;
+        let mut values = Vec::with_capacity(property.params.len());
+        let mut targets = Vec::with_capacity(normalized_args.len());
+        let mut missing = HashSet::new();
+        for (index, expr) in normalized_args.iter().enumerate() {
+            let type_name = property.param_types.get(index).and_then(Option::as_deref);
+            let mode = property
+                .param_modes
+                .get(index)
+                .cloned()
+                .unwrap_or(ParamMode::DefaultByRef);
+            if matches!(expr, Expr::OmittedArg) {
+                let default = match &mode {
+                    ParamMode::OptionalByRef(default) | ParamMode::OptionalByVal(default) => {
+                        default.as_ref()
+                    }
+                    _ => None,
+                }
+                .ok_or_else(|| {
+                    format!(
+                        "Property Set '{}': missing argument '{}'",
+                        name, property.params[index]
+                    )
+                })?;
+                values.push(self.eval_runtime_arg(default, type_name)?);
+                targets.push(None);
+                missing.insert(property.params[index].clone());
+                continue;
+            }
+            targets.push(if self.is_object_type_name(type_name) {
+                None
+            } else {
+                self.property_byref_target(&mode, expr, name, index + 1)?
+            });
+            values.push(self.eval_runtime_arg(expr, type_name)?);
+        }
         values.push(RuntimeArg::Object(value));
         let saved = self.bind_runtime_args(&property.params, &property.param_types, values);
         self.current_class_instances.push(id);
@@ -6360,12 +7460,87 @@ impl Vm {
         });
         let previous_module_scope = self.current_module_scope.clone();
         self.current_module_scope = property.module_name.clone();
+        self.byref_aliases.push(
+            targets
+                .iter()
+                .enumerate()
+                .filter_map(|(index, target)| {
+                    target
+                        .as_ref()
+                        .map(|target| (property.params[index].clone(), target.clone()))
+                })
+                .collect(),
+        );
+        self.missing_parameter_frames.push(missing);
         let result = self.exec_body(&property.body, |flag| matches!(flag, ExitKind::Sub));
+        self.missing_parameter_frames.pop();
+        self.byref_aliases.pop();
         self.current_module_scope = previous_module_scope;
         self.call_stack.pop();
         self.current_class_instances.pop();
+        let updated: Vec<Option<Variant>> = property
+            .params
+            .iter()
+            .map(|param| self.variables.get(param).cloned())
+            .collect();
+        let updated_object = self
+            .object_variables
+            .get(&property.params[value_index])
+            .cloned();
         self.restore_runtime_args(saved);
+        for (index, target) in targets.iter().enumerate() {
+            if let Some(target) = target
+                && let Some(value) = updated.get(index).and_then(Option::clone)
+            {
+                self.assign_declared_byref_target(
+                    target,
+                    value,
+                    property.param_types.get(index).and_then(Option::as_deref),
+                )?;
+            }
+        }
+        if let Some(target) = value_target
+            && let Some(value) = updated_object
+        {
+            self.assign_object_variable(target, value)?;
+        }
         result
+    }
+
+    fn call_property_set_expr(
+        &mut self,
+        id: u64,
+        name: &str,
+        args: &[Expr],
+        value_expr: &ObjectExpr,
+        static_type: Option<&str>,
+    ) -> Result<(), String> {
+        let (property, _) = self.class_property_for(id, name, PropertyKind::Set, static_type)?;
+        let value_index = property
+            .params
+            .len()
+            .checked_sub(1)
+            .ok_or_else(|| format!("Property Set '{}' has no value parameter", name))?;
+        let mode = property
+            .param_modes
+            .get(value_index)
+            .cloned()
+            .unwrap_or(ParamMode::DefaultByRef);
+        let value_target = match (&mode, value_expr) {
+            (ParamMode::ByRef | ParamMode::OptionalByRef(_), ObjectExpr::Var(name))
+            | (ParamMode::DefaultByRef, ObjectExpr::Var(name)) => Some(name.clone()),
+            (ParamMode::OptionalByRef(_), _) => None,
+            (ParamMode::ByRef, _) => {
+                return Err(format!(
+                    "ByRef argument {} of '{}' must be an object variable",
+                    value_index + 1,
+                    name
+                ));
+            }
+            _ => None,
+        };
+        let value = self.eval_object_expr(value_expr)?;
+        self.call_property_set(id, name, args, value, value_target, static_type)
     }
 
     fn validate_and_bind_implements(&mut self) -> Result<(), String> {
@@ -6468,9 +7643,28 @@ impl Vm {
         }
     }
 
+    fn dictionary_target_id(&self, target: &CollectionTarget) -> Result<Option<u64>, String> {
+        match target {
+            CollectionTarget::Variable(name) => Ok(match self.object_variable_ref(name) {
+                Some(ObjectRef::Dictionary(id)) => Some(id),
+                Some(ObjectRef::Nothing) => return Err(OBJECT_NOT_SET.to_string()),
+                _ => None,
+            }),
+            CollectionTarget::CurrentWith => Ok(match self.current_with()? {
+                WithValue::Dictionary(id) => Some(id),
+                _ => None,
+            }),
+        }
+    }
+
     fn collection_target_static_type(&self, target: &CollectionTarget) -> Option<String> {
         match target {
-            CollectionTarget::Variable(name) => self.object_variable_types.get(name).cloned(),
+            CollectionTarget::Variable(name) => {
+                self.object_variable_types.get(name).cloned().or_else(|| {
+                    self.module_object_key(name)
+                        .and_then(|key| self.module_object_types.get(&key).cloned())
+                })
+            }
             CollectionTarget::CurrentWith => match self.with_stack.last() {
                 Some(WithValue::Class(_, static_type)) => static_type.clone(),
                 _ => None,
@@ -6510,17 +7704,14 @@ impl Vm {
             .get(name)
             .ok_or_else(|| format!("'{}' is not an object array", name))?;
         let index = VbaArray::linear_index_for(&array.bounds, &indices)?;
-        match array.elements[index].clone() {
-            ObjectRef::Nothing => Err(OBJECT_NOT_SET.to_string()),
-            value => Ok(value),
-        }
+        Ok(array.elements[index].clone())
     }
 
     fn collection_target_class_id(&self, target: &CollectionTarget) -> Result<Option<u64>, String> {
         Ok(match target {
             CollectionTarget::Variable(var) => {
                 self.require_live_object(var)?;
-                match self.object_variables.get(var) {
+                match self.object_variable_ref(var).as_ref() {
                     Some(ObjectRef::Class(id)) => Some(*id),
                     _ => None,
                 }
@@ -6577,7 +7768,7 @@ impl Vm {
     }
 
     fn dictionary_id(&self, var: &str) -> Result<u64, String> {
-        match self.object_variables.get(var) {
+        match self.object_variable_ref(var).as_ref() {
             Some(ObjectRef::Dictionary(id)) => Ok(*id),
             Some(_) => Err(format!("'{}' is not a Dictionary object variable", var)),
             None => Err(OBJECT_NOT_SET.to_string()),
@@ -6585,15 +7776,30 @@ impl Vm {
     }
 
     fn dictionary_key(value: Variant, compare_mode: i64) -> Result<String, String> {
-        let key = vba_to_str(&value);
+        let (kind, key) = match value {
+            Variant::Str(key) => ("s", key),
+            Variant::Integer(value) => ("i", value.to_string()),
+            Variant::Float(value) => ("f", value.to_string()),
+            Variant::Boolean(value) => ("b", value.to_string()),
+            Variant::Empty => ("e", String::new()),
+            Variant::Null => ("n", String::new()),
+            other => ("v", vba_to_str(&other)),
+        };
         if key.is_empty() {
             return Err(COLLECTION_INVALID_INDEX.to_string());
         }
-        Ok(if compare_mode == 1 {
+        let key = if kind == "s" && compare_mode == 1 {
             key.to_lowercase()
         } else {
             key
-        })
+        };
+        Ok(format!("{kind}:{key}"))
+    }
+
+    fn dictionary_display_key(key: &str) -> String {
+        key.split_once(':')
+            .map(|(_, value)| value.to_string())
+            .unwrap_or_else(|| key.to_string())
     }
 
     fn dictionary_value(&self, id: u64, key: &Variant) -> Result<CollectionValue, String> {
@@ -6631,7 +7837,7 @@ impl Vm {
     /// scalar Variant.
     fn eval_collection_value(&mut self, expr: &Expr) -> Result<CollectionValue, String> {
         if let Expr::Var(name) = expr
-            && let Some(reference) = self.object_variables.get(name).cloned()
+            && let Some(reference) = self.object_variable_ref(name)
         {
             return match reference {
                 ObjectRef::Nothing => Err(OBJECT_NOT_SET.to_string()),
@@ -6644,8 +7850,7 @@ impl Vm {
             return self.collection_value(id, &index);
         }
         if let Expr::FuncCall { name, args } = expr
-            && let Some(ObjectRef::Collection(id)) =
-                self.object_variables.get(name.as_str()).cloned()
+            && let Some(ObjectRef::Collection(id)) = self.object_variable_ref(name.as_str())
         {
             if args.len() != 1 {
                 return Err(format!(
@@ -6688,7 +7893,11 @@ impl Vm {
     /// root, or reachable Collection. Graph reachability handles aliases
     /// and Collection cycles.
     fn assign_object_variable(&mut self, var: String, value: ObjectRef) -> Result<(), String> {
-        if let Some(type_name) = self.object_variable_types.get(&var)
+        let declared_type = self.object_variable_types.get(&var).cloned().or_else(|| {
+            self.module_object_key(&var)
+                .and_then(|key| self.module_object_types.get(&key).cloned())
+        });
+        if let Some(type_name) = declared_type.as_deref()
             && !self.object_ref_matches_type(&value, type_name)
         {
             return Err(format!(
@@ -6696,7 +7905,13 @@ impl Vm {
                 var, type_name
             ));
         }
-        self.object_variables.insert(var, value);
+        if let Some(key) = self.module_object_key(&var)
+            && !self.object_variables.contains_key(&var)
+        {
+            self.module_object_variables.insert(key, value);
+        } else {
+            self.object_variables.insert(var, value);
+        }
         self.gc_pending_mutations = self.gc_pending_mutations.saturating_add(1);
         if !self.gc_running && self.gc_pending_mutations >= 32 {
             self.gc_pending_mutations = 0;
@@ -6711,12 +7926,14 @@ impl Vm {
         }
         self.gc_pending_mutations = 0;
         let mut pending: Vec<ObjectRef> = self.object_variables.values().cloned().collect();
+        pending.extend(self.module_object_variables.values().cloned());
         for array in self.object_arrays.values() {
             pending.extend(array.elements.iter().cloned());
         }
         for value in &self.with_stack {
             match value {
                 WithValue::Collection(id) => pending.push(ObjectRef::Collection(*id)),
+                WithValue::Dictionary(id) => pending.push(ObjectRef::Dictionary(*id)),
                 WithValue::Class(id, _) => pending.push(ObjectRef::Class(*id)),
                 _ => {}
             }
@@ -6867,6 +8084,42 @@ impl Vm {
         result
     }
 
+    /// Iterate over a Dictionary's start-of-iteration value snapshot. The
+    /// snapshot keeps additions/removals in the body from changing the set
+    /// of values being visited, while object-valued items retain identity.
+    fn run_dictionary_for_each(
+        &mut self,
+        var: &str,
+        values: Vec<CollectionValue>,
+        body: &[SpannedStmt],
+    ) -> Result<(), String> {
+        for value in values {
+            self.object_variables.remove(var);
+            match value {
+                CollectionValue::Scalar(value) => {
+                    self.check_variant_budget(&value)?;
+                    self.variables.insert(var.to_string(), value);
+                }
+                CollectionValue::Object(reference) => {
+                    self.variables.remove(var);
+                    self.object_variables.insert(var.to_string(), reference);
+                }
+            }
+            for statement in body {
+                self.exec_stmt(statement)?;
+                if matches!(self.exit_flag, Some(ExitKind::For)) {
+                    self.exit_flag = None;
+                    return Ok(());
+                }
+                if self.exit_flag.is_some() {
+                    return Ok(());
+                }
+            }
+        }
+        self.reclaim_unreachable_collections();
+        Ok(())
+    }
+
     /// Resolves a sheet-identifying `Expr` — a string name, a 1-based
     /// numeric index, or a `Workbooks(...).Worksheets(...)` qualifier — to
     /// `(key, display)`: the lowercase key used to index `self.sheets`, and
@@ -6899,7 +8152,7 @@ impl Vm {
         // parser can't tell `ws` apart from an ordinary variable at parse
         // time (see `Expr::ObjectVarSheet`'s doc).
         if let Expr::ObjectVarSheet(name) = sheet_expr {
-            return match self.object_variables.get(name).cloned() {
+            return match self.object_variable_ref(name) {
                 Some(ObjectRef::Worksheet(key)) => Ok((key.clone(), key)),
                 Some(ObjectRef::Workbook) => Err(format!(
                     "'{}' is a Workbook object — use '{}.Worksheets(name)', not '.Range(...)'/'.Cells(...)' directly",
@@ -9515,6 +10768,13 @@ impl Vm {
                 {
                     return self.object_array_item(name, std::slice::from_ref(index));
                 }
+                if let CollectionTarget::Variable(name) = target
+                    && let Some(function) = self.user_funcs.get(name).cloned()
+                    && self.object_variable_ref(name).is_none()
+                    && self.is_object_type_name(function.return_type.as_deref())
+                {
+                    return self.call_func_object_expr(&function, std::slice::from_ref(index));
+                }
                 if let Some(range) = self.collection_target_range_ref(target)? {
                     return self
                         .range_default_item(&range, std::slice::from_ref(index.as_ref()))
@@ -9534,10 +10794,17 @@ impl Vm {
                 self.collection_object_value(id, &index)
             }
             ObjectExpr::ObjectArrayItem { name, indices } => {
-                if let Some(ObjectRef::Range(range)) = self.object_variables.get(name).cloned() {
+                if let Some(ObjectRef::Range(range)) = self.object_variable_ref(name) {
                     return self
                         .range_default_item(&range, indices)
                         .map(ObjectRef::Range);
+                }
+                if !self.object_arrays.contains_key(name)
+                    && self.object_variable_ref(name).is_none()
+                    && let Some(function) = self.user_funcs.get(name).cloned()
+                    && self.is_object_type_name(function.return_type.as_deref())
+                {
+                    return self.call_func_object_expr(&function, indices);
                 }
                 self.object_array_item(name, indices)
             }
@@ -10856,6 +12123,152 @@ impl Vm {
         std::mem::take(&mut self.msgbox_log)
     }
 
+    /// Drain `Debug.Print` records. Each record represents one statement and
+    /// joins its comma-separated fields with a tab. No stdout is written.
+    pub fn take_debug_output(&mut self) -> Vec<String> {
+        self.debug_output_bytes = 0;
+        self.debug_output_truncated = false;
+        std::mem::take(&mut self.debug_output)
+    }
+
+    /// Enable a bounded execution trace. The caller supplies stable identity
+    /// values (for example a job id and SHA-256 of the source bundle).
+    /// Trace records never contain cell values or formulas.
+    pub fn enable_trace(
+        &mut self,
+        execution_id: impl Into<String>,
+        source_hash: impl Into<String>,
+        max_events: usize,
+    ) {
+        self.trace_events.clear();
+        self.trace_execution_id = Some(execution_id.into());
+        self.trace_source_hash = Some(source_hash.into());
+        self.trace_max_events = max_events.max(1);
+        self.trace_max_bytes = DEFAULT_MAX_TRACE_BYTES;
+        self.trace_bytes = 0;
+        self.trace_truncated = false;
+    }
+
+    /// Enable tracing with independent event and byte budgets. The byte
+    /// budget protects callers from large procedure names or diagnostic
+    /// details even when the event count remains small.
+    pub fn enable_trace_with_limits(
+        &mut self,
+        execution_id: impl Into<String>,
+        source_hash: impl Into<String>,
+        max_events: usize,
+        max_bytes: usize,
+    ) {
+        self.trace_events.clear();
+        self.trace_execution_id = Some(execution_id.into());
+        self.trace_source_hash = Some(source_hash.into());
+        self.trace_max_events = max_events.max(1);
+        self.trace_max_bytes = max_bytes.max(1);
+        self.trace_bytes = 0;
+        self.trace_truncated = false;
+    }
+
+    /// Disable tracing and discard records collected so far.
+    pub fn disable_trace(&mut self) {
+        self.trace_events.clear();
+        self.trace_execution_id = None;
+        self.trace_source_hash = None;
+        self.trace_bytes = 0;
+        self.trace_truncated = false;
+    }
+
+    /// Drain the opt-in execution trace.
+    pub fn take_trace(&mut self) -> Vec<TraceEvent> {
+        self.trace_truncated = false;
+        self.trace_bytes = 0;
+        std::mem::take(&mut self.trace_events)
+    }
+
+    /// Record a host-controlled phase boundary in the opt-in trace. The
+    /// detail is supplied by the host rather than containing paths, values, or
+    /// formulas, so file-processing integrations can expose lifecycle order
+    /// without leaking workbook contents.
+    pub fn trace_phase(&mut self, kind: &str, detail: &str) {
+        self.record_trace(kind, None, detail.to_string());
+    }
+
+    fn record_trace(&mut self, kind: &str, span: Option<SourceSpan>, detail: String) {
+        let (Some(execution_id), Some(source_hash)) = (
+            self.trace_execution_id.clone(),
+            self.trace_source_hash.clone(),
+        ) else {
+            return;
+        };
+        if self.trace_truncated {
+            return;
+        }
+        if self.trace_events.len() >= self.trace_max_events {
+            let truncated = TraceEvent {
+                sequence: self.trace_events.len() as u64,
+                execution_id,
+                source_hash,
+                kind: "truncated".to_string(),
+                procedure: self
+                    .call_stack
+                    .last()
+                    .map(|frame| frame.procedure_name.clone()),
+                span,
+                detail: "trace event limit reached".to_string(),
+            };
+            self.trace_bytes = self
+                .trace_bytes
+                .saturating_add(Self::trace_event_size(&truncated));
+            self.trace_events.push(truncated);
+            self.trace_truncated = true;
+            return;
+        }
+        let event = TraceEvent {
+            sequence: self.trace_events.len() as u64,
+            execution_id,
+            source_hash,
+            kind: kind.to_string(),
+            procedure: self
+                .call_stack
+                .last()
+                .map(|frame| frame.procedure_name.clone()),
+            span,
+            detail,
+        };
+        let event_bytes = Self::trace_event_size(&event);
+        if self.trace_bytes.saturating_add(event_bytes) > self.trace_max_bytes {
+            self.trace_truncated = true;
+            return;
+        }
+        self.trace_bytes = self.trace_bytes.saturating_add(event_bytes);
+        self.trace_events.push(event);
+    }
+
+    fn trace_event_size(event: &TraceEvent) -> usize {
+        event.execution_id.len()
+            + event.source_hash.len()
+            + event.kind.len()
+            + event.procedure.as_deref().map_or(0, str::len)
+            + event.detail.len()
+            + std::mem::size_of::<TraceEvent>()
+    }
+
+    fn record_debug_output(&mut self, record: String) {
+        if self.debug_output_truncated {
+            return;
+        }
+        let record_bytes = record.len();
+        if self.debug_output.len() >= MAX_DEBUG_OUTPUT_RECORDS
+            || self.debug_output_bytes.saturating_add(record_bytes) > MAX_DEBUG_OUTPUT_BYTES
+        {
+            self.debug_output
+                .push("[Debug.Print output truncated]".to_string());
+            self.debug_output_truncated = true;
+            return;
+        }
+        self.debug_output_bytes = self.debug_output_bytes.saturating_add(record_bytes);
+        self.debug_output.push(record);
+    }
+
     /// Span of the statement that was executing the last time `exec_stmt`
     /// ran — i.e. where a runtime error happened, if `run_sub` just
     /// returned one. `None` if no statement has executed yet.
@@ -10867,6 +12280,18 @@ impl Vm {
     /// failure. The plain `String` returned by `run_sub` remains unchanged.
     pub fn take_runtime_failure(&mut self) -> Option<RuntimeFailureKind> {
         self.last_runtime_failure.take()
+    }
+
+    /// Drain structured evidence for the most recent user-procedure argument
+    /// binding failure, if any.
+    pub fn take_argument_failure(&mut self) -> Option<ArgumentFailure> {
+        self.last_argument_failure.take()
+    }
+
+    /// Drain the structured `Err` state captured by the most recent failed
+    /// run, if any.
+    pub fn take_error_evidence(&mut self) -> Option<ErrorEvidence> {
+        self.last_error_evidence.take()
     }
 
     /// Set the VBA-compatible event switch. Event handlers are opt-in in the
@@ -11211,8 +12636,16 @@ impl Vm {
         // across multiple run_sub calls (e.g. from the Python bindings)
         // would leak the previous run's MsgBox text into this run's result.
         self.msgbox_log.clear();
+        self.debug_output.clear();
+        self.debug_output_bytes = 0;
+        self.debug_output_truncated = false;
+        self.trace_events.clear();
+        self.trace_bytes = 0;
+        self.trace_truncated = false;
         self.last_resolution_failure = None;
         self.last_runtime_failure = None;
+        self.last_argument_failure = None;
+        self.last_error_evidence = None;
         self.err_number = 0;
         self.err_description.clear();
         self.err_source.clear();
@@ -11233,8 +12666,21 @@ impl Vm {
         // this only needs to be empty, not seeded.
         self.call_stack.clear();
         self.option_base = program.option_base;
+        self.option_compare = program.option_compare;
+        self.option_compare_by_module.clear();
+        if let Some(module) = program.module_name.as_deref() {
+            self.option_compare_by_module
+                .insert(module.to_lowercase(), program.option_compare);
+        }
+        self.current_module_scope = program.module_name.as_ref().map(|name| name.to_lowercase());
+        self.module_constants.clear();
+        self.load_module_variables(program)?;
+        self.load_module_constants(program)?;
         // Cache user-defined functions, subs, and type definitions.
         self.current_class_instances.clear();
+        self.missing_parameter_frames.clear();
+        self.object_byref_aliases.clear();
+        self.active_static_names.clear();
         if program.is_class_module {
             let class_name = program
                 .module_name
@@ -11306,7 +12752,12 @@ impl Vm {
         // makes these errors uncatchable by `On Error` for free: no `On
         // Error` statement has had a chance to take effect yet, matching
         // real VBA (these are compile errors, not runtime ones).
-        if let Some((msg, span)) = check::compile_check_errors(program, &HashSet::new()) {
+        let compile_error = if self.strict_resolution && program.option_explicit {
+            check::compile_check_errors_strict(program, &HashSet::new())
+        } else {
+            check::compile_check_errors(program, &HashSet::new())
+        };
+        if let Some((msg, span)) = compile_error {
             self.current_span = Some(span);
             return Err(msg);
         }
@@ -11384,6 +12835,7 @@ impl Vm {
             .map(|(module_name, program)| {
                 let mut program = program.clone();
                 let scope = Some(module_name.to_lowercase());
+                program.module_name = scope.clone();
                 for sub in &mut program.subs {
                     sub.module_name = scope.clone();
                 }
@@ -11397,6 +12849,11 @@ impl Vm {
 
         self.msgbox_log.clear();
         self.last_resolution_failure = None;
+        self.last_argument_failure = None;
+        self.last_error_evidence = None;
+        self.trace_events.clear();
+        self.trace_bytes = 0;
+        self.trace_truncated = false;
         self.err_number = 0;
         self.err_description.clear();
         self.err_source.clear();
@@ -11417,10 +12874,25 @@ impl Vm {
             .map(|(_, p)| p.option_base)
             .find(|&b| b != 0)
             .unwrap_or(0);
+        self.option_compare_by_module = modules
+            .iter()
+            .map(|(name, program)| (name.to_lowercase(), program.option_compare))
+            .collect();
+        self.option_compare = modules
+            .first()
+            .map(|(_, program)| program.option_compare)
+            .unwrap_or_default();
         self.user_funcs.clear();
         self.user_subs.clear();
         self.current_class_instances.clear();
+        self.missing_parameter_frames.clear();
+        self.object_byref_aliases.clear();
+        self.active_static_names.clear();
+        self.module_constants.clear();
         for (module_name, program) in &modules {
+            self.current_module_scope = Some(module_name.clone());
+            self.load_module_variables(program)?;
+            self.load_module_constants(program)?;
             if program.is_class_module {
                 self.class_defs.insert(
                     module_name.clone(),
@@ -11466,6 +12938,7 @@ impl Vm {
                 );
             }
         }
+        self.current_module_scope = None;
         self.validate_and_bind_implements()?;
 
         // Same pre-flight compile-time check as `run_sub`, run once per
@@ -11483,7 +12956,12 @@ impl Vm {
                     other_module_names.extend(other_program.funcs.iter().map(|f| f.name.clone()));
                 }
             }
-            if let Some((msg, span)) = check::compile_check_errors(program, &other_module_names) {
+            let compile_error = if self.strict_resolution && program.option_explicit {
+                check::compile_check_errors_strict(program, &other_module_names)
+            } else {
+                check::compile_check_errors(program, &other_module_names)
+            };
+            if let Some((msg, span)) = compile_error {
                 self.current_span = Some(span);
                 return Err(msg);
             }
@@ -11502,15 +12980,994 @@ impl Vm {
     }
 
     fn capture_runtime_failure(&mut self, result: &Result<(), String>) {
-        if result.is_err() && self.last_runtime_failure.is_none() {
-            self.last_runtime_failure = result
-                .as_ref()
-                .err()
-                .map(|message| RuntimeFailureKind::from_message(message));
+        if let Err(message) = result {
+            if self.last_runtime_failure.is_none() {
+                self.last_runtime_failure = Some(RuntimeFailureKind::from_message(message));
+            }
+            let evidence = match self.pending_raised_error.as_ref() {
+                Some(raised) => ErrorEvidence {
+                    number: raised.number,
+                    description: raised.description.clone(),
+                    source: raised.source.clone(),
+                    help_file: raised.help_file.clone(),
+                    help_context: raised.help_context,
+                },
+                None => {
+                    let (number, description) =
+                        if self.err_number != 0 || !self.err_description.is_empty() {
+                            (self.err_number, self.err_description.clone())
+                        } else {
+                            classify_vba_error_number(message)
+                        };
+                    ErrorEvidence {
+                        number,
+                        description,
+                        source: self.err_source.clone(),
+                        help_file: self.err_help_file.clone(),
+                        help_context: self.err_help_context,
+                    }
+                }
+            };
+            self.last_error_evidence = Some(evidence);
         }
     }
 
+    fn argument_failure(
+        &mut self,
+        procedure: &str,
+        position: usize,
+        parameter: Option<&str>,
+        message: String,
+    ) -> String {
+        self.last_argument_failure = Some(ArgumentFailure {
+            procedure: procedure.to_string(),
+            parameter: parameter.map(str::to_string),
+            position,
+            message: message.clone(),
+        });
+        message
+    }
+
+    fn coerce_call_argument(
+        &mut self,
+        procedure: &str,
+        position: usize,
+        parameter: Option<&str>,
+        value: Variant,
+        type_name: Option<&str>,
+    ) -> Result<Variant, String> {
+        coerce_declared_argument(value, type_name).map_err(|message| {
+            self.argument_failure(
+                procedure,
+                position,
+                parameter,
+                format!("argument {} of '{}': {message}", position, procedure),
+            )
+        })
+    }
+
+    fn is_array_variable(&self, name: &str) -> bool {
+        matches!(
+            self.variables.get(name),
+            Some(Variant::Array(_) | Variant::VbaArray(_))
+        ) || self
+            .module_variable_key(name)
+            .and_then(|key| self.module_variables.get(&key))
+            .is_some_and(|value| matches!(value, Variant::Array(_) | Variant::VbaArray(_)))
+    }
+
+    fn property_byref_target(
+        &mut self,
+        mode: &ParamMode,
+        expr: &Expr,
+        procedure: &str,
+        position: usize,
+    ) -> Result<Option<String>, String> {
+        match (mode, expr) {
+            (ParamMode::ByRef | ParamMode::OptionalByRef(_), Expr::Var(name))
+            | (ParamMode::DefaultByRef, Expr::Var(name)) => Ok(Some(name.clone())),
+            (ParamMode::ByRef | ParamMode::OptionalByRef(_), expr)
+            | (ParamMode::DefaultByRef, expr)
+                if matches!(
+                    expr,
+                    Expr::RecordGet { .. }
+                        | Expr::RecordGetNested { .. }
+                        | Expr::ArrayRecordGet { .. }
+                ) =>
+            {
+                self.record_byref_target(expr)
+            }
+            (ParamMode::ByRef | ParamMode::OptionalByRef(_), Expr::FuncCall { name, args })
+            | (ParamMode::DefaultByRef, Expr::FuncCall { name, args })
+                if self.is_array_variable(name) =>
+            {
+                Ok(Some(self.array_byref_target(name, args)?))
+            }
+            (ParamMode::OptionalByRef(_), _) => Ok(None),
+            (ParamMode::ByRef, _) => Err(format!(
+                "ByRef argument {} of '{}' must be a scalar variable or array element",
+                position, procedure
+            )),
+            _ => Ok(None),
+        }
+    }
+
+    fn scalar_byref_target(
+        &mut self,
+        mode: &ParamMode,
+        expr: &Expr,
+        procedure: &str,
+        position: usize,
+    ) -> Result<Option<String>, String> {
+        match (mode, expr) {
+            (ParamMode::ByRef | ParamMode::OptionalByRef(_), Expr::Var(name))
+            | (ParamMode::DefaultByRef, Expr::Var(name)) => Ok(Some(name.clone())),
+            (ParamMode::ByRef | ParamMode::OptionalByRef(_), expr)
+            | (ParamMode::DefaultByRef, expr)
+                if matches!(
+                    expr,
+                    Expr::RecordGet { .. }
+                        | Expr::RecordGetNested { .. }
+                        | Expr::ArrayRecordGet { .. }
+                ) =>
+            {
+                self.record_byref_target(expr)
+            }
+            (ParamMode::ByRef | ParamMode::OptionalByRef(_), Expr::FuncCall { name, args })
+            | (ParamMode::DefaultByRef, Expr::FuncCall { name, args })
+                if self.is_array_variable(name) =>
+            {
+                Ok(Some(self.array_byref_target(name, args)?))
+            }
+            (ParamMode::OptionalByRef(_), _) => Ok(None),
+            (ParamMode::ByRef, _) => Err(format!(
+                "ByRef argument {} of '{}' must be a scalar variable, record field, or array element",
+                position, procedure
+            )),
+            _ => Ok(None),
+        }
+    }
+
+    /// Encodes an array-element lvalue for the existing statement-boundary
+    /// alias layer.  Indices are evaluated once at the call site; the encoded
+    /// target is never exposed as a user variable.
+    fn array_byref_target(&mut self, name: &str, args: &[Expr]) -> Result<String, String> {
+        let indices = self.eval_array_indices(args)?;
+        let owner = if self
+            .variables
+            .get(name)
+            .is_some_and(|value| matches!(value, Variant::Array(_) | Variant::VbaArray(_)))
+        {
+            format!("l:{name}")
+        } else if let Some((scope, variable)) = self.module_variable_key(name) {
+            format!("m:{}:{variable}", scope.unwrap_or_default())
+        } else {
+            return Err(format!("'{name}' is not an array"));
+        };
+        Ok(format!(
+            "{BYREF_ARRAY_PREFIX}{owner}|{}",
+            indices
+                .iter()
+                .map(i64::to_string)
+                .collect::<Vec<_>>()
+                .join(",")
+        ))
+    }
+
+    fn record_byref_target(&mut self, expr: &Expr) -> Result<Option<String>, String> {
+        match expr {
+            Expr::RecordGet { var, field } => {
+                if let Some(ObjectRef::Class(id)) = self.object_variable_ref(var)
+                    && self
+                        .class_property_for(id, field, PropertyKind::Get, None)
+                        .is_ok()
+                {
+                    return Ok(Some(format!("{BYREF_PROPERTY_PREFIX}{id}|{field}")));
+                }
+                if matches!(self.variables.get(var), Some(Variant::Record(_))) {
+                    return Ok(Some(format!("{BYREF_RECORD_PREFIX}l:{var}|{field}")));
+                }
+                if let Some((scope, name)) = self.module_variable_key(var)
+                    && matches!(
+                        self.module_variables.get(&(scope.clone(), name.clone())),
+                        Some(Variant::Record(_))
+                    )
+                {
+                    return Ok(Some(format!(
+                        "{BYREF_RECORD_PREFIX}m:{}:{name}|{field}",
+                        scope.unwrap_or_default()
+                    )));
+                }
+                Err(format!("'{var}' is not a record"))
+            }
+            Expr::RecordGetNested { var, fields } => {
+                let path = fields.join(".");
+                if matches!(self.variables.get(var), Some(Variant::Record(_))) {
+                    return Ok(Some(format!("{BYREF_RECORD_PREFIX}l:{var}|{path}")));
+                }
+                if let Some((scope, name)) = self.module_variable_key(var)
+                    && matches!(
+                        self.module_variables.get(&(scope.clone(), name.clone())),
+                        Some(Variant::Record(_))
+                    )
+                {
+                    return Ok(Some(format!(
+                        "{BYREF_RECORD_PREFIX}m:{}:{name}|{path}",
+                        scope.unwrap_or_default()
+                    )));
+                }
+                Err(format!("'{var}' is not a record"))
+            }
+            Expr::ArrayRecordGet {
+                name,
+                indices,
+                field,
+            } => {
+                let is_record_array =
+                    matches!(
+                        self.variables.get(name),
+                        Some(Variant::Array(values))
+                            if values.iter().any(|value| matches!(value, Variant::Record(_)))
+                    ) || matches!(self.variables.get(name), Some(Variant::VbaArray(_)));
+                let module_owner = self.module_variable_key(name).and_then(|(scope, key)| {
+                    (matches!(
+                        self.module_variables.get(&(scope.clone(), key.clone())),
+                        Some(Variant::Array(values))
+                            if values.iter().any(|value| matches!(value, Variant::Record(_)))
+                    ) || matches!(
+                        self.module_variables.get(&(scope.clone(), key.clone())),
+                        Some(Variant::VbaArray(array))
+                            if array
+                                .elements
+                                .iter()
+                                .any(|value| matches!(value, Variant::Record(_)))
+                    ))
+                    .then_some((scope, key))
+                });
+                if !is_record_array {
+                    if module_owner.is_none() {
+                        return Err(format!("'{name}' is not a record array"));
+                    }
+                }
+                let indices = self.eval_array_indices(indices)?;
+                let owner = if is_record_array {
+                    format!("l:{name}")
+                } else {
+                    let (scope, key) = module_owner.expect("checked above");
+                    format!("m:{}:{key}", scope.unwrap_or_default())
+                };
+                Ok(Some(format!(
+                    "{BYREF_RECORD_ARRAY_PREFIX}{owner}|{}|{field}",
+                    indices
+                        .iter()
+                        .map(i64::to_string)
+                        .collect::<Vec<_>>()
+                        .join(",")
+                )))
+            }
+            _ => Ok(None),
+        }
+    }
+
+    fn record_byref_value(&self, target: &str) -> Option<Variant> {
+        let payload = target.strip_prefix(BYREF_RECORD_PREFIX)?;
+        let (owner, path) = payload.split_once('|')?;
+        let mut value = if let Some(name) = owner.strip_prefix("l:") {
+            self.variables.get(name)?
+        } else if let Some(owner) = owner.strip_prefix("m:") {
+            let (scope, name) = owner.split_once(':')?;
+            self.module_variables.get(&(
+                Some(scope.to_string()).filter(|s| !s.is_empty()),
+                name.to_string(),
+            ))?
+        } else {
+            return None;
+        };
+        for field in path.split('.') {
+            value = match value {
+                Variant::Record(fields) => fields.get(field)?,
+                _ => return None,
+            };
+        }
+        Some(value.clone())
+    }
+
+    fn record_array_byref_value(&self, target: &str) -> Option<Variant> {
+        let payload = target.strip_prefix(BYREF_RECORD_ARRAY_PREFIX)?;
+        let (owner_and_indices, field) = payload.rsplit_once('|')?;
+        let (owner, indices) = owner_and_indices.split_once('|')?;
+        let (is_local, scope, name) = if let Some(name) = owner.strip_prefix("l:") {
+            (true, None, name)
+        } else if let Some(owner) = owner.strip_prefix("m:") {
+            let (scope, name) = owner.split_once(':')?;
+            (false, Some(scope), name)
+        } else {
+            return None;
+        };
+        let indices = indices
+            .split(',')
+            .map(str::parse::<i64>)
+            .collect::<Result<Vec<_>, _>>()
+            .ok()?;
+        let values = if is_local {
+            self.variables.get(name)?
+        } else {
+            self.module_variables.get(&(
+                Some(scope.unwrap_or_default().to_string()).filter(|s| !s.is_empty()),
+                name.to_string(),
+            ))?
+        };
+        let value = match values {
+            Variant::Array(values) => values.get(usize::try_from(*indices.first()?).ok()?)?,
+            Variant::VbaArray(array) => array.get(&indices).ok()?,
+            _ => return None,
+        };
+        match value {
+            Variant::Record(fields) => fields.get(field).cloned(),
+            _ => None,
+        }
+    }
+
+    fn parse_array_byref_target(target: &str) -> Option<(ByRefArrayOwner<'_>, Vec<i64>)> {
+        let payload = target.strip_prefix(BYREF_ARRAY_PREFIX)?;
+        let (owner, indices) = payload.rsplit_once('|')?;
+        let indices = indices
+            .split(',')
+            .map(str::parse::<i64>)
+            .collect::<Result<Vec<_>, _>>()
+            .ok()?;
+        let owner = if let Some(name) = owner.strip_prefix("l:") {
+            ByRefArrayOwner::Local(name)
+        } else if let Some(module) = owner.strip_prefix("m:") {
+            let (scope, name) = module.split_once(':')?;
+            ByRefArrayOwner::Module((!scope.is_empty()).then_some(scope), name)
+        } else {
+            return None;
+        };
+        Some((owner, indices))
+    }
+
+    fn byref_target_value(&mut self, target: &str) -> Option<Variant> {
+        if let Some(payload) = target.strip_prefix(BYREF_PROPERTY_PREFIX) {
+            let (id, property) = payload.split_once('|')?;
+            let id = id.parse::<u64>().ok()?;
+            return self.call_property_get_scalar(id, property, &[], None).ok();
+        }
+        if target.starts_with(BYREF_RECORD_PREFIX) {
+            return self.record_byref_value(target);
+        }
+        if target.starts_with(BYREF_RECORD_ARRAY_PREFIX) {
+            return self.record_array_byref_value(target);
+        }
+        let Some((owner, indices)) = Self::parse_array_byref_target(target) else {
+            return self.variables.get(target).cloned();
+        };
+        let values = match owner {
+            ByRefArrayOwner::Local(name) => self.variables.get(name),
+            ByRefArrayOwner::Module(scope, name) => self
+                .module_variables
+                .get(&(scope.map(str::to_string), name.to_string())),
+        };
+        if let Some(Variant::Array(values)) = values {
+            return indices
+                .first()
+                .and_then(|index| usize::try_from(*index).ok())
+                .and_then(|index| values.get(index).cloned());
+        }
+        if let Some(Variant::VbaArray(array)) = values {
+            return array.get(&indices).ok().cloned();
+        }
+        None
+    }
+
+    fn assign_byref_target(&mut self, target: &str, value: Variant) -> Result<(), String> {
+        if let Some(payload) = target.strip_prefix(BYREF_PROPERTY_PREFIX) {
+            let (id, property) = payload
+                .split_once('|')
+                .ok_or_else(|| "invalid Property ByRef target".to_string())?;
+            let id = id
+                .parse::<u64>()
+                .map_err(|_| "invalid Property ByRef target".to_string())?;
+            return self.call_property_let(id, property, &[], value, None, None);
+        }
+        if target.starts_with(BYREF_RECORD_PREFIX) {
+            let payload = target
+                .strip_prefix(BYREF_RECORD_PREFIX)
+                .ok_or_else(|| "invalid record ByRef target".to_string())?;
+            let (owner, path) = payload
+                .split_once('|')
+                .ok_or_else(|| "invalid record ByRef target".to_string())?;
+            let (is_local, scope, name) = if let Some(name) = owner.strip_prefix("l:") {
+                (true, None, name.to_string())
+            } else if let Some(owner) = owner.strip_prefix("m:") {
+                let (scope, name) = owner
+                    .split_once(':')
+                    .ok_or_else(|| "invalid record ByRef owner".to_string())?;
+                (false, Some(scope.to_string()), name.to_string())
+            } else {
+                return Err("unsupported record ByRef owner".to_string());
+            };
+            let key = (scope.clone().filter(|s| !s.is_empty()), name.clone());
+            let record = if is_local {
+                self.variables.get_mut(&name)
+            } else {
+                self.module_variables.get_mut(&key)
+            }
+            .ok_or_else(|| format!("'{name}' is not a record"))?;
+            if !matches!(record, Variant::Record(_)) {
+                return Err(format!("'{name}' is not a record"));
+            }
+            nested_set(
+                record,
+                &path.split('.').map(str::to_string).collect::<Vec<_>>(),
+                value,
+            );
+            return Ok(());
+        }
+        if target.starts_with(BYREF_RECORD_ARRAY_PREFIX) {
+            let payload = target
+                .strip_prefix(BYREF_RECORD_ARRAY_PREFIX)
+                .ok_or_else(|| "invalid record-array ByRef target".to_string())?;
+            let (owner_and_indices, field) = payload
+                .rsplit_once('|')
+                .ok_or_else(|| "invalid record-array ByRef target".to_string())?;
+            let (owner, indices) = owner_and_indices
+                .split_once('|')
+                .ok_or_else(|| "invalid record-array ByRef target".to_string())?;
+            let (is_local, scope, name) = if let Some(name) = owner.strip_prefix("l:") {
+                (true, None, name.to_string())
+            } else if let Some(owner) = owner.strip_prefix("m:") {
+                let (scope, name) = owner
+                    .split_once(':')
+                    .ok_or_else(|| "invalid record-array ByRef owner".to_string())?;
+                (false, Some(scope.to_string()), name.to_string())
+            } else {
+                return Err("unsupported record-array ByRef owner".to_string());
+            };
+            let key = (scope.clone().filter(|s| !s.is_empty()), name.clone());
+            let indices = indices
+                .split(',')
+                .map(str::parse::<i64>)
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|_| "invalid record-array ByRef index".to_string())?;
+            let array = if is_local {
+                self.variables.get_mut(&name)
+            } else {
+                self.module_variables.get_mut(&key)
+            }
+            .ok_or_else(|| format!("'{name}' is not a record array"))?;
+            let record = match array {
+                Variant::Array(values) => values
+                    .get_mut(
+                        usize::try_from(*indices.first().ok_or("missing index")?)
+                            .map_err(|_| "Subscript out of range")?,
+                    )
+                    .ok_or_else(|| "Subscript out of range".to_string())?,
+                Variant::VbaArray(array) => {
+                    let index = array
+                        .linear_index(&indices)
+                        .map_err(|_| "Subscript out of range".to_string())?;
+                    array
+                        .elements
+                        .get_mut(index)
+                        .ok_or_else(|| "Subscript out of range".to_string())?
+                }
+                _ => return Err(format!("'{name}' is not a record array")),
+            };
+            let Variant::Record(fields) = record else {
+                return Err("record-array element is not a record".to_string());
+            };
+            fields.insert(field.to_string(), value);
+            return Ok(());
+        }
+        let Some((owner, indices)) = Self::parse_array_byref_target(target) else {
+            return self.assign_scalar_variable(target, value);
+        };
+        let (name, is_local) = match owner {
+            ByRefArrayOwner::Local(name) => (name, true),
+            ByRefArrayOwner::Module(_, name) => (name, false),
+        };
+        if is_local {
+            let Some(existing) = self.variables.get_mut(name) else {
+                return Err(format!("'{name}' is not an array"));
+            };
+            match existing {
+                Variant::Array(values) => {
+                    let index = indices
+                        .first()
+                        .and_then(|index| usize::try_from(*index).ok())
+                        .ok_or_else(|| "Subscript out of range".to_string())?;
+                    let slot = values
+                        .get_mut(index)
+                        .ok_or_else(|| "Subscript out of range".to_string())?;
+                    *slot = value;
+                    return Ok(());
+                }
+                Variant::VbaArray(array) => {
+                    let index = array.linear_index(&indices)?;
+                    array.elements[index] = value;
+                    return Ok(());
+                }
+                _ => {}
+            }
+        }
+        let ByRefArrayOwner::Module(scope, name) = owner else {
+            return Err(format!("'{name}' is not an array"));
+        };
+        let key = (scope.map(str::to_string), name.to_string());
+        match self.module_variables.get_mut(&key) {
+            Some(Variant::Array(values)) => {
+                let index = indices
+                    .first()
+                    .and_then(|index| usize::try_from(*index).ok())
+                    .ok_or_else(|| "Subscript out of range".to_string())?;
+                let slot = values
+                    .get_mut(index)
+                    .ok_or_else(|| "Subscript out of range".to_string())?;
+                *slot = value;
+                Ok(())
+            }
+            Some(Variant::VbaArray(array)) => {
+                let index = array.linear_index(&indices)?;
+                array.elements[index] = value;
+                Ok(())
+            }
+            _ => Err(format!("'{name}' is not an array")),
+        }
+    }
+
+    fn assign_declared_byref_target(
+        &mut self,
+        target: &str,
+        value: Variant,
+        type_name: Option<&str>,
+    ) -> Result<(), String> {
+        let value = coerce_declared_argument(value, type_name)?;
+        self.assign_byref_target(target, value)
+    }
+
     fn call_sub_def(&mut self, sub: &SubDef, args: &[Variant]) -> Result<(), String> {
+        self.call_sub_def_with_bindings(sub, args, &vec![None; sub.params.len()], &HashSet::new())
+    }
+
+    /// Calls a user Sub from expression arguments while retaining the
+    /// caller's scalar lvalues for the ByRef write-back path. This is kept
+    /// separate from the legacy value-only entry used by events and hand-built
+    /// VM calls until functions, properties, arrays, and object references all
+    /// share the same binder.
+    fn call_sub_def_exprs(&mut self, sub: &SubDef, args: &[Expr]) -> Result<(), String> {
+        if sub
+            .param_types
+            .iter()
+            .flatten()
+            .any(|type_name| self.is_object_type_name(Some(type_name)))
+        {
+            return self.call_sub_def_exprs_with_objects(sub, args);
+        }
+        let normalized_args = normalize_named_args(&sub.params, &sub.param_modes, args)
+            .map_err(|message| self.argument_failure(&sub.name, 0, None, message))?;
+        let args = normalized_args.as_slice();
+        let has_param_array = sub
+            .param_modes
+            .iter()
+            .any(|mode| matches!(*mode, ParamMode::ParamArray));
+        let required = sub
+            .param_modes
+            .iter()
+            .filter(|mode| {
+                !matches!(
+                    **mode,
+                    ParamMode::OptionalByRef(_)
+                        | ParamMode::OptionalByVal(_)
+                        | ParamMode::ParamArray
+                )
+            })
+            .count();
+        if args.len() < required || (!has_param_array && args.len() > sub.params.len()) {
+            return Err(self.argument_failure(
+                &sub.name,
+                0,
+                None,
+                format!(
+                    "'{}' expects {} argument(s), got {}",
+                    sub.name,
+                    required,
+                    args.len()
+                ),
+            ));
+        }
+        let mut values = Vec::with_capacity(args.len());
+        let mut targets = Vec::with_capacity(args.len());
+        let mut missing = HashSet::new();
+        let mut arg_index = 0;
+        for (index, mode) in sub.param_modes.iter().enumerate() {
+            if matches!(mode, ParamMode::ParamArray) {
+                let rest = args[arg_index..]
+                    .iter()
+                    .map(|expr| self.eval_expr(expr))
+                    .collect::<Result<Vec<_>, _>>()?;
+                values.push(Variant::Array(rest));
+                targets.push(None);
+                arg_index = args.len();
+                continue;
+            }
+            let Some(expr) = args.get(arg_index) else {
+                let default = match mode {
+                    ParamMode::OptionalByRef(default) | ParamMode::OptionalByVal(default) => {
+                        default.as_ref()
+                    }
+                    _ => None,
+                }
+                .ok_or_else(|| {
+                    self.argument_failure(
+                        &sub.name,
+                        index + 1,
+                        sub.params.get(index).map(String::as_str),
+                        format!("missing required argument {} of '{}'", index + 1, sub.name),
+                    )
+                })?;
+                let value = self.eval_expr(default)?;
+                values.push(self.coerce_call_argument(
+                    &sub.name,
+                    index + 1,
+                    sub.params.get(index).map(String::as_str),
+                    value,
+                    sub.param_types.get(index).and_then(Option::as_deref),
+                )?);
+                targets.push(None);
+                missing.insert(sub.params[index].clone());
+                continue;
+            };
+            if matches!(expr, Expr::OmittedArg) {
+                let default = match mode {
+                    ParamMode::OptionalByRef(default) | ParamMode::OptionalByVal(default) => {
+                        default.as_ref()
+                    }
+                    _ => None,
+                }
+                .ok_or_else(|| {
+                    self.argument_failure(
+                        &sub.name,
+                        index + 1,
+                        sub.params.get(index).map(String::as_str),
+                        format!("missing required argument {} of '{}'", index + 1, sub.name),
+                    )
+                })?;
+                let value = self.eval_expr(default)?;
+                values.push(self.coerce_call_argument(
+                    &sub.name,
+                    index + 1,
+                    sub.params.get(index).map(String::as_str),
+                    value,
+                    sub.param_types.get(index).and_then(Option::as_deref),
+                )?);
+                targets.push(None);
+                missing.insert(sub.params[index].clone());
+                arg_index += 1;
+                continue;
+            }
+            let mode = sub
+                .param_modes
+                .get(index)
+                .cloned()
+                .unwrap_or(ParamMode::DefaultByRef);
+            let target = self
+                .scalar_byref_target(&mode, expr, &sub.name, index + 1)
+                .map_err(|message| {
+                    self.argument_failure(
+                        &sub.name,
+                        index + 1,
+                        sub.params.get(index).map(String::as_str),
+                        message,
+                    )
+                })?;
+            let value = self.eval_expr(expr)?;
+            values.push(self.coerce_call_argument(
+                &sub.name,
+                index + 1,
+                sub.params.get(index).map(String::as_str),
+                value,
+                sub.param_types.get(index).and_then(Option::as_deref),
+            )?);
+            targets.push(target);
+            arg_index += 1;
+        }
+        self.call_sub_def_with_bindings(sub, &values, &targets, &missing)
+    }
+
+    /// Object-aware binder for ordinary (standard-module) Subs.  The legacy
+    /// value-only path above remains for scalar-only calls, while this path
+    /// keeps object references out of `Variant` and mirrors class-method
+    /// binding: object ByRef arguments alias the caller's object slot and a
+    /// replacement such as `Set value = New Child` is written back by
+    /// identity after the callee returns.
+    fn call_sub_def_exprs_with_objects(
+        &mut self,
+        sub: &SubDef,
+        args: &[Expr],
+    ) -> Result<(), String> {
+        self.check_call_depth()?;
+        let normalized_args = normalize_named_args(&sub.params, &sub.param_modes, args)
+            .map_err(|message| self.argument_failure(&sub.name, 0, None, message))?;
+        let args = normalized_args.as_slice();
+        let has_param_array = sub
+            .param_modes
+            .iter()
+            .any(|mode| matches!(*mode, ParamMode::ParamArray));
+        let required = sub
+            .param_modes
+            .iter()
+            .filter(|mode| {
+                !matches!(
+                    **mode,
+                    ParamMode::OptionalByRef(_)
+                        | ParamMode::OptionalByVal(_)
+                        | ParamMode::ParamArray
+                )
+            })
+            .count();
+        if args.len() < required || (!has_param_array && args.len() > sub.params.len()) {
+            return Err(self.argument_failure(
+                &sub.name,
+                0,
+                None,
+                format!(
+                    "'{}' expects at least {} argument(s), got {}",
+                    sub.name,
+                    required,
+                    args.len()
+                ),
+            ));
+        }
+
+        let mut values = Vec::with_capacity(sub.params.len());
+        let mut scalar_targets = Vec::with_capacity(sub.params.len());
+        let mut object_targets = Vec::with_capacity(sub.params.len());
+        let mut missing = HashSet::new();
+        let mut arg_index = 0usize;
+        for (index, mode) in sub.param_modes.iter().enumerate() {
+            if matches!(mode, ParamMode::ParamArray) {
+                let rest = args[arg_index..]
+                    .iter()
+                    .map(|expr| self.eval_expr(expr))
+                    .collect::<Result<Vec<_>, _>>()?;
+                values.push(RuntimeArg::Scalar(Variant::Array(rest)));
+                scalar_targets.push(None);
+                object_targets.push(None);
+                arg_index = args.len();
+                continue;
+            }
+            let Some(expr) = args.get(arg_index) else {
+                let default = match mode {
+                    ParamMode::OptionalByRef(default) | ParamMode::OptionalByVal(default) => {
+                        default.as_ref()
+                    }
+                    _ => None,
+                }
+                .ok_or_else(|| {
+                    self.argument_failure(
+                        &sub.name,
+                        index + 1,
+                        sub.params.get(index).map(String::as_str),
+                        format!("missing required argument {} of '{}'", index + 1, sub.name),
+                    )
+                })?;
+                let type_name = sub.param_types.get(index).and_then(Option::as_deref);
+                values.push(self.eval_runtime_arg(default, type_name)?);
+                scalar_targets.push(None);
+                object_targets.push(None);
+                missing.insert(sub.params[index].clone());
+                continue;
+            };
+            if matches!(expr, Expr::OmittedArg) {
+                let default = match mode {
+                    ParamMode::OptionalByRef(default) | ParamMode::OptionalByVal(default) => {
+                        default.as_ref()
+                    }
+                    _ => None,
+                }
+                .ok_or_else(|| {
+                    self.argument_failure(
+                        &sub.name,
+                        index + 1,
+                        sub.params.get(index).map(String::as_str),
+                        format!("missing required argument {} of '{}'", index + 1, sub.name),
+                    )
+                })?;
+                let type_name = sub.param_types.get(index).and_then(Option::as_deref);
+                values.push(self.eval_runtime_arg(default, type_name)?);
+                scalar_targets.push(None);
+                object_targets.push(None);
+                missing.insert(sub.params[index].clone());
+                arg_index += 1;
+                continue;
+            }
+
+            let type_name = sub.param_types.get(index).and_then(Option::as_deref);
+            let (scalar_target, object_target) = if self.is_object_type_name(type_name) {
+                let target = match (mode, expr) {
+                    (ParamMode::ByRef | ParamMode::OptionalByRef(_), Expr::Var(name))
+                    | (ParamMode::DefaultByRef, Expr::Var(name)) => Some(name.clone()),
+                    (ParamMode::OptionalByRef(_), _) => None,
+                    (ParamMode::ByRef, _) => {
+                        return Err(self.argument_failure(
+                            &sub.name,
+                            index + 1,
+                            sub.params.get(index).map(String::as_str),
+                            format!(
+                                "ByRef object argument {} of '{}' must be an object variable",
+                                index + 1,
+                                sub.name
+                            ),
+                        ));
+                    }
+                    _ => None,
+                };
+                (None, target)
+            } else {
+                let target = match (mode, expr) {
+                    (ParamMode::ByRef | ParamMode::OptionalByRef(_), Expr::Var(name))
+                    | (ParamMode::DefaultByRef, Expr::Var(name)) => Some(name.clone()),
+                    (
+                        ParamMode::ByRef | ParamMode::OptionalByRef(_),
+                        Expr::FuncCall { name, args },
+                    )
+                    | (ParamMode::DefaultByRef, Expr::FuncCall { name, args })
+                        if self.is_array_variable(name) =>
+                    {
+                        Some(self.array_byref_target(name, args)?)
+                    }
+                    (ParamMode::OptionalByRef(_), _) => None,
+                    (ParamMode::ByRef, _) => {
+                        return Err(self.argument_failure(
+                            &sub.name,
+                            index + 1,
+                            sub.params.get(index).map(String::as_str),
+                            format!(
+                                "ByRef argument {} of '{}' must be a scalar variable or array element",
+                                index + 1,
+                                sub.name
+                            ),
+                        ));
+                    }
+                    _ => None,
+                };
+                (target, None)
+            };
+            values.push(self.eval_runtime_arg(expr, type_name)?);
+            scalar_targets.push(scalar_target);
+            object_targets.push(object_target);
+            arg_index += 1;
+        }
+
+        let mut saved_scalar = Vec::with_capacity(sub.params.len());
+        let mut saved_object = Vec::with_capacity(sub.params.len());
+        let mut saved_types = Vec::with_capacity(sub.params.len());
+        for (index, (name, value)) in sub.params.iter().zip(values).enumerate() {
+            saved_scalar.push((name.clone(), self.variables.remove(name)));
+            saved_object.push((name.clone(), self.object_variables.remove(name)));
+            saved_types.push((name.clone(), self.object_variable_types.remove(name)));
+            match value {
+                RuntimeArg::Scalar(value) => {
+                    self.variables.insert(name.clone(), value);
+                }
+                RuntimeArg::Object(value) => {
+                    self.object_variables.insert(name.clone(), value);
+                    if let Some(type_name) = sub.param_types[index].clone() {
+                        self.object_variable_types.insert(name.clone(), type_name);
+                    }
+                }
+            }
+        }
+
+        let previous_module_scope = self.current_module_scope.clone();
+        let previous_option_compare = self.option_compare;
+        self.current_module_scope = sub.module_name.clone();
+        if let Some(module) = sub.module_name.as_deref()
+            && let Some(mode) = self.option_compare_by_module.get(&module.to_lowercase())
+        {
+            self.option_compare = *mode;
+        }
+        self.call_stack.push(CallFrame {
+            procedure_name: sub.name.clone(),
+            error_mode: ErrorMode::Disabled,
+        });
+        self.record_trace("entry", None, format!("Sub {}", sub.name));
+        self.byref_aliases.push(
+            scalar_targets
+                .iter()
+                .enumerate()
+                .filter_map(|(index, target)| {
+                    target
+                        .as_ref()
+                        .map(|target| (sub.params[index].clone(), target.clone()))
+                })
+                .collect(),
+        );
+        self.object_byref_aliases.push(
+            object_targets
+                .iter()
+                .enumerate()
+                .filter_map(|(index, target)| {
+                    target
+                        .as_ref()
+                        .map(|target| (sub.params[index].clone(), target.clone()))
+                })
+                .collect(),
+        );
+        self.missing_parameter_frames.push(missing);
+        let result = self.exec_body(&sub.body, |flag| matches!(flag, ExitKind::Sub));
+        self.missing_parameter_frames.pop();
+        self.object_byref_aliases.pop();
+        self.byref_aliases.pop();
+        self.record_trace(
+            if result.is_ok() { "exit" } else { "failure" },
+            self.current_span,
+            format!("Sub {}", sub.name),
+        );
+        self.call_stack.pop();
+        self.current_module_scope = previous_module_scope;
+        self.option_compare = previous_option_compare;
+
+        let updated_scalar: Vec<Option<Variant>> = sub
+            .params
+            .iter()
+            .map(|name| self.variables.get(name).cloned())
+            .collect();
+        let updated_object: Vec<Option<ObjectRef>> = sub
+            .params
+            .iter()
+            .map(|name| self.object_variables.get(name).cloned())
+            .collect();
+        for (name, old) in saved_scalar {
+            if let Some(value) = old {
+                self.variables.insert(name, value);
+            } else {
+                self.variables.remove(&name);
+            }
+        }
+        for (name, old) in saved_object {
+            if let Some(value) = old {
+                self.object_variables.insert(name, value);
+            } else {
+                self.object_variables.remove(&name);
+            }
+        }
+        for (name, old) in saved_types {
+            if let Some(value) = old {
+                self.object_variable_types.insert(name, value);
+            } else {
+                self.object_variable_types.remove(&name);
+            }
+        }
+        for (index, target) in scalar_targets.iter().enumerate() {
+            if let Some(target) = target
+                && let Some(value) = updated_scalar.get(index).and_then(Option::clone)
+            {
+                self.assign_declared_byref_target(
+                    target,
+                    value,
+                    sub.param_types.get(index).and_then(Option::as_deref),
+                )?;
+            }
+        }
+        for (index, target) in object_targets.iter().enumerate() {
+            if let Some(target) = target
+                && let Some(value) = updated_object.get(index).and_then(Option::clone)
+            {
+                self.assign_object_variable(target.clone(), value)?;
+            }
+        }
+        result
+    }
+
+    fn call_sub_def_with_bindings(
+        &mut self,
+        sub: &SubDef,
+        args: &[Variant],
+        byref_targets: &[Option<String>],
+        missing: &HashSet<String>,
+    ) -> Result<(), String> {
         self.check_call_depth()?;
         for value in args {
             self.check_variant_budget(value)?;
@@ -11537,12 +13994,51 @@ impl Vm {
             procedure_name: sub.name.clone(),
             error_mode: ErrorMode::Disabled,
         });
+        self.record_trace("entry", None, format!("Sub {}", sub.name));
         let previous_module_scope = self.current_module_scope.clone();
+        let previous_option_compare = self.option_compare;
         self.current_module_scope = sub.module_name.clone();
+        if let Some(module) = sub.module_name.as_deref()
+            && let Some(mode) = self.option_compare_by_module.get(&module.to_lowercase())
+        {
+            self.option_compare = *mode;
+        }
+        self.missing_parameter_frames.push(missing.clone());
+        self.byref_aliases.push(
+            byref_targets
+                .iter()
+                .enumerate()
+                .filter_map(|(index, target)| {
+                    target
+                        .as_ref()
+                        .map(|target| (sub.params[index].clone(), target.clone()))
+                })
+                .collect(),
+        );
+        self.active_static_names.push(Vec::new());
         let result = self.exec_body(&sub.body, |f| matches!(f, ExitKind::Sub));
+        self.record_trace(
+            if result.is_ok() { "exit" } else { "failure" },
+            self.current_span,
+            format!("Sub {}", sub.name),
+        );
+        let static_names = self.active_static_names.pop().unwrap_or_default();
+        for name in static_names {
+            if let Some(value) = self.variables.get(&name).cloned() {
+                self.static_variables
+                    .insert((sub.name.clone(), name), value);
+            }
+        }
+        self.missing_parameter_frames.pop();
+        self.byref_aliases.pop();
         self.current_module_scope = previous_module_scope;
+        self.option_compare = previous_option_compare;
         self.call_stack.pop();
-        result?;
+        let updated: Vec<Option<Variant>> = sub
+            .params
+            .iter()
+            .map(|name| self.variables.get(name).cloned())
+            .collect();
         for (p, old) in saved {
             match old {
                 Some(v) => {
@@ -11553,10 +14049,769 @@ impl Vm {
                 }
             }
         }
-        Ok(())
+        for (index, target) in byref_targets.iter().enumerate() {
+            if let Some(target) = target
+                && let Some(value) = updated.get(index).and_then(Option::clone)
+            {
+                self.assign_declared_byref_target(
+                    target,
+                    value,
+                    sub.param_types.get(index).and_then(Option::as_deref),
+                )?;
+            }
+        }
+        result
     }
 
-    fn call_func_def(&mut self, func: &FuncDef, args: &[Variant]) -> Result<Variant, String> {
+    fn call_func_object_expr(
+        &mut self,
+        func: &FuncDef,
+        args: &[Expr],
+    ) -> Result<ObjectRef, String> {
+        self.check_call_depth()?;
+        let return_type = func
+            .return_type
+            .as_deref()
+            .filter(|type_name| self.is_object_type_name(Some(type_name)))
+            .ok_or_else(|| format!("Function '{}' does not return an object", func.name))?
+            .to_string();
+        let normalized_args = normalize_named_args(&func.params, &func.param_modes, args)
+            .map_err(|message| self.argument_failure(&func.name, 0, None, message))?;
+        let args = normalized_args.as_slice();
+        let has_param_array = func
+            .param_modes
+            .iter()
+            .any(|mode| matches!(*mode, ParamMode::ParamArray));
+        let required = func
+            .param_modes
+            .iter()
+            .filter(|mode| {
+                !matches!(
+                    **mode,
+                    ParamMode::OptionalByRef(_)
+                        | ParamMode::OptionalByVal(_)
+                        | ParamMode::ParamArray
+                )
+            })
+            .count();
+        if args.len() < required || (!has_param_array && args.len() > func.params.len()) {
+            return Err(self.argument_failure(
+                &func.name,
+                0,
+                None,
+                format!(
+                    "'{}' expects at least {} argument(s), got {}",
+                    func.name,
+                    required,
+                    args.len()
+                ),
+            ));
+        }
+        let mut values = Vec::with_capacity(func.params.len());
+        let mut scalar_targets = Vec::with_capacity(func.params.len());
+        let mut object_targets = Vec::with_capacity(func.params.len());
+        let mut missing = HashSet::new();
+        let mut arg_index = 0usize;
+        for (index, mode) in func.param_modes.iter().enumerate() {
+            if matches!(mode, ParamMode::ParamArray) {
+                let rest = args[arg_index..]
+                    .iter()
+                    .map(|expr| self.eval_expr(expr))
+                    .collect::<Result<Vec<_>, _>>()?;
+                values.push(RuntimeArg::Scalar(Variant::Array(rest)));
+                scalar_targets.push(None);
+                object_targets.push(None);
+                arg_index = args.len();
+                continue;
+            }
+            let Some(expr) = args.get(arg_index) else {
+                let default = match mode {
+                    ParamMode::OptionalByRef(default) | ParamMode::OptionalByVal(default) => {
+                        default.as_ref()
+                    }
+                    _ => None,
+                }
+                .ok_or_else(|| {
+                    self.argument_failure(
+                        &func.name,
+                        index + 1,
+                        func.params.get(index).map(String::as_str),
+                        format!("missing required argument {} of '{}'", index + 1, func.name),
+                    )
+                })?;
+                let type_name = func.param_types.get(index).and_then(Option::as_deref);
+                values.push(self.eval_runtime_arg(default, type_name)?);
+                scalar_targets.push(None);
+                object_targets.push(None);
+                missing.insert(func.params[index].clone());
+                continue;
+            };
+            if matches!(expr, Expr::OmittedArg) {
+                let default = match mode {
+                    ParamMode::OptionalByRef(default) | ParamMode::OptionalByVal(default) => {
+                        default.as_ref()
+                    }
+                    _ => None,
+                }
+                .ok_or_else(|| {
+                    self.argument_failure(
+                        &func.name,
+                        index + 1,
+                        func.params.get(index).map(String::as_str),
+                        format!("missing required argument {} of '{}'", index + 1, func.name),
+                    )
+                })?;
+                let type_name = func.param_types.get(index).and_then(Option::as_deref);
+                values.push(self.eval_runtime_arg(default, type_name)?);
+                scalar_targets.push(None);
+                object_targets.push(None);
+                missing.insert(func.params[index].clone());
+                arg_index += 1;
+                continue;
+            }
+            let type_name = func.param_types.get(index).and_then(Option::as_deref);
+            let (scalar_target, object_target) = if self.is_object_type_name(type_name) {
+                let target = match (mode, expr) {
+                    (ParamMode::ByRef | ParamMode::OptionalByRef(_), Expr::Var(name))
+                    | (ParamMode::DefaultByRef, Expr::Var(name)) => Some(name.clone()),
+                    (ParamMode::OptionalByRef(_), _) => None,
+                    (ParamMode::ByRef, _) => {
+                        return Err(self.argument_failure(
+                            &func.name,
+                            index + 1,
+                            func.params.get(index).map(String::as_str),
+                            format!(
+                                "ByRef object argument {} of '{}' must be an object variable",
+                                index + 1,
+                                func.name
+                            ),
+                        ));
+                    }
+                    _ => None,
+                };
+                (None, target)
+            } else {
+                let target = match (mode, expr) {
+                    (ParamMode::ByRef | ParamMode::OptionalByRef(_), Expr::Var(name))
+                    | (ParamMode::DefaultByRef, Expr::Var(name)) => Some(name.clone()),
+                    (
+                        ParamMode::ByRef | ParamMode::OptionalByRef(_),
+                        Expr::FuncCall { name, args },
+                    )
+                    | (ParamMode::DefaultByRef, Expr::FuncCall { name, args })
+                        if self.is_array_variable(name) =>
+                    {
+                        Some(self.array_byref_target(name, args)?)
+                    }
+                    (ParamMode::OptionalByRef(_), _) => None,
+                    (ParamMode::ByRef, _) => {
+                        return Err(self.argument_failure(
+                            &func.name,
+                            index + 1,
+                            func.params.get(index).map(String::as_str),
+                            format!(
+                                "ByRef argument {} of '{}' must be a scalar variable or array element",
+                                index + 1,
+                                func.name
+                            ),
+                        ));
+                    }
+                    _ => None,
+                };
+                (target, None)
+            };
+            values.push(self.eval_runtime_arg(expr, type_name)?);
+            scalar_targets.push(scalar_target);
+            object_targets.push(object_target);
+            arg_index += 1;
+        }
+
+        let mut saved_scalar = Vec::with_capacity(func.params.len());
+        let mut saved_object = Vec::with_capacity(func.params.len());
+        let mut saved_types = Vec::with_capacity(func.params.len());
+        for (index, (name, value)) in func.params.iter().zip(values).enumerate() {
+            saved_scalar.push((name.clone(), self.variables.remove(name)));
+            saved_object.push((name.clone(), self.object_variables.remove(name)));
+            saved_types.push((name.clone(), self.object_variable_types.remove(name)));
+            match value {
+                RuntimeArg::Scalar(value) => {
+                    self.variables.insert(name.clone(), value);
+                }
+                RuntimeArg::Object(value) => {
+                    self.object_variables.insert(name.clone(), value);
+                    if let Some(type_name) = func.param_types[index].clone() {
+                        self.object_variable_types.insert(name.clone(), type_name);
+                    }
+                }
+            }
+        }
+        let return_name = func.name.clone();
+        let old_return_scalar = self.variables.remove(&return_name);
+        let old_return_object = self.object_variables.remove(&return_name);
+        let old_return_type = self
+            .object_variable_types
+            .insert(return_name.clone(), return_type);
+        let previous_module_scope = self.current_module_scope.clone();
+        let previous_option_compare = self.option_compare;
+        self.current_module_scope = func.module_name.clone();
+        if let Some(module) = func.module_name.as_deref()
+            && let Some(mode) = self.option_compare_by_module.get(&module.to_lowercase())
+        {
+            self.option_compare = *mode;
+        }
+        self.call_stack.push(CallFrame {
+            procedure_name: return_name.clone(),
+            error_mode: ErrorMode::Disabled,
+        });
+        self.record_trace("entry", None, format!("Function {}", func.name));
+        self.byref_aliases.push(
+            scalar_targets
+                .iter()
+                .enumerate()
+                .filter_map(|(index, target)| {
+                    target
+                        .as_ref()
+                        .map(|target| (func.params[index].clone(), target.clone()))
+                })
+                .collect(),
+        );
+        self.object_byref_aliases.push(
+            object_targets
+                .iter()
+                .enumerate()
+                .filter_map(|(index, target)| {
+                    target
+                        .as_ref()
+                        .map(|target| (func.params[index].clone(), target.clone()))
+                })
+                .collect(),
+        );
+        self.missing_parameter_frames.push(missing);
+        let result = self.exec_body(&func.body, |flag| {
+            matches!(flag, ExitKind::Function | ExitKind::Sub)
+        });
+        self.missing_parameter_frames.pop();
+        self.object_byref_aliases.pop();
+        self.byref_aliases.pop();
+        self.record_trace(
+            if result.is_ok() { "exit" } else { "failure" },
+            self.current_span,
+            format!("Function {}", func.name),
+        );
+        self.call_stack.pop();
+        self.current_module_scope = previous_module_scope;
+        self.option_compare = previous_option_compare;
+
+        let return_value = self
+            .object_variables
+            .remove(&return_name)
+            .unwrap_or(ObjectRef::Nothing);
+        let updated_scalar: Vec<Option<Variant>> = func
+            .params
+            .iter()
+            .map(|name| self.variables.get(name).cloned())
+            .collect();
+        let updated_object: Vec<Option<ObjectRef>> = func
+            .params
+            .iter()
+            .map(|name| self.object_variables.get(name).cloned())
+            .collect();
+        for (name, old) in saved_scalar {
+            if let Some(value) = old {
+                self.variables.insert(name, value);
+            } else {
+                self.variables.remove(&name);
+            }
+        }
+        for (name, old) in saved_object {
+            if let Some(value) = old {
+                self.object_variables.insert(name, value);
+            } else {
+                self.object_variables.remove(&name);
+            }
+        }
+        for (name, old) in saved_types {
+            if let Some(value) = old {
+                self.object_variable_types.insert(name, value);
+            } else {
+                self.object_variable_types.remove(&name);
+            }
+        }
+        if let Some(old) = old_return_scalar {
+            self.variables.insert(return_name.clone(), old);
+        }
+        if let Some(old) = old_return_object {
+            self.object_variables.insert(return_name.clone(), old);
+        }
+        if let Some(old) = old_return_type {
+            self.object_variable_types.insert(return_name, old);
+        } else {
+            self.object_variable_types.remove(&return_name);
+        }
+        for (index, target) in scalar_targets.iter().enumerate() {
+            if let Some(target) = target
+                && let Some(value) = updated_scalar.get(index).and_then(Option::clone)
+            {
+                self.assign_declared_byref_target(
+                    target,
+                    value,
+                    func.param_types.get(index).and_then(Option::as_deref),
+                )?;
+            }
+        }
+        for (index, target) in object_targets.iter().enumerate() {
+            if let Some(target) = target
+                && let Some(value) = updated_object.get(index).and_then(Option::clone)
+            {
+                self.assign_object_variable(target.clone(), value)?;
+            }
+        }
+        result.map(|()| return_value)
+    }
+
+    fn call_func_def_exprs(&mut self, func: &FuncDef, args: &[Expr]) -> Result<Variant, String> {
+        if func
+            .param_types
+            .iter()
+            .flatten()
+            .any(|type_name| self.is_object_type_name(Some(type_name)))
+        {
+            return self.call_func_def_exprs_with_objects(func, args);
+        }
+        let normalized_args = normalize_named_args(&func.params, &func.param_modes, args)
+            .map_err(|message| self.argument_failure(&func.name, 0, None, message))?;
+        let args = normalized_args.as_slice();
+        let has_param_array = func
+            .param_modes
+            .iter()
+            .any(|mode| matches!(*mode, ParamMode::ParamArray));
+        let required = func
+            .param_modes
+            .iter()
+            .filter(|mode| {
+                !matches!(
+                    **mode,
+                    ParamMode::OptionalByRef(_)
+                        | ParamMode::OptionalByVal(_)
+                        | ParamMode::ParamArray
+                )
+            })
+            .count();
+        if args.len() < required || (!has_param_array && args.len() > func.params.len()) {
+            return Err(self.argument_failure(
+                &func.name,
+                0,
+                None,
+                format!(
+                    "'{}' expects {} argument(s), got {}",
+                    func.name,
+                    required,
+                    args.len()
+                ),
+            ));
+        }
+        let mut values = Vec::with_capacity(args.len());
+        let mut targets = Vec::with_capacity(args.len());
+        let mut missing = HashSet::new();
+        let mut arg_index = 0;
+        for (index, mode) in func.param_modes.iter().enumerate() {
+            if matches!(mode, ParamMode::ParamArray) {
+                let rest = args[arg_index..]
+                    .iter()
+                    .map(|expr| self.eval_expr(expr))
+                    .collect::<Result<Vec<_>, _>>()?;
+                values.push(Variant::Array(rest));
+                targets.push(None);
+                arg_index = args.len();
+                continue;
+            }
+            let Some(expr) = args.get(arg_index) else {
+                let default = match mode {
+                    ParamMode::OptionalByRef(default) | ParamMode::OptionalByVal(default) => {
+                        default.as_ref()
+                    }
+                    _ => None,
+                }
+                .ok_or_else(|| {
+                    self.argument_failure(
+                        &func.name,
+                        index + 1,
+                        func.params.get(index).map(String::as_str),
+                        format!("missing required argument {} of '{}'", index + 1, func.name),
+                    )
+                })?;
+                let value = self.eval_expr(default)?;
+                values.push(self.coerce_call_argument(
+                    &func.name,
+                    index + 1,
+                    func.params.get(index).map(String::as_str),
+                    value,
+                    func.param_types.get(index).and_then(Option::as_deref),
+                )?);
+                targets.push(None);
+                missing.insert(func.params[index].clone());
+                continue;
+            };
+            if matches!(expr, Expr::OmittedArg) {
+                let default = match mode {
+                    ParamMode::OptionalByRef(default) | ParamMode::OptionalByVal(default) => {
+                        default.as_ref()
+                    }
+                    _ => None,
+                }
+                .ok_or_else(|| {
+                    self.argument_failure(
+                        &func.name,
+                        index + 1,
+                        func.params.get(index).map(String::as_str),
+                        format!("missing required argument {} of '{}'", index + 1, func.name),
+                    )
+                })?;
+                let value = self.eval_expr(default)?;
+                values.push(self.coerce_call_argument(
+                    &func.name,
+                    index + 1,
+                    func.params.get(index).map(String::as_str),
+                    value,
+                    func.param_types.get(index).and_then(Option::as_deref),
+                )?);
+                targets.push(None);
+                missing.insert(func.params[index].clone());
+                arg_index += 1;
+                continue;
+            }
+            let mode = func
+                .param_modes
+                .get(index)
+                .cloned()
+                .unwrap_or(ParamMode::DefaultByRef);
+            let target = self
+                .scalar_byref_target(&mode, expr, &func.name, index + 1)
+                .map_err(|message| {
+                    self.argument_failure(
+                        &func.name,
+                        index + 1,
+                        func.params.get(index).map(String::as_str),
+                        message,
+                    )
+                })?;
+            let value = self.eval_expr(expr)?;
+            values.push(self.coerce_call_argument(
+                &func.name,
+                index + 1,
+                func.params.get(index).map(String::as_str),
+                value,
+                func.param_types.get(index).and_then(Option::as_deref),
+            )?);
+            targets.push(target);
+            arg_index += 1;
+        }
+        self.call_func_def_with_bindings(func, &values, &targets, &missing)
+    }
+
+    /// Variant-returning Function counterpart to
+    /// `call_sub_def_exprs_with_objects`. Object parameters must be kept in
+    /// `object_variables`; treating them as ordinary Variants makes a
+    /// standard-module Function fail before its body can inspect or mutate an
+    /// object. The return slot remains scalar here. Object-returning Functions
+    /// are intentionally handled by the separate `Set`/`ObjectExpr` path.
+    fn call_func_def_exprs_with_objects(
+        &mut self,
+        func: &FuncDef,
+        args: &[Expr],
+    ) -> Result<Variant, String> {
+        self.check_call_depth()?;
+        let normalized_args = normalize_named_args(&func.params, &func.param_modes, args)
+            .map_err(|message| self.argument_failure(&func.name, 0, None, message))?;
+        let args = normalized_args.as_slice();
+        let has_param_array = func
+            .param_modes
+            .iter()
+            .any(|mode| matches!(*mode, ParamMode::ParamArray));
+        let required = func
+            .param_modes
+            .iter()
+            .filter(|mode| {
+                !matches!(
+                    **mode,
+                    ParamMode::OptionalByRef(_)
+                        | ParamMode::OptionalByVal(_)
+                        | ParamMode::ParamArray
+                )
+            })
+            .count();
+        if args.len() < required || (!has_param_array && args.len() > func.params.len()) {
+            return Err(self.argument_failure(
+                &func.name,
+                0,
+                None,
+                format!(
+                    "'{}' expects at least {} argument(s), got {}",
+                    func.name,
+                    required,
+                    args.len()
+                ),
+            ));
+        }
+
+        let mut values = Vec::with_capacity(func.params.len());
+        let mut scalar_targets = Vec::with_capacity(func.params.len());
+        let mut object_targets = Vec::with_capacity(func.params.len());
+        let mut missing = HashSet::new();
+        let mut arg_index = 0usize;
+        for (index, mode) in func.param_modes.iter().enumerate() {
+            if matches!(mode, ParamMode::ParamArray) {
+                let rest = args[arg_index..]
+                    .iter()
+                    .map(|expr| self.eval_expr(expr))
+                    .collect::<Result<Vec<_>, _>>()?;
+                values.push(RuntimeArg::Scalar(Variant::Array(rest)));
+                scalar_targets.push(None);
+                object_targets.push(None);
+                arg_index = args.len();
+                continue;
+            }
+            let Some(expr) = args.get(arg_index) else {
+                let default = match mode {
+                    ParamMode::OptionalByRef(default) | ParamMode::OptionalByVal(default) => {
+                        default.as_ref()
+                    }
+                    _ => None,
+                }
+                .ok_or_else(|| {
+                    self.argument_failure(
+                        &func.name,
+                        index + 1,
+                        func.params.get(index).map(String::as_str),
+                        format!("missing required argument {} of '{}'", index + 1, func.name),
+                    )
+                })?;
+                let type_name = func.param_types.get(index).and_then(Option::as_deref);
+                values.push(self.eval_runtime_arg(default, type_name)?);
+                scalar_targets.push(None);
+                object_targets.push(None);
+                missing.insert(func.params[index].clone());
+                continue;
+            };
+            if matches!(expr, Expr::OmittedArg) {
+                let default = match mode {
+                    ParamMode::OptionalByRef(default) | ParamMode::OptionalByVal(default) => {
+                        default.as_ref()
+                    }
+                    _ => None,
+                }
+                .ok_or_else(|| {
+                    self.argument_failure(
+                        &func.name,
+                        index + 1,
+                        func.params.get(index).map(String::as_str),
+                        format!("missing required argument {} of '{}'", index + 1, func.name),
+                    )
+                })?;
+                let type_name = func.param_types.get(index).and_then(Option::as_deref);
+                values.push(self.eval_runtime_arg(default, type_name)?);
+                scalar_targets.push(None);
+                object_targets.push(None);
+                missing.insert(func.params[index].clone());
+                arg_index += 1;
+                continue;
+            }
+
+            let type_name = func.param_types.get(index).and_then(Option::as_deref);
+            let (scalar_target, object_target) = if self.is_object_type_name(type_name) {
+                let target = match (mode, expr) {
+                    (ParamMode::ByRef | ParamMode::OptionalByRef(_), Expr::Var(name))
+                    | (ParamMode::DefaultByRef, Expr::Var(name)) => Some(name.clone()),
+                    (ParamMode::OptionalByRef(_), _) => None,
+                    (ParamMode::ByRef, _) => {
+                        return Err(self.argument_failure(
+                            &func.name,
+                            index + 1,
+                            func.params.get(index).map(String::as_str),
+                            format!(
+                                "ByRef object argument {} of '{}' must be an object variable",
+                                index + 1,
+                                func.name
+                            ),
+                        ));
+                    }
+                    _ => None,
+                };
+                (None, target)
+            } else {
+                let target = match (mode, expr) {
+                    (ParamMode::ByRef | ParamMode::OptionalByRef(_), Expr::Var(name))
+                    | (ParamMode::DefaultByRef, Expr::Var(name)) => Some(name.clone()),
+                    (
+                        ParamMode::ByRef | ParamMode::OptionalByRef(_),
+                        Expr::FuncCall { name, args },
+                    )
+                    | (ParamMode::DefaultByRef, Expr::FuncCall { name, args })
+                        if self.is_array_variable(name) =>
+                    {
+                        Some(self.array_byref_target(name, args)?)
+                    }
+                    (ParamMode::OptionalByRef(_), _) => None,
+                    (ParamMode::ByRef, _) => {
+                        return Err(self.argument_failure(
+                            &func.name,
+                            index + 1,
+                            func.params.get(index).map(String::as_str),
+                            format!(
+                                "ByRef argument {} of '{}' must be a scalar variable or array element",
+                                index + 1,
+                                func.name
+                            ),
+                        ));
+                    }
+                    _ => None,
+                };
+                (target, None)
+            };
+            values.push(self.eval_runtime_arg(expr, type_name)?);
+            scalar_targets.push(scalar_target);
+            object_targets.push(object_target);
+            arg_index += 1;
+        }
+
+        let mut saved_scalar = Vec::with_capacity(func.params.len());
+        let mut saved_object = Vec::with_capacity(func.params.len());
+        let mut saved_types = Vec::with_capacity(func.params.len());
+        for (index, (name, value)) in func.params.iter().zip(values).enumerate() {
+            saved_scalar.push((name.clone(), self.variables.remove(name)));
+            saved_object.push((name.clone(), self.object_variables.remove(name)));
+            saved_types.push((name.clone(), self.object_variable_types.remove(name)));
+            match value {
+                RuntimeArg::Scalar(value) => {
+                    self.variables.insert(name.clone(), value);
+                }
+                RuntimeArg::Object(value) => {
+                    self.object_variables.insert(name.clone(), value);
+                    if let Some(type_name) = func.param_types[index].clone() {
+                        self.object_variable_types.insert(name.clone(), type_name);
+                    }
+                }
+            }
+        }
+        let return_name = func.name.clone();
+        let old_return = self.variables.remove(&return_name);
+        let previous_module_scope = self.current_module_scope.clone();
+        let previous_option_compare = self.option_compare;
+        self.current_module_scope = func.module_name.clone();
+        if let Some(module) = func.module_name.as_deref()
+            && let Some(mode) = self.option_compare_by_module.get(&module.to_lowercase())
+        {
+            self.option_compare = *mode;
+        }
+        self.call_stack.push(CallFrame {
+            procedure_name: return_name.clone(),
+            error_mode: ErrorMode::Disabled,
+        });
+        self.record_trace("entry", None, format!("Function {}", func.name));
+        self.byref_aliases.push(
+            scalar_targets
+                .iter()
+                .enumerate()
+                .filter_map(|(index, target)| {
+                    target
+                        .as_ref()
+                        .map(|target| (func.params[index].clone(), target.clone()))
+                })
+                .collect(),
+        );
+        self.object_byref_aliases.push(
+            object_targets
+                .iter()
+                .enumerate()
+                .filter_map(|(index, target)| {
+                    target
+                        .as_ref()
+                        .map(|target| (func.params[index].clone(), target.clone()))
+                })
+                .collect(),
+        );
+        self.missing_parameter_frames.push(missing);
+        let result = self.exec_body(&func.body, |flag| {
+            matches!(flag, ExitKind::Function | ExitKind::Sub)
+        });
+        self.missing_parameter_frames.pop();
+        self.object_byref_aliases.pop();
+        self.byref_aliases.pop();
+        self.record_trace(
+            if result.is_ok() { "exit" } else { "failure" },
+            self.current_span,
+            format!("Function {}", func.name),
+        );
+        self.call_stack.pop();
+        self.current_module_scope = previous_module_scope;
+        self.option_compare = previous_option_compare;
+
+        let return_value = self
+            .variables
+            .remove(&return_name)
+            .unwrap_or(Variant::Empty);
+        let updated_scalar: Vec<Option<Variant>> = func
+            .params
+            .iter()
+            .map(|name| self.variables.get(name).cloned())
+            .collect();
+        let updated_object: Vec<Option<ObjectRef>> = func
+            .params
+            .iter()
+            .map(|name| self.object_variables.get(name).cloned())
+            .collect();
+        for (name, old) in saved_scalar {
+            if let Some(value) = old {
+                self.variables.insert(name, value);
+            } else {
+                self.variables.remove(&name);
+            }
+        }
+        for (name, old) in saved_object {
+            if let Some(value) = old {
+                self.object_variables.insert(name, value);
+            } else {
+                self.object_variables.remove(&name);
+            }
+        }
+        for (name, old) in saved_types {
+            if let Some(value) = old {
+                self.object_variable_types.insert(name, value);
+            } else {
+                self.object_variable_types.remove(&name);
+            }
+        }
+        if let Some(old) = old_return {
+            self.variables.insert(return_name, old);
+        }
+        for (index, target) in scalar_targets.iter().enumerate() {
+            if let Some(target) = target
+                && let Some(value) = updated_scalar.get(index).and_then(Option::clone)
+            {
+                self.assign_declared_byref_target(
+                    target,
+                    value,
+                    func.param_types.get(index).and_then(Option::as_deref),
+                )?;
+            }
+        }
+        for (index, target) in object_targets.iter().enumerate() {
+            if let Some(target) = target
+                && let Some(value) = updated_object.get(index).and_then(Option::clone)
+            {
+                self.assign_object_variable(target.clone(), value)?;
+            }
+        }
+        result.map(|()| return_value)
+    }
+
+    fn call_func_def_with_bindings(
+        &mut self,
+        func: &FuncDef,
+        args: &[Variant],
+        byref_targets: &[Option<String>],
+        missing: &HashSet<String>,
+    ) -> Result<Variant, String> {
         self.check_call_depth()?;
         for value in args {
             self.check_variant_budget(value)?;
@@ -11579,15 +14834,54 @@ impl Vm {
             procedure_name: func.name.clone(),
             error_mode: ErrorMode::Disabled,
         });
+        self.record_trace("entry", None, format!("Function {}", func.name));
         let previous_module_scope = self.current_module_scope.clone();
+        let previous_option_compare = self.option_compare;
         self.current_module_scope = func.module_name.clone();
+        if let Some(module) = func.module_name.as_deref()
+            && let Some(mode) = self.option_compare_by_module.get(&module.to_lowercase())
+        {
+            self.option_compare = *mode;
+        }
+        self.missing_parameter_frames.push(missing.clone());
+        self.byref_aliases.push(
+            byref_targets
+                .iter()
+                .enumerate()
+                .filter_map(|(index, target)| {
+                    target
+                        .as_ref()
+                        .map(|target| (func.params[index].clone(), target.clone()))
+                })
+                .collect(),
+        );
+        self.active_static_names.push(Vec::new());
         let result = self.exec_body(&func.body, |f| {
             matches!(f, ExitKind::Function | ExitKind::Sub)
         });
+        self.record_trace(
+            if result.is_ok() { "exit" } else { "failure" },
+            self.current_span,
+            format!("Function {}", func.name),
+        );
+        let static_names = self.active_static_names.pop().unwrap_or_default();
+        for name in static_names {
+            if let Some(value) = self.variables.get(&name).cloned() {
+                self.static_variables
+                    .insert((func.name.clone(), name), value);
+            }
+        }
+        self.missing_parameter_frames.pop();
+        self.byref_aliases.pop();
         self.current_module_scope = previous_module_scope;
+        self.option_compare = previous_option_compare;
         self.call_stack.pop();
-        result?;
         let ret_val = self.variables.remove(&ret_name).unwrap_or(Variant::Empty);
+        let updated: Vec<Option<Variant>> = func
+            .params
+            .iter()
+            .map(|name| self.variables.get(name).cloned())
+            .collect();
         for (p, old) in saved {
             match old {
                 Some(v) => {
@@ -11601,7 +14895,18 @@ impl Vm {
         if let Some(v) = old_ret {
             self.variables.insert(ret_name, v);
         }
-        Ok(ret_val)
+        for (index, target) in byref_targets.iter().enumerate() {
+            if let Some(target) = target
+                && let Some(value) = updated.get(index).and_then(Option::clone)
+            {
+                self.assign_declared_byref_target(
+                    target,
+                    value,
+                    func.param_types.get(index).and_then(Option::as_deref),
+                )?;
+            }
+        }
+        result.map(|()| ret_val)
     }
 
     /// Execute a body slice with label-jump support (for GoTo and On Error GoTo).
@@ -11687,12 +14992,180 @@ impl Vm {
         }
     }
 
+    fn sync_object_byref_aliases_from_targets(&mut self) {
+        let aliases: Vec<(String, String)> = self
+            .object_byref_aliases
+            .last()
+            .into_iter()
+            .flat_map(|frame| {
+                frame
+                    .iter()
+                    .map(|(parameter, target)| (parameter.clone(), target.clone()))
+            })
+            .collect();
+        for (parameter, target) in aliases {
+            if let Some(value) = self.object_variable_ref(&target) {
+                self.object_variables.insert(parameter, value);
+            }
+        }
+    }
+
+    fn reconcile_object_byref_aliases(
+        &mut self,
+        before: &HashMap<String, ObjectRef>,
+    ) -> Result<(), String> {
+        let aliases: Vec<(String, String)> = self
+            .object_byref_aliases
+            .last()
+            .into_iter()
+            .flat_map(|frame| {
+                frame
+                    .iter()
+                    .map(|(parameter, target)| (parameter.clone(), target.clone()))
+            })
+            .collect();
+        let mut writes = Vec::new();
+        for (parameter, target) in aliases {
+            let Some(value) = self.object_variables.get(&parameter).cloned() else {
+                continue;
+            };
+            if before.get(&parameter) != Some(&value) {
+                writes.push((target, value));
+            }
+        }
+        for (target, value) in writes {
+            self.assign_object_variable(target, value)?;
+        }
+        self.sync_object_byref_aliases_from_targets();
+        Ok(())
+    }
+
+    fn sync_byref_aliases_from_targets(&mut self) {
+        let aliases: Vec<(String, String)> = self
+            .byref_aliases
+            .last()
+            .into_iter()
+            .flat_map(|frame| {
+                frame
+                    .iter()
+                    .map(|(parameter, target)| (parameter.clone(), target.clone()))
+            })
+            .collect();
+        for (parameter, target) in aliases {
+            if let Some(value) = self.byref_target_value(&target) {
+                self.variables.insert(parameter, value);
+            }
+        }
+    }
+
+    fn reconcile_byref_aliases(&mut self, before: &HashMap<String, Variant>) -> Result<(), String> {
+        let aliases: Vec<(String, String)> = self
+            .byref_aliases
+            .last()
+            .into_iter()
+            .flat_map(|frame| {
+                frame
+                    .iter()
+                    .map(|(parameter, target)| (parameter.clone(), target.clone()))
+            })
+            .collect();
+        let mut writes = Vec::new();
+        for (parameter, target) in aliases {
+            let Some(value) = self.variables.get(&parameter).cloned() else {
+                continue;
+            };
+            if before.get(&parameter) != Some(&value) {
+                writes.push((target, value));
+            }
+        }
+        for (target, value) in writes {
+            self.assign_byref_target(&target, value)?;
+        }
+        self.sync_byref_aliases_from_targets();
+        Ok(())
+    }
+
+    fn static_decl_names(declaration: &Stmt) -> Vec<String> {
+        match declaration {
+            Stmt::DimBare { var }
+            | Stmt::DimArray { name: var, .. }
+            | Stmt::DimRecord { var, .. }
+            | Stmt::DimObjectNew { var, .. }
+            | Stmt::DimArrayRecord { name: var, .. } => vec![var.clone()],
+            Stmt::DimMulti(declarations) => declarations
+                .iter()
+                .flat_map(Self::static_decl_names)
+                .collect(),
+            _ => Vec::new(),
+        }
+    }
+
+    fn register_static_declaration(&mut self, declaration: &Stmt) -> Result<(), String> {
+        let names = Self::static_decl_names(declaration);
+        let procedure = self
+            .call_stack
+            .last()
+            .map(|frame| frame.procedure_name.clone())
+            .unwrap_or_default();
+        let mut needs_initialization = false;
+        for name in &names {
+            let key = (procedure.clone(), name.clone());
+            if let Some(value) = self.static_variables.get(&key).cloned() {
+                self.variables.insert(name.clone(), value);
+            } else {
+                self.variables.remove(name);
+                needs_initialization = true;
+            }
+        }
+        if needs_initialization {
+            self.exec_stmt_inner(declaration)?;
+            for name in &names {
+                let key = (procedure.clone(), name.clone());
+                let value = self.variables.get(name).cloned().unwrap_or(Variant::Empty);
+                self.static_variables.entry(key).or_insert(value);
+            }
+        }
+        if let Some(frame) = self.active_static_names.last_mut() {
+            for name in names {
+                if !frame.contains(&name) {
+                    frame.push(name);
+                }
+            }
+        }
+        Ok(())
+    }
+
     fn exec_stmt(&mut self, spanned: &SpannedStmt) -> Result<(), String> {
         if self.exit_flag.is_some() {
             return Ok(());
         }
         self.charge_instruction()?;
         self.current_span = Some(spanned.span);
+        self.record_trace("statement", Some(spanned.span), "started".to_string());
+        self.sync_object_byref_aliases_from_targets();
+        self.sync_byref_aliases_from_targets();
+        let object_alias_values_before: HashMap<String, ObjectRef> = self
+            .object_byref_aliases
+            .iter()
+            .flat_map(|frame| frame.keys())
+            .filter_map(|parameter| {
+                self.object_variables
+                    .get(parameter)
+                    .cloned()
+                    .map(|value| (parameter.clone(), value))
+            })
+            .collect();
+        let alias_values_before: HashMap<String, Variant> = self
+            .byref_aliases
+            .iter()
+            .flat_map(|frame| frame.keys())
+            .filter_map(|parameter| {
+                self.variables
+                    .get(parameter)
+                    .cloned()
+                    .map(|value| (parameter.clone(), value))
+            })
+            .collect();
         let mut result = self
             .exec_stmt_inner(&spanned.stmt)
             .and_then(|()| self.check_cell_budget());
@@ -11700,6 +15173,16 @@ impl Vm {
             && let Some(error) = self.deferred_gc_error.take()
         {
             result = Err(error);
+        }
+        if let Err(alias_error) = self.reconcile_byref_aliases(&alias_values_before)
+            && result.is_ok()
+        {
+            result = Err(alias_error);
+        }
+        if let Err(alias_error) = self.reconcile_object_byref_aliases(&object_alias_values_before)
+            && result.is_ok()
+        {
+            result = Err(alias_error);
         }
         match result {
             Ok(()) => Ok(()),
@@ -11714,12 +15197,29 @@ impl Vm {
                 self.record_error(&e);
                 Ok(())
             }
-            Err(e) => Err(e),
+            Err(e) => {
+                self.record_trace("failure", Some(spanned.span), e.clone());
+                Err(e)
+            }
         }
     }
 
     fn exec_stmt_inner(&mut self, stmt: &Stmt) -> Result<(), String> {
         match stmt {
+            Stmt::DebugPrint { values } => {
+                let mut fields = Vec::with_capacity(values.len());
+                for value in values {
+                    fields.push(self.eval_expr(value)?.to_string());
+                }
+                self.record_debug_output(fields.join("\t"));
+            }
+            Stmt::DebugAssert { condition } => {
+                if !is_truthy(&self.eval_expr(condition)?)
+                    && matches!(self.debug_assert_policy, DebugAssertPolicy::Error)
+                {
+                    return Err("Debug.Assert failed".to_string());
+                }
+            }
             Stmt::Assignment { var, value } => {
                 let v = self.eval_expr(value)?;
                 self.check_variant_budget(&v)?;
@@ -11820,21 +15320,25 @@ impl Vm {
                         .ok_or_else(|| OBJECT_NOT_SET.to_string())?
                         .entries
                         .iter()
-                        .map(|entry| entry.key.clone())
+                        .map(|entry| Self::dictionary_display_key(&entry.key))
                         .collect::<Vec<_>>();
-                    for key in keys {
-                        self.variables.insert(var.clone(), Variant::Str(key));
-                        for statement in body {
-                            self.exec_stmt(statement)?;
-                            if matches!(self.exit_flag, Some(ExitKind::For)) {
-                                self.exit_flag = None;
-                                break;
-                            }
-                            if self.exit_flag.is_some() {
-                                return Ok(());
-                            }
-                        }
-                    }
+                    let values = keys
+                        .into_iter()
+                        .map(|key| CollectionValue::Scalar(Variant::Str(key)))
+                        .collect();
+                    self.run_dictionary_for_each(var, values, body)?;
+                }
+                ForEachSource::DictionaryItems(dictionary_var) => {
+                    let id = self.dictionary_id(dictionary_var)?;
+                    let values = self
+                        .dictionaries
+                        .get(&id)
+                        .ok_or_else(|| OBJECT_NOT_SET.to_string())?
+                        .entries
+                        .iter()
+                        .map(|entry| entry.value.clone())
+                        .collect();
+                    self.run_dictionary_for_each(var, values, body)?;
                 }
             },
             Stmt::If {
@@ -11899,26 +15403,42 @@ impl Vm {
                 'outer: for (matchers, body) in cases {
                     for m in matchers {
                         let hit = match m {
-                            CaseMatch::Value(v) => vba_eq(&val, &self.eval_expr(v)?),
+                            CaseMatch::Value(v) => {
+                                vba_eq_with_compare(&val, &self.eval_expr(v)?, self.option_compare)
+                            }
                             CaseMatch::Range(lo, hi) => {
                                 let l = self.eval_expr(lo)?;
                                 let h = self.eval_expr(hi)?;
-                                vba_cmp(&val, &l)? != std::cmp::Ordering::Less
-                                    && vba_cmp(&val, &h)? != std::cmp::Ordering::Greater
+                                vba_cmp_with_compare(&val, &l, self.option_compare)?
+                                    != std::cmp::Ordering::Less
+                                    && vba_cmp_with_compare(&val, &h, self.option_compare)?
+                                        != std::cmp::Ordering::Greater
                             }
                             CaseMatch::IsOp(op, rhs) => {
                                 let r = self.eval_expr(rhs)?;
                                 match op {
-                                    VbaBinOp::Eq => vba_eq(&val, &r),
-                                    VbaBinOp::Ne => !vba_eq(&val, &r),
-                                    VbaBinOp::Lt => vba_cmp(&val, &r)? == std::cmp::Ordering::Less,
+                                    VbaBinOp::Eq => {
+                                        vba_eq_with_compare(&val, &r, self.option_compare)
+                                    }
+                                    VbaBinOp::Ne => {
+                                        !vba_eq_with_compare(&val, &r, self.option_compare)
+                                    }
+                                    VbaBinOp::Lt => {
+                                        vba_cmp_with_compare(&val, &r, self.option_compare)?
+                                            == std::cmp::Ordering::Less
+                                    }
                                     VbaBinOp::Le => {
-                                        vba_cmp(&val, &r)? != std::cmp::Ordering::Greater
+                                        vba_cmp_with_compare(&val, &r, self.option_compare)?
+                                            != std::cmp::Ordering::Greater
                                     }
                                     VbaBinOp::Gt => {
-                                        vba_cmp(&val, &r)? == std::cmp::Ordering::Greater
+                                        vba_cmp_with_compare(&val, &r, self.option_compare)?
+                                            == std::cmp::Ordering::Greater
                                     }
-                                    VbaBinOp::Ge => vba_cmp(&val, &r)? != std::cmp::Ordering::Less,
+                                    VbaBinOp::Ge => {
+                                        vba_cmp_with_compare(&val, &r, self.option_compare)?
+                                            != std::cmp::Ordering::Less
+                                    }
                                     _ => false,
                                 }
                             }
@@ -12030,17 +15550,9 @@ impl Vm {
                         None,
                     )?;
                 } else if let Some(func) = self.user_funcs.get(name).cloned() {
-                    let arg_vals: Vec<Variant> = args
-                        .iter()
-                        .map(|a| self.eval_expr(a))
-                        .collect::<Result<_, _>>()?;
-                    let _ = self.call_func_def(&func, &arg_vals)?;
+                    let _ = self.call_func_def_exprs(&func, args)?;
                 } else if let Some(sub) = self.user_subs.get(name).cloned() {
-                    let arg_vals: Vec<Variant> = args
-                        .iter()
-                        .map(|a| self.eval_expr(a))
-                        .collect::<Result<_, _>>()?;
-                    self.call_sub_def(&sub, &arg_vals)?;
+                    self.call_sub_def_exprs(&sub, args)?;
                 } else {
                     return Err(format!("Sub/Function '{}' not found", name));
                 }
@@ -12286,32 +15798,28 @@ impl Vm {
             } => {
                 let active = self.active_sheet.clone();
                 self.check_sheet_not_protected(&active, &active)?;
-                let ((r1, c1), (r2, _)) = self
+                let ((r1, c1), (r2, c2)) = self
                     .resolve_range_addr(addr)
                     .ok_or_else(|| format!("RangeAutoFilter: invalid address '{}'", addr))?;
-                // A bare AutoFilter (no Field/Criteria1) is a real no-op here -- see
-                // RangeAutoFilter's own doc comment for why (no <autoFilter> element is
-                // persisted, so there'd be nothing to visibly turn on either way).
+                // A bare AutoFilter turns on the filter object without hiding rows.
+                // Keep an existing filter over the same range so successive VBA calls
+                // compose criteria across columns instead of discarding prior state.
+                let same_range = self
+                    .autofilters
+                    .get(&active)
+                    .is_some_and(|filter| filter.ref_range == ((r1, c1), (r2, c2)));
+                if !same_range {
+                    self.add_autofilter_on_sheet(&active, ((r1, c1), (r2, c2)));
+                }
                 if let (Some(field_expr), Some(criteria_expr)) = (field, criteria1) {
-                    // Field is 1-based, relative to addr's own left edge (real VBA's
-                    // convention -- "the leftmost field is 1"), not an absolute column.
+                    // Field is 1-based, relative to addr's own left edge.
                     let field_off = to_f64(&self.eval_expr(field_expr)?)? as u32;
-                    let filter_col = c1 + field_off.saturating_sub(1);
                     let criteria = vba_to_str(&self.eval_expr(criteria_expr)?);
-                    // Row r1 is always the header -- AutoFilter never hides it.
-                    let mut newly_hidden = Vec::new();
-                    for r in (r1 + 1)..=r2 {
-                        if vba_to_str(&self.get_cell(r, filter_col)) != criteria {
-                            newly_hidden.push(Interval { start: r, end: r });
-                        }
-                    }
-                    if !newly_hidden.is_empty() {
-                        self.sheet_visibility
-                            .entry(active)
-                            .or_default()
-                            .hidden_rows
-                            .extend(newly_hidden);
-                    }
+                    self.set_filter_column_on_sheet(
+                        &active,
+                        field_off.saturating_sub(1),
+                        FilterCriteria::Values(vec![criteria]),
+                    )?;
                 }
             }
             Stmt::RangeCopy { src, dst } => {
@@ -12329,9 +15837,7 @@ impl Vm {
             Stmt::RangeObjectCopy { var, dst } => {
                 self.require_live_object(var)?;
                 let obj = self
-                    .object_variables
-                    .get(var)
-                    .cloned()
+                    .object_variable_ref(var)
                     .ok_or_else(|| format!("'{}' is Nothing — Set was never called", var))?;
                 let r = expect_range_ref(obj, "Copy")?;
                 let display = format!("<{}>", var);
@@ -12356,10 +15862,7 @@ impl Vm {
                     self.reclaim_unreachable_collections();
                     return Ok(());
                 }
-                if let CollectionTarget::Variable(name) = target
-                    && let Some(ObjectRef::Dictionary(id)) =
-                        self.object_variables.get(name).cloned()
-                {
+                if let Some(id) = self.dictionary_target_id(target)? {
                     if before.is_some() || after.is_some() || key.is_none() {
                         return Err(
                             "Dictionary.Add requires a key and does not support Before/After"
@@ -12457,10 +15960,7 @@ impl Vm {
                     self.reclaim_unreachable_collections();
                     return Ok(());
                 }
-                if let CollectionTarget::Variable(name) = target
-                    && let Some(ObjectRef::Dictionary(id)) =
-                        self.object_variables.get(name).cloned()
-                {
+                if let Some(id) = self.dictionary_target_id(target)? {
                     let key = self.eval_expr(index)?;
                     let dictionary = self
                         .dictionaries
@@ -12536,7 +16036,7 @@ impl Vm {
                     }
                 }
                 if let ObjectExpr::Var(name) = value
-                    && !self.object_variables.contains_key(name)
+                    && self.object_variable_ref(name).is_none()
                     && !self
                         .current_class_instance_id()
                         .is_some_and(|id| self.class_object_field(id, name).is_some())
@@ -12575,16 +16075,16 @@ impl Vm {
                     ));
                 };
                 let static_type = self.object_target_static_type(target);
-                let value = self.eval_object_expr(value)?;
                 if self
                     .class_property_for(id, member, PropertyKind::Set, static_type.as_deref())
                     .is_ok()
                 {
-                    self.call_property_set(id, member, args, value, static_type.as_deref())?;
+                    self.call_property_set_expr(id, member, args, value, static_type.as_deref())?;
                 } else {
                     if !args.is_empty() {
                         return Err(format!("Property Set '{}' not found", member));
                     }
+                    let value = self.eval_object_expr(value)?;
                     self.set_class_object_field(id, member, value)?;
                 }
                 self.reclaim_unreachable_collections();
@@ -12602,9 +16102,7 @@ impl Vm {
                     ));
                 };
                 let static_type = self.object_target_static_type(target);
-                let value = self.eval_expr(value)?;
-                self.check_variant_budget(&value)?;
-                self.call_property_let(id, member, args, value, static_type.as_deref())?;
+                self.call_property_let_expr(id, member, args, value, static_type.as_deref())?;
             }
             Stmt::SetObjectArray {
                 name,
@@ -12662,7 +16160,7 @@ impl Vm {
                 value,
             } => {
                 if let Expr::ObjectVarSheet(name) = sheet
-                    && let Some(ObjectRef::Range(base)) = self.object_variables.get(name).cloned()
+                    && let Some(ObjectRef::Range(base)) = self.object_variable_ref(name)
                 {
                     let target = self.relative_cell_ref(&base, row, col)?;
                     let value = self.eval_expr(value)?;
@@ -12687,7 +16185,7 @@ impl Vm {
                 value,
             } => {
                 if let Expr::ObjectVarSheet(name) = sheet
-                    && let Some(ObjectRef::Range(base)) = self.object_variables.get(name).cloned()
+                    && let Some(ObjectRef::Range(base)) = self.object_variable_ref(name)
                 {
                     let target = self.relative_address_ref(&base, addr)?;
                     let value = self.eval_expr(value)?;
@@ -12812,6 +16310,9 @@ impl Vm {
                 }
             }
             Stmt::Dim => {}
+            Stmt::StaticDecl { declaration } => {
+                self.register_static_declaration(declaration)?;
+            }
             Stmt::DimBare { var } => {
                 // Registers the name as a real, Empty-valued variable —
                 // `IsEmpty(x)` must be True right after `Dim x` runs, not
@@ -12902,6 +16403,22 @@ impl Vm {
                     self.reclaim_unreachable_collections();
                     return Ok(());
                 }
+                if let Some(key) = self.module_variable_key(name) {
+                    let new_arr = if *preserve {
+                        match self.module_variables.get(&key) {
+                            Some(Variant::VbaArray(old)) if old.rank() == bounds.len() => {
+                                redim_preserve(old, &bounds)?
+                            }
+                            _ => VbaArray::new_zeroed(bounds)?,
+                        }
+                    } else {
+                        VbaArray::new_zeroed(bounds)?
+                    };
+                    let value = Variant::VbaArray(new_arr);
+                    self.check_variant_budget(&value)?;
+                    self.module_variables.insert(key, value);
+                    return Ok(());
+                }
                 let new_arr = if *preserve {
                     match self.variables.get(name) {
                         Some(Variant::VbaArray(old)) if old.rank() == bounds.len() => {
@@ -12926,6 +16443,14 @@ impl Vm {
                     for v in arr.elements.iter_mut() {
                         *v = Variant::Empty;
                     }
+                    return Ok(());
+                }
+                if let Some(key) = self.module_variable_key(name)
+                    && let Some(Variant::VbaArray(arr)) = self.module_variables.get_mut(&key)
+                {
+                    for v in arr.elements.iter_mut() {
+                        *v = Variant::Empty;
+                    }
                 }
             }
             Stmt::ArrayWrite {
@@ -12935,12 +16460,77 @@ impl Vm {
             } => {
                 let v = self.eval_expr(value)?;
                 self.check_variant_budget(&v)?;
-                if let Some(ObjectRef::Range(base)) = self.object_variables.get(name).cloned() {
+                if let Some(ObjectRef::Range(base)) = self.object_variable_ref(name) {
                     let target = self.range_default_item(&base, indices)?;
                     self.write_range_ref_value(&target, false, &v)?;
                     return Ok(());
                 }
+                if let Some(ObjectRef::Dictionary(id)) = self.object_variable_ref(name) {
+                    if indices.len() != 1 {
+                        return Err(format!(
+                            "Dictionary '{}' Item requires exactly one key",
+                            name
+                        ));
+                    }
+                    let key_value = self.eval_expr(&indices[0])?;
+                    let compare_mode = self
+                        .dictionaries
+                        .get(&id)
+                        .ok_or_else(|| OBJECT_NOT_SET.to_string())?
+                        .compare_mode;
+                    let key = Self::dictionary_key(key_value, compare_mode)?;
+                    let is_new = !self
+                        .dictionaries
+                        .get(&id)
+                        .ok_or_else(|| OBJECT_NOT_SET.to_string())?
+                        .entries
+                        .iter()
+                        .any(|entry| entry.key == key);
+                    if is_new {
+                        let current_len = self
+                            .dictionaries
+                            .get(&id)
+                            .ok_or_else(|| OBJECT_NOT_SET.to_string())?
+                            .entries
+                            .len();
+                        self.check_collection_capacity(current_len)?;
+                    }
+                    let dictionary = self
+                        .dictionaries
+                        .get_mut(&id)
+                        .ok_or_else(|| OBJECT_NOT_SET.to_string())?;
+                    if let Some(entry) =
+                        dictionary.entries.iter_mut().find(|entry| entry.key == key)
+                    {
+                        entry.value = CollectionValue::Scalar(v);
+                    } else {
+                        dictionary.entries.push(DictionaryEntry {
+                            key,
+                            value: CollectionValue::Scalar(v),
+                        });
+                    }
+                    return Ok(());
+                }
                 let idx = self.eval_array_indices(indices)?;
+                if let Some(key) = self.module_variable_key(name) {
+                    let bounds = match self.module_variables.get(&key) {
+                        Some(Variant::VbaArray(arr)) => arr.bounds.clone(),
+                        _ => return Err(format!("'{}' is not an array", name)),
+                    };
+                    match VbaArray::linear_index_for(&bounds, &idx) {
+                        Ok(i) => {
+                            if let Some(Variant::VbaArray(arr)) =
+                                self.module_variables.get_mut(&key)
+                            {
+                                arr.elements[i] = v;
+                            }
+                            return Ok(());
+                        }
+                        Err(_) => {
+                            return Err(self.vba_array_oob_error_for(name, &idx, &bounds));
+                        }
+                    }
+                }
                 let bounds = match self.variables.get(name) {
                     Some(Variant::VbaArray(arr)) => arr.bounds.clone(),
                     _ => return Err(format!("'{}' is not an array", name)),
@@ -13063,6 +16653,13 @@ impl Vm {
             Stmt::RecordSetNested { var, fields, value } => {
                 let v = self.eval_expr(value)?;
                 self.check_variant_budget(&v)?;
+                if let Some(key) = self.module_variable_key(var)
+                    && let Some(target) = self.module_variables.get_mut(&key)
+                    && matches!(target, Variant::Record(_))
+                {
+                    nested_set(target, fields, v);
+                    return Ok(());
+                }
                 let target = self
                     .variables
                     .entry(var.clone())
@@ -13077,6 +16674,31 @@ impl Vm {
             } => {
                 let v = self.eval_expr(value)?;
                 self.check_variant_budget(&v)?;
+                if let Some(key) = self.module_variable_key(name) {
+                    let index_values = self.eval_array_indices(indices)?;
+                    let array = self
+                        .module_variables
+                        .get_mut(&key)
+                        .ok_or_else(|| format!("'{name}' is not an array"))?;
+                    let Variant::VbaArray(array) = array else {
+                        return Err(format!("'{name}' is not an array"));
+                    };
+                    let index = array
+                        .linear_index(&index_values)
+                        .map_err(|_| "Subscript out of range".to_string())?;
+                    let record = array
+                        .elements
+                        .get_mut(index)
+                        .ok_or_else(|| "Subscript out of range".to_string())?;
+                    if let Variant::Record(fields) = record {
+                        fields.insert(field.clone(), v);
+                    } else {
+                        let mut fields = HashMap::new();
+                        fields.insert(field.clone(), v);
+                        *record = Variant::Record(fields);
+                    }
+                    return Ok(());
+                }
                 let idx = to_f64(&self.eval_expr(&indices[0])?)? as usize;
                 let oob_len = match self.variables.get(name) {
                     Some(Variant::Array(arr)) if idx >= arr.len() => Some(arr.len()),
@@ -13115,7 +16737,7 @@ impl Vm {
                 let class_id = if var == "me" {
                     self.current_class_instance_id()
                 } else {
-                    match self.object_variables.get(var) {
+                    match self.object_variable_ref(var).as_ref() {
                         Some(ObjectRef::Class(id)) => Some(*id),
                         _ => None,
                     }
@@ -13124,26 +16746,29 @@ impl Vm {
                     let static_type = if var == "me" {
                         None
                     } else {
-                        self.object_variable_types.get(var).cloned()
+                        self.object_variable_types.get(var).cloned().or_else(|| {
+                            self.module_object_key(var)
+                                .and_then(|key| self.module_object_types.get(&key).cloned())
+                        })
                     };
-                    let v = self.eval_expr(value)?;
-                    self.check_variant_budget(&v)?;
                     if self
                         .class_property_for(id, field, PropertyKind::Let, static_type.as_deref())
                         .is_ok()
                     {
-                        self.call_property_let(id, field, &[], v, static_type.as_deref())?;
+                        self.call_property_let_expr(id, field, &[], value, static_type.as_deref())?;
                     } else {
+                        let v = self.eval_expr(value)?;
+                        self.check_variant_budget(&v)?;
                         self.set_class_field(id, field, v)?;
                     }
                     return Ok(());
                 }
-                if let Some(ObjectRef::Worksheet(key)) = self.object_variables.get(var).cloned() {
+                if let Some(ObjectRef::Worksheet(key)) = self.object_variable_ref(var) {
                     self.set_worksheet_property(&Expr::Str(key), field, value)?;
                     return Ok(());
                 }
-                if let Some(ObjectRef::Range(r)) = self.object_variables.get(var).cloned() {
-                    if field == "value" || field == "formula" {
+                if let Some(ObjectRef::Range(r)) = self.object_variable_ref(var) {
+                    if matches!(field.as_str(), "value" | "value2" | "formula") {
                         let v = self.eval_expr(value)?;
                         self.write_range_ref_value(&r, field == "formula", &v)?;
                     }
@@ -13153,7 +16778,7 @@ impl Vm {
                     // `parse_ident_stmt`.
                     return Ok(());
                 }
-                if let Some(ObjectRef::Dictionary(id)) = self.object_variables.get(var).cloned() {
+                if let Some(ObjectRef::Dictionary(id)) = self.object_variable_ref(var) {
                     if field != "comparemode" {
                         return Ok(());
                     }
@@ -13175,6 +16800,13 @@ impl Vm {
                 }
                 let v = self.eval_expr(value)?;
                 self.check_variant_budget(&v)?;
+                if let Some(key) = self.module_variable_key(var)
+                    && let Some(target) = self.module_variables.get_mut(&key)
+                    && let Variant::Record(fields) = target
+                {
+                    fields.insert(field.clone(), v);
+                    return Ok(());
+                }
                 let entry = self
                     .variables
                     .entry(var.clone())
@@ -13211,7 +16843,19 @@ impl Vm {
                 if let Some(v) = self.variables.get(name) {
                     return Ok(v.clone());
                 }
-                if let Some(ObjectRef::Range(range)) = self.object_variables.get(name) {
+                if let Some(key) = self.module_variable_key(name)
+                    && let Some(v) = self.module_variables.get(&key)
+                {
+                    return Ok(v.clone());
+                }
+                if let Some(v) = self
+                    .module_constants
+                    .get(&(self.current_module_scope.clone(), name.clone()))
+                    .or_else(|| self.module_constants.get(&(None, name.clone())))
+                {
+                    return Ok(v.clone());
+                }
+                if let Some(ObjectRef::Range(range)) = self.object_variable_ref(name).as_ref() {
                     return self.read_range_ref_value(range);
                 }
                 if let Some(id) = self.current_class_instance_id()
@@ -13290,6 +16934,11 @@ impl Vm {
                     _ => return Err(format!("Undefined variable: '{}'", name)),
                 })
             }
+            Expr::NamedArg { name, .. } => Err(format!(
+                "named argument '{}' is only valid in a procedure call",
+                name
+            )),
+            Expr::OmittedArg => Err("omitted argument is only valid in a procedure call".into()),
             Expr::UnaryMinus(inner) => match self.eval_expr(inner)? {
                 Variant::Integer(n) => Ok(Variant::Integer(-n)),
                 Variant::Float(f) => Ok(Variant::Float(-f)),
@@ -13316,7 +16965,7 @@ impl Vm {
             Expr::BinOp { op, lhs, rhs } => {
                 let l = self.eval_expr(lhs)?;
                 let r = self.eval_expr(rhs)?;
-                eval_binop(op, l, r)
+                eval_binop_with_compare(op, l, r, self.option_compare)
             }
             Expr::CellRead { row, col } => {
                 let r = to_cell_index(self.eval_expr(row)?, "row")?;
@@ -13344,18 +16993,14 @@ impl Vm {
                         self.loaded_workbook_name.clone().unwrap_or_default(),
                     ));
                 }
-                if let Some(ObjectRef::Range(range)) =
-                    self.object_variables.get(name.as_str()).cloned()
-                {
+                if let Some(ObjectRef::Range(range)) = self.object_variable_ref(name.as_str()) {
                     let item = self.range_default_item(&range, args)?;
                     return self.read_range_ref_value(&item);
                 }
                 // Collection's default member: `items(1)` is the same as
                 // `items.Item(1)`. Object variables take precedence over a
                 // same-named user Function or scalar array.
-                if let Some(ObjectRef::Collection(id)) =
-                    self.object_variables.get(name.as_str()).cloned()
-                {
+                if let Some(ObjectRef::Collection(id)) = self.object_variable_ref(name.as_str()) {
                     if args.len() != 1 {
                         return Err(format!(
                             "Collection '{}' Item requires exactly one index or key",
@@ -13365,9 +17010,7 @@ impl Vm {
                     let index = self.eval_expr(&args[0])?;
                     return self.collection_scalar_value(id, &index);
                 }
-                if let Some(ObjectRef::Dictionary(id)) =
-                    self.object_variables.get(name.as_str()).cloned()
-                {
+                if let Some(ObjectRef::Dictionary(id)) = self.object_variable_ref(name.as_str()) {
                     if args.len() != 1 {
                         return Err(format!(
                             "Dictionary '{}' Item requires exactly one key",
@@ -13388,11 +17031,7 @@ impl Vm {
                 }
                 // User-defined functions take priority over built-ins
                 if let Some(func) = self.user_funcs.get(name).cloned() {
-                    let arg_vals: Vec<Variant> = args
-                        .iter()
-                        .map(|a| self.eval_expr(a))
-                        .collect::<Result<_, _>>()?;
-                    return self.call_func_def(&func, &arg_vals);
+                    return self.call_func_def_exprs(&func, args);
                 }
                 // Array subscript access on a plain (Range-value-read /
                 // formula-array-result / record-array) `Variant::Array` —
@@ -13442,6 +17081,20 @@ impl Vm {
                         Err(_) => Err(self.vba_array_oob_error_for(name, &idx, &bounds)),
                     };
                 }
+                if let Some(key) = self.module_variable_key(name) {
+                    let idx = self.eval_array_indices(args)?;
+                    let bounds = match self.module_variables.get(&key) {
+                        Some(Variant::VbaArray(arr)) => arr.bounds.clone(),
+                        _ => return Err(format!("'{}' is not an array", name)),
+                    };
+                    return match VbaArray::linear_index_for(&bounds, &idx) {
+                        Ok(i) => match self.module_variables.get(&key) {
+                            Some(Variant::VbaArray(arr)) => Ok(arr.elements[i].clone()),
+                            _ => Err(format!("'{}' is not an array", name)),
+                        },
+                        Err(_) => Err(self.vba_array_oob_error_for(name, &idx, &bounds)),
+                    };
+                }
                 self.eval_vba_func(name, args)
             }
             Expr::RangeRead { addr } => {
@@ -13471,7 +17124,7 @@ impl Vm {
             }
             Expr::SheetCellRead { sheet, row, col } => {
                 if let Expr::ObjectVarSheet(name) = sheet.as_ref()
-                    && let Some(ObjectRef::Range(base)) = self.object_variables.get(name).cloned()
+                    && let Some(ObjectRef::Range(base)) = self.object_variable_ref(name)
                 {
                     let target = self.relative_cell_ref(&base, row, col)?;
                     return self.read_range_ref_value(&target);
@@ -13489,7 +17142,7 @@ impl Vm {
             }
             Expr::SheetRangeRead { sheet, addr } => {
                 if let Expr::ObjectVarSheet(name) = sheet.as_ref()
-                    && let Some(ObjectRef::Range(base)) = self.object_variables.get(name).cloned()
+                    && let Some(ObjectRef::Range(base)) = self.object_variable_ref(name)
                 {
                     let target = self.relative_address_ref(&base, addr)?;
                     return self.read_range_ref_value(&target);
@@ -13533,16 +17186,31 @@ impl Vm {
             // story as `ActiveSheetRef` above — `resolve_sheet_expr`
             // intercepts `ObjectVarSheet` before it ever reaches here, for
             // every use the parser actually produces (Phase 2C items 7/8).
-            Expr::ObjectVarSheet(name) => match self.object_variables.get(name).cloned() {
-                Some(ObjectRef::Worksheet(key)) => Ok(Variant::Str(key)),
-                _ => Err(format!("'{}' is not a Worksheet object variable", name)),
+            Expr::ObjectVarSheet(name) => match self.resolve_object_name(name) {
+                Ok(ObjectRef::Worksheet(key)) => Ok(Variant::Str(key)),
+                Ok(_) => Err(format!("'{}' is not a Worksheet object variable", name)),
+                Err(_) => Err(format!("'{}' is not a Worksheet object variable", name)),
             },
-            Expr::CellsFind { what, find_row } => {
+            Expr::CellsFind {
+                what,
+                find_row,
+                match_case,
+            } => {
                 let target = self.eval_expr(what)?;
+                let match_case = match_case
+                    .as_ref()
+                    .map(|expr| self.eval_expr(expr).map(|value| is_truthy(&value)))
+                    .transpose()?
+                    .unwrap_or(false);
                 let mut keys: Vec<(u32, u32)> = self.cells().keys().cloned().collect();
                 keys.sort(); // 行優先スキャン
                 for (r, c) in keys {
-                    if vba_eq(&self.get_cell(r, c), &target) {
+                    let equal = if match_case {
+                        vba_eq_with_compare(&self.get_cell(r, c), &target, OptionCompare::Binary)
+                    } else {
+                        vba_eq_with_compare(&self.get_cell(r, c), &target, OptionCompare::Legacy)
+                    };
+                    if equal {
                         return Ok(Variant::Integer(if *find_row {
                             r as i64
                         } else {
@@ -13608,6 +17276,19 @@ impl Vm {
                         Ok(Variant::Empty)
                     }
                 }
+                WithValue::Dictionary(id) => {
+                    if fields.as_slice() == ["count"] {
+                        let len = self
+                            .dictionaries
+                            .get(&id)
+                            .ok_or_else(|| OBJECT_NOT_SET.to_string())?
+                            .entries
+                            .len();
+                        Ok(Variant::Integer(len as i64))
+                    } else {
+                        Ok(Variant::Empty)
+                    }
+                }
                 WithValue::Class(id, static_type) => {
                     let field = fields
                         .first()
@@ -13651,7 +17332,7 @@ impl Vm {
                 // "no live object reference" is the closest true answer
                 // elixcee can give without inventing a type error the rest
                 // of the VM has no way to raise.
-                let value = self.object_variables.get(name).cloned().or_else(|| {
+                let value = self.object_variable_ref(name).or_else(|| {
                     self.current_class_instance_id()
                         .and_then(|id| self.class_object_field(id, name))
                 });
@@ -13680,10 +17361,7 @@ impl Vm {
                         static_type.as_deref(),
                     );
                 }
-                if let CollectionTarget::Variable(name) = target
-                    && let Some(ObjectRef::Dictionary(id)) =
-                        self.object_variables.get(name).cloned()
-                {
+                if let Some(id) = self.dictionary_target_id(target)? {
                     let index = self.eval_expr(index)?;
                     return self.dictionary_scalar_value(id, &index);
                 }
@@ -13752,7 +17430,7 @@ impl Vm {
                 let class_id = if var == "me" {
                     self.current_class_instance_id()
                 } else {
-                    match self.object_variables.get(var) {
+                    match self.object_variable_ref(var).as_ref() {
                         Some(ObjectRef::Class(id)) => Some(*id),
                         _ => None,
                     }
@@ -13761,7 +17439,10 @@ impl Vm {
                     let static_type = if var == "me" {
                         None
                     } else {
-                        self.object_variable_types.get(var).cloned()
+                        self.object_variable_types.get(var).cloned().or_else(|| {
+                            self.module_object_key(var)
+                                .and_then(|key| self.module_object_types.get(&key).cloned())
+                        })
                     };
                     if self
                         .class_property_for(id, field, PropertyKind::Get, static_type.as_deref())
@@ -13783,10 +17464,10 @@ impl Vm {
                         .class_field(id, field)
                         .ok_or_else(|| format!("Class member '{}' not found", field));
                 }
-                if let Some(ObjectRef::Worksheet(key)) = self.object_variables.get(var).cloned() {
+                if let Some(ObjectRef::Worksheet(key)) = self.object_variable_ref(var) {
                     return self.eval_worksheet_property(&Expr::Str(key), field);
                 }
-                if matches!(self.object_variables.get(var), Some(ObjectRef::Workbook))
+                if matches!(self.object_variable_ref(var), Some(ObjectRef::Workbook))
                     || matches!(var.as_str(), "thisworkbook" | "activeworkbook")
                 {
                     return if field == "name" {
@@ -13797,9 +17478,9 @@ impl Vm {
                         Err(format!("Workbook property '{}' is not implemented", field))
                     };
                 }
-                if let Some(ObjectRef::Range(r)) = self.object_variables.get(var).cloned() {
+                if let Some(ObjectRef::Range(r)) = self.object_variable_ref(var) {
                     return match field.as_str() {
-                        "value" => self.read_range_ref_value(&r),
+                        "value" | "value2" => self.read_range_ref_value(&r),
                         "address" => Ok(Variant::Str(range_address(&r))),
                         "row" => Ok(Variant::Integer(
                             r.single_rect().map_or(0, |area| area.start_row) as i64,
@@ -13810,7 +17491,7 @@ impl Vm {
                         _ => Ok(Variant::Empty),
                     };
                 }
-                if let Some(ObjectRef::Collection(id)) = self.object_variables.get(var).cloned() {
+                if let Some(ObjectRef::Collection(id)) = self.object_variable_ref(var) {
                     return if field == "count" {
                         let len = self
                             .collections
@@ -13823,7 +17504,7 @@ impl Vm {
                         Ok(Variant::Empty)
                     };
                 }
-                if let Some(ObjectRef::Dictionary(id)) = self.object_variables.get(var).cloned() {
+                if let Some(ObjectRef::Dictionary(id)) = self.object_variable_ref(var) {
                     return match field.as_str() {
                         "count" => Ok(Variant::Integer(
                             self.dictionaries
@@ -13841,16 +17522,21 @@ impl Vm {
                         _ => Ok(Variant::Empty),
                     };
                 }
-                match self.variables.get(var) {
-                    Some(Variant::Record(m)) => Ok(m.get(field).cloned().unwrap_or(Variant::Empty)),
-                    _ => Ok(Variant::Empty),
+                if let Some(Variant::Record(m)) = self.variables.get(var) {
+                    return Ok(m.get(field).cloned().unwrap_or(Variant::Empty));
                 }
+                if let Some(key) = self.module_variable_key(var)
+                    && let Some(Variant::Record(m)) = self.module_variables.get(&key)
+                {
+                    return Ok(m.get(field).cloned().unwrap_or(Variant::Empty));
+                }
+                Ok(Variant::Empty)
             }
             Expr::RecordGetNested { var, fields } => {
                 // `x = <var>.Areas.Count` (Milestone B7c item 3) — same
                 // object-variable disambiguation as above.
                 self.require_live_object(var)?;
-                if let Some(ObjectRef::Range(r)) = self.object_variables.get(var).cloned() {
+                if let Some(ObjectRef::Range(r)) = self.object_variable_ref(var) {
                     if fields.as_slice() == ["parent", "name"] {
                         return Ok(Variant::Str(self.sheet_display_name(&r.sheet)));
                     }
@@ -13873,7 +17559,7 @@ impl Vm {
                     }
                     return Ok(Variant::Empty);
                 }
-                if (matches!(self.object_variables.get(var), Some(ObjectRef::Workbook))
+                if (matches!(self.object_variable_ref(var), Some(ObjectRef::Workbook))
                     || matches!(var.as_str(), "thisworkbook" | "activeworkbook"))
                     && fields.len() == 2
                     && matches!(fields[0].as_str(), "worksheets" | "sheets")
@@ -13881,7 +17567,15 @@ impl Vm {
                 {
                     return Ok(Variant::Integer(self.sheet_order.len() as i64));
                 }
-                let mut cur = self.variables.get(var).cloned().unwrap_or(Variant::Empty);
+                let mut cur = self
+                    .variables
+                    .get(var)
+                    .cloned()
+                    .or_else(|| {
+                        self.module_variable_key(var)
+                            .and_then(|key| self.module_variables.get(&key).cloned())
+                    })
+                    .unwrap_or(Variant::Empty);
                 for f in fields {
                     cur = match cur {
                         Variant::Record(m) => m.get(f).cloned().unwrap_or(Variant::Empty),
@@ -13896,8 +17590,16 @@ impl Vm {
                 field,
             } => {
                 let idx = to_f64(&self.eval_expr(&indices[0])?)? as usize;
-                let (found, len) = match self.variables.get(name) {
+                let values = self.variables.get(name).or_else(|| {
+                    self.module_variable_key(name)
+                        .and_then(|key| self.module_variables.get(&key))
+                });
+                let (found, len) = match values {
                     Some(Variant::Array(arr)) => (arr.get(idx).cloned(), arr.len()),
+                    Some(Variant::VbaArray(arr)) => {
+                        let found = arr.get(&[idx as i64]).ok().cloned();
+                        (found, arr.elements.len())
+                    }
                     _ => return Err(format!("'{}' is not an array", name)),
                 };
                 match found {
@@ -13910,6 +17612,49 @@ impl Vm {
     }
 
     fn eval_vba_func(&mut self, name: &str, args: &[Expr]) -> Result<Variant, String> {
+        if name == "isobject" {
+            if args.len() != 1 {
+                return Err("IsObject requires 1 argument".to_string());
+            }
+            let is_object = match &args[0] {
+                Expr::Var(name) => {
+                    self.object_variable_ref(name).is_some()
+                        || self
+                            .current_class_instance_id()
+                            .is_some_and(|id| self.class_object_field(id, name).is_some())
+                }
+                Expr::FuncCall { name, .. } => {
+                    self.user_funcs
+                        .get(name)
+                        .and_then(|function| function.return_type.as_deref())
+                        .is_some_and(|type_name| self.is_object_type_name(Some(type_name)))
+                        || self.object_arrays.contains_key(name)
+                }
+                _ => false,
+            };
+            return Ok(Variant::Boolean(is_object));
+        }
+        if matches!(name, "lbound" | "ubound")
+            && let Some(Expr::Var(array_name)) = args.first()
+        {
+            let dimension = self.array_func_dimension(args.get(1))?;
+            if let Some(array) = self.object_arrays.get(array_name) {
+                return match array.bounds.get(dimension - 1) {
+                    Some(bound) => Ok(Variant::Integer(if name == "lbound" {
+                        bound.lower
+                    } else {
+                        bound.upper
+                    })),
+                    None => Err("Subscript out of range".to_string()),
+                };
+            }
+        }
+        if name == "isarray"
+            && let Some(Expr::Var(array_name)) = args.first()
+            && self.object_arrays.contains_key(array_name)
+        {
+            return Ok(Variant::Boolean(true));
+        }
         let vals: Vec<Variant> = args
             .iter()
             .map(|a| self.eval_expr(a))
@@ -13919,15 +17664,27 @@ impl Vm {
                 let f = to_f64(vals.first().ok_or("INT requires 1 argument")?)?;
                 Ok(as_int_if_whole(f.floor()))
             }
-            "clng" | "cint" => {
+            "cbyte" | "clng" | "cint" => {
                 // Real VBA's CInt/CLng use banker's rounding (round-half-
                 // to-even), same as Round() — `to_i64_rounded`'s own doc
                 // comment already claims this ("the same round-half-to-
                 // even ... that CLng/Round use"), but this arm used Rust's
                 // default round-half-away-from-zero until now: `CInt(0.5)`
                 // was `1`, not real VBA's `0`.
-                let v = vals.first().ok_or("CInt/CLng requires 1 argument")?;
-                Ok(Variant::Integer(to_i64_rounded(v)?))
+                let v = vals.first().ok_or("CByte/CInt/CLng requires 1 argument")?;
+                let rounded = to_i64_rounded(v)?;
+                let (type_name, lower, upper) = match name {
+                    "cbyte" => ("Byte", 0, 255),
+                    "cint" => ("Integer", i16::MIN as i64, i16::MAX as i64),
+                    _ => ("Long", i32::MIN as i64, i32::MAX as i64),
+                };
+                if !(lower..=upper).contains(&rounded) {
+                    return Err(format!(
+                        "Overflow: {} value {} is outside {} range {}..{}",
+                        type_name, rounded, type_name, lower, upper
+                    ));
+                }
+                Ok(Variant::Integer(rounded))
             }
             "cbool" => {
                 let v = vals.first().ok_or("CBool requires 1 argument")?;
@@ -14099,6 +17856,19 @@ impl Vm {
                 vals.first(),
                 Some(Variant::Empty) | None
             ))),
+            "ismissing" => {
+                if args.len() != 1 {
+                    return Err("IsMissing requires 1 argument".to_string());
+                }
+                let Expr::Var(name) = &args[0] else {
+                    return Err("IsMissing requires a parameter variable".to_string());
+                };
+                Ok(Variant::Boolean(
+                    self.missing_parameter_frames
+                        .last()
+                        .is_some_and(|frame| frame.contains(name)),
+                ))
+            }
             "isnumeric" => {
                 // Real VBA's IsNumeric also accepts a string that parses as
                 // a number (`IsNumeric("123")` is True) and Empty (an
@@ -14408,6 +18178,11 @@ impl Vm {
             .insert((row, col));
         self.workbook_formula_tracking_valid = true;
         self.workbook_formula_structure_dirty = true;
+        self.record_trace(
+            "cell_change",
+            self.current_span,
+            format!("{}!R{}C{}", sheet, row, col),
+        );
         self.dispatch_worksheet_change_after_range_write(
             sheet,
             Rect {
@@ -14427,6 +18202,32 @@ impl Vm {
     ) -> Result<(), String> {
         self.check_sheet_not_protected(sheet, sheet)?;
         self.check_variant_budget(value)?;
+        let incoming = match value {
+            Variant::Array(values) => {
+                let expected = area.rows() as usize * area.cols() as usize;
+                if values.len() != expected {
+                    return Err(format!(
+                        "Range.Value: array shape mismatch ({} values for {}x{} range)",
+                        values.len(),
+                        area.rows(),
+                        area.cols()
+                    ));
+                }
+                for element in values {
+                    self.check_variant_budget(element)?;
+                }
+                Some(values.as_slice())
+            }
+            _ => None,
+        };
+        self.record_trace(
+            "cell_change",
+            self.current_span,
+            format!(
+                "{}!R{}C{}:R{}C{}",
+                sheet, area.start_row, area.start_col, area.end_row, area.end_col
+            ),
+        );
         self.record_edit_history();
         let mut spill_changed = Vec::new();
         for row in area.start_row..=area.end_row {
@@ -14438,15 +18239,23 @@ impl Vm {
         self.formula_dirty_cells.remove(sheet);
         self.sheet_cells_mut(sheet)
             .ok_or_else(|| format!("sheet '{}' not found", sheet))?;
+        let mut array_index = 0;
         for row in area.start_row..=area.end_row {
             for col in area.start_col..=area.end_col {
+                let cell_value = incoming
+                    .map(|values| {
+                        let value = values[array_index].clone();
+                        array_index += 1;
+                        value
+                    })
+                    .unwrap_or_else(|| value.clone());
                 self.sheet_cells_mut(sheet)
                     .expect("sheet existence checked above")
                     .insert(
                         (row, col),
                         CellContent {
                             formula: None,
-                            value: value.clone(),
+                            value: cell_value,
                         },
                     );
                 self.formula_ast_cache
@@ -14739,6 +18548,13 @@ impl Vm {
     }
 
     pub fn recalculate_all(&mut self) -> Result<(), String> {
+        if self
+            .cancellation
+            .as_ref()
+            .is_some_and(|flag| flag.load(Ordering::Relaxed))
+        {
+            return Err("CANCELED: workbook recalculation was canceled".to_string());
+        }
         let active = self.active_sheet.clone();
         self.next_append_rows.remove(&active);
         let mut effective_named_ranges = self.loaded_named_ranges.clone();
@@ -14808,6 +18624,13 @@ impl Vm {
                 }
             }
             for &idx in &plan.order {
+                if self
+                    .cancellation
+                    .as_ref()
+                    .is_some_and(|flag| flag.load(Ordering::Relaxed))
+                {
+                    return Err("CANCELED: workbook recalculation was canceled".to_string());
+                }
                 if !dirty_indices[idx] {
                     continue;
                 }
@@ -14911,6 +18734,13 @@ impl Vm {
 
         // Update cell values directly, bypassing cells_mut() to avoid N dirty-flag sets.
         for idx in order {
+            if self
+                .cancellation
+                .as_ref()
+                .is_some_and(|flag| flag.load(Ordering::Relaxed))
+            {
+                return Err("CANCELED: workbook recalculation was canceled".to_string());
+            }
             let (row, col, ref expr) = formula_cells[idx];
             let sheet_number = self
                 .sheet_order
@@ -14946,6 +18776,13 @@ impl Vm {
         let sheets = self.sheet_order.clone();
         let result = (|| {
             for sheet in sheets {
+                if self
+                    .cancellation
+                    .as_ref()
+                    .is_some_and(|flag| flag.load(Ordering::Relaxed))
+                {
+                    return Err("CANCELED: workbook recalculation was canceled".to_string());
+                }
                 if !self.sheets.contains_key(&sheet) {
                     continue;
                 }
@@ -17349,7 +21186,7 @@ fn is_truthy(v: &Variant) -> bool {
     }
 }
 
-fn vba_eq(a: &Variant, b: &Variant) -> bool {
+fn vba_eq_with_compare(a: &Variant, b: &Variant, compare: OptionCompare) -> bool {
     match (a, b) {
         (Variant::Integer(x), Variant::Integer(y)) => x == y,
         (Variant::Float(x), Variant::Float(y)) => x == y,
@@ -17358,7 +21195,10 @@ fn vba_eq(a: &Variant, b: &Variant) -> bool {
         (Variant::Date(x), Variant::Date(y)) => x == y,
         (Variant::Date(x), Variant::Integer(y)) => x == y,
         (Variant::Integer(x), Variant::Date(y)) => x == y,
-        (Variant::Str(x), Variant::Str(y)) => x.to_uppercase() == y.to_uppercase(),
+        (Variant::Str(x), Variant::Str(y)) => match compare {
+            OptionCompare::Binary => x == y,
+            OptionCompare::Legacy | OptionCompare::Text => x.to_uppercase() == y.to_uppercase(),
+        },
         (Variant::Boolean(x), Variant::Boolean(y)) => x == y,
         (Variant::Empty, Variant::Empty) => true,
         // Documented VBA comparison rules: Empty numeric-compares as 0, string-compares as
@@ -17375,10 +21215,23 @@ fn vba_eq(a: &Variant, b: &Variant) -> bool {
     }
 }
 
-fn vba_cmp(a: &Variant, b: &Variant) -> Result<std::cmp::Ordering, String> {
-    // String operands: case-insensitive lexicographic comparison (VBA default).
+fn vba_eq(a: &Variant, b: &Variant) -> bool {
+    vba_eq_with_compare(a, b, OptionCompare::Legacy)
+}
+
+fn vba_cmp_with_compare(
+    a: &Variant,
+    b: &Variant,
+    compare: OptionCompare,
+) -> Result<std::cmp::Ordering, String> {
+    // String operands follow the active module's Option Compare mode.
     if let (Variant::Str(sa), Variant::Str(sb)) = (a, b) {
-        return Ok(sa.to_uppercase().cmp(&sb.to_uppercase()));
+        return Ok(match compare {
+            OptionCompare::Binary => sa.cmp(sb),
+            OptionCompare::Legacy | OptionCompare::Text => {
+                sa.to_uppercase().cmp(&sb.to_uppercase())
+            }
+        });
     }
     // Mixed string/number: try numeric first, fall back to string coercion.
     match (to_f64(a), to_f64(b)) {
@@ -17394,7 +21247,12 @@ fn vba_cmp(a: &Variant, b: &Variant) -> Result<std::cmp::Ordering, String> {
                 Variant::Str(s) => s.clone(),
                 _ => format!("{:?}", b),
             };
-            Ok(sa.to_uppercase().cmp(&sb.to_uppercase()))
+            Ok(match compare {
+                OptionCompare::Binary => sa.cmp(&sb),
+                OptionCompare::Legacy | OptionCompare::Text => {
+                    sa.to_uppercase().cmp(&sb.to_uppercase())
+                }
+            })
         }
     }
 }
@@ -17590,7 +21448,12 @@ fn arith_to_f64(v: &Variant) -> Result<f64, String> {
     }
 }
 
-fn eval_binop(op: &VbaBinOp, l: Variant, r: Variant) -> Result<Variant, String> {
+fn eval_binop_with_compare(
+    op: &VbaBinOp,
+    l: Variant,
+    r: Variant,
+    compare: OptionCompare,
+) -> Result<Variant, String> {
     if let Some(v) = null_rule(op, &l, &r) {
         return Ok(v);
     }
@@ -17667,19 +21530,19 @@ fn eval_binop(op: &VbaBinOp, l: Variant, r: Variant) -> Result<Variant, String> 
             };
             Ok(Variant::Str(format!("{}{}", l, r)))
         }
-        VbaBinOp::Eq => Ok(Variant::Boolean(vba_eq(&l, &r))),
-        VbaBinOp::Ne => Ok(Variant::Boolean(!vba_eq(&l, &r))),
+        VbaBinOp::Eq => Ok(Variant::Boolean(vba_eq_with_compare(&l, &r, compare))),
+        VbaBinOp::Ne => Ok(Variant::Boolean(!vba_eq_with_compare(&l, &r, compare))),
         VbaBinOp::Lt => Ok(Variant::Boolean(
-            vba_cmp(&l, &r)? == std::cmp::Ordering::Less,
+            vba_cmp_with_compare(&l, &r, compare)? == std::cmp::Ordering::Less,
         )),
         VbaBinOp::Le => Ok(Variant::Boolean(
-            vba_cmp(&l, &r)? != std::cmp::Ordering::Greater,
+            vba_cmp_with_compare(&l, &r, compare)? != std::cmp::Ordering::Greater,
         )),
         VbaBinOp::Gt => Ok(Variant::Boolean(
-            vba_cmp(&l, &r)? == std::cmp::Ordering::Greater,
+            vba_cmp_with_compare(&l, &r, compare)? == std::cmp::Ordering::Greater,
         )),
         VbaBinOp::Ge => Ok(Variant::Boolean(
-            vba_cmp(&l, &r)? != std::cmp::Ordering::Less,
+            vba_cmp_with_compare(&l, &r, compare)? != std::cmp::Ordering::Less,
         )),
     }
 }
@@ -18046,6 +21909,24 @@ mod tests {
         assert_eq!(vm.variables["b"], Variant::Integer(2));
         assert_eq!(vm.variables["c"], Variant::Integer(2));
         assert_eq!(vm.variables["d"], Variant::Integer(-2));
+    }
+
+    #[test]
+    fn test_vba_integer_conversions_reject_values_outside_declared_width() {
+        let cases = [
+            ("CByte(256)", "Byte"),
+            ("CInt(32768)", "Integer"),
+            ("CLng(2147483648)", "Long"),
+        ];
+        for (expression, type_name) in cases {
+            let source = format!("Sub MySub()\n    value = {expression}\nEnd Sub\n");
+            let prog = parser::parse(&source).unwrap();
+            let error = Vm::new().run_sub(&prog, "mysub").unwrap_err();
+            assert!(
+                error.contains(&format!("{type_name} range")),
+                "unexpected error: {error}"
+            );
+        }
     }
 
     #[test]
@@ -18668,6 +22549,26 @@ mod tests {
     }
 
     #[test]
+    fn uncaught_err_raise_exposes_structured_error_evidence() {
+        let prog = parser::parse(
+            "Sub MySub()\n    Err.Raise 513, \"MySource\", \"boom\", \"help.chm\", 42\nEnd Sub\n",
+        )
+        .unwrap();
+        let mut vm = Vm::new();
+        assert_eq!(vm.run_sub(&prog, "mysub").unwrap_err(), "boom");
+        assert_eq!(
+            vm.take_error_evidence(),
+            Some(ErrorEvidence {
+                number: 513,
+                description: "boom".to_string(),
+                source: "MySource".to_string(),
+                help_file: "help.chm".to_string(),
+                help_context: 42,
+            })
+        );
+    }
+
+    #[test]
     fn a_raise_caught_inside_a_called_sub_does_not_leak_its_number_into_a_later_unrelated_error() {
         // `pending_raised_error` is a single Vm-wide slot (not scoped per
         // call frame, unlike `On Error`'s own mode — see `CallFrame`).
@@ -19056,6 +22957,332 @@ mod tests {
         assert_eq!(vm.get_cell(3, 1), Variant::Integer(99));
     }
 
+    #[test]
+    fn module_level_const_is_read_only_and_available_to_procedures() {
+        let vm = run(
+            "Option Explicit\nPublic Const MaxRetries As Integer = 3\nSub MySub()\n    result = MaxRetries + 1\nEnd Sub\n",
+        );
+        assert_eq!(vm.variables["result"], Variant::Integer(4));
+
+        let mut vm = Vm::new();
+        let program = parser::parse(
+            "Const MaxRetries As Integer = 3\nSub MySub()\n    MaxRetries = 4\nEnd Sub\n",
+        )
+        .unwrap();
+        let error = vm.run_sub(&program, "MySub").unwrap_err();
+        assert!(error.contains("constant is read-only"), "{error}");
+    }
+
+    #[test]
+    fn static_local_value_survives_repeated_procedure_calls() {
+        let vm = run(
+            "Sub Counter()\n    Static count As Long\n    count = count + 1\n    latest = count\nEnd Sub\nSub MySub()\n    Call Counter()\n    Call Counter()\n    result = latest\nEnd Sub\n",
+        );
+        assert_eq!(vm.variables["result"], Variant::Integer(2));
+    }
+
+    #[test]
+    fn explicit_byref_scalar_argument_writes_back_to_the_caller() {
+        let vm = run(
+            "Sub AddInto(ByRef value As Integer, ByVal amount As Integer)\n    value = value + amount\nEnd Sub\nSub MySub()\n    total = 5\n    Call AddInto(total, 7)\nEnd Sub\n",
+        );
+        assert_eq!(vm.variables["total"], Variant::Integer(12));
+    }
+
+    #[test]
+    fn duplicate_byref_arguments_share_the_caller_storage() {
+        let vm = run(
+            "Sub AddBoth(ByRef first As Integer, ByRef second As Integer)\n    first = first + 1\n    second = second + 1\nEnd Sub\nSub MySub()\n    total = 0\n    Call AddBoth(total, total)\nEnd Sub\n",
+        );
+        assert_eq!(vm.variables["total"], Variant::Integer(2));
+    }
+
+    #[test]
+    fn nested_byref_calls_do_not_clobber_same_named_outer_parameter() {
+        let vm = run(
+            "Sub Inner(ByRef value As Integer)\n    value = 20\nEnd Sub\nSub Outer(ByRef value As Integer)\n    other = 10\n    Call Inner(other)\n    value = value + 1\nEnd Sub\nSub MySub()\n    total = 1\n    Call Outer(total)\nEnd Sub\n",
+        );
+        assert_eq!(vm.variables["total"], Variant::Integer(2));
+    }
+
+    #[test]
+    fn byref_array_element_writes_back_to_the_caller() {
+        let vm = run("Sub AddInto(ByRef value As Integer)\n\
+             value = value + 1\n\
+             End Sub\n\
+             Sub MySub()\n\
+                 Dim values(1 To 2) As Integer\n\
+                 values(1) = 5\n\
+                 Call AddInto(values(1))\n\
+                 result = values(1)\n\
+             End Sub\n");
+        assert_eq!(vm.variables["result"], Variant::Integer(6));
+    }
+
+    #[test]
+    fn byref_module_array_element_keeps_caller_scope_across_modules() {
+        let modules = vec![
+            module(
+                "Caller",
+                "Private values(1 To 1) As Integer\n\
+                 Sub Main()\n\
+                     values(1) = 4\n\
+                     Call Increment(values(1))\n\
+                     result = values(1)\n\
+                 End Sub\n",
+            ),
+            module(
+                "Callee",
+                "Sub Increment(ByRef value As Integer)\n\
+                 value = value + 1\n\
+                 End Sub\n",
+            ),
+        ];
+        let mut vm = Vm::new();
+        vm.run_sub_multi(&modules, "Caller.Main").unwrap();
+        assert_eq!(vm.variables["result"], Variant::Integer(5));
+    }
+
+    #[test]
+    fn explicit_byref_expression_is_rejected_instead_of_becoming_byval() {
+        let prog = parser::parse(
+            "Sub AddInto(ByRef value As Integer)\n    value = value + 1\nEnd Sub\nSub MySub()\n    Call AddInto(5 + 1)\nEnd Sub\n",
+        )
+        .unwrap();
+        let mut vm = Vm::new();
+        let error = vm.run_sub(&prog, "mysub").unwrap_err();
+        assert!(
+            error.contains("ByRef argument 1"),
+            "unexpected error: {error}"
+        );
+        assert_eq!(
+            vm.take_argument_failure(),
+            Some(ArgumentFailure {
+                procedure: "addinto".into(),
+                parameter: Some("value".into()),
+                position: 1,
+                message: error,
+            })
+        );
+    }
+
+    #[test]
+    fn optional_sub_argument_uses_its_default_when_omitted() {
+        let prog = parser::parse(
+            "Sub Capture(Optional amount As Integer = 3)\n    result = amount\n    missing = IsMissing(amount)\nEnd Sub\nSub MySub()\n    Call Capture()\nEnd Sub\n",
+        )
+        .unwrap();
+        assert!(matches!(
+            prog.subs[0].param_modes[0],
+            ParamMode::OptionalByRef(Some(Expr::Integer(3)))
+        ));
+        assert!(matches!(
+            prog.subs[1].body[0].stmt,
+            Stmt::CallSub { ref name, ref args } if name == "capture" && args.is_empty()
+        ));
+        let mut vm = Vm::new();
+        vm.run_sub(&prog, "mysub").unwrap();
+        assert_eq!(vm.variables["result"], Variant::Integer(3));
+        assert_eq!(vm.variables["missing"], Variant::Boolean(true));
+    }
+
+    #[test]
+    fn paramarray_function_receives_the_remaining_values_as_an_array() {
+        let vm = run(
+            "Function CountItems(ParamArray items()) As Integer\n    CountItems = UBound(items) + 1\nEnd Function\nSub MySub()\n    result = CountItems(10, 20, 30)\nEnd Sub\n",
+        );
+        assert_eq!(vm.variables["result"], Variant::Integer(3));
+    }
+
+    #[test]
+    fn named_sub_arguments_are_bound_to_their_declared_positions() {
+        let vm = run(
+            "Sub Add(ByRef first As Integer, ByVal second As Integer)\n    first = first + second\nEnd Sub\nSub MySub()\n    total = 5\n    Call Add(second:=7, first:=total)\nEnd Sub\n",
+        );
+        assert_eq!(vm.variables["total"], Variant::Integer(12));
+    }
+
+    #[test]
+    fn named_calls_preserve_missing_optional_parameters_in_the_middle() {
+        let vm = run(
+            "Sub Capture(Optional first As Integer = 3, Optional second As Integer = 4)\n    result = first + second\n    first_missing = IsMissing(first)\n    second_missing = IsMissing(second)\nEnd Sub\nSub MySub()\n    Call Capture(second:=9)\nEnd Sub\n",
+        );
+        assert_eq!(vm.variables["result"], Variant::Integer(12));
+        assert_eq!(vm.variables["first_missing"], Variant::Boolean(true));
+        assert_eq!(vm.variables["second_missing"], Variant::Boolean(false));
+    }
+
+    #[test]
+    fn named_function_calls_are_case_insensitive_and_preserve_optional_state() {
+        let vm = run(
+            "Function Capture(Optional first As Integer = 3, Optional second As Integer = 4) As Integer\n    first_missing = IsMissing(first)\n    Capture = first + second\nEnd Function\nSub MySub()\n    result = Capture(SECOND:=9)\nEnd Sub\n",
+        );
+        assert_eq!(vm.variables["result"], Variant::Integer(12));
+        assert_eq!(vm.variables["first_missing"], Variant::Boolean(true));
+    }
+
+    #[test]
+    fn implicit_byref_scalar_variable_writes_back_without_rejecting_literals() {
+        let vm = run(
+            "Sub AddInto(value As Integer, amount As Integer)\n    value = value + amount\nEnd Sub\nSub MySub()\n    total = 5\n    Call AddInto(total, 7)\nEnd Sub\n",
+        );
+        assert_eq!(vm.variables["total"], Variant::Integer(12));
+    }
+
+    #[test]
+    fn byref_record_field_writes_back_to_the_caller_record() {
+        let vm = run(
+            "Type Point\n    x As Integer\nEnd Type\nSub Shift(ByRef value As Integer)\n    value = value + 1\nEnd Sub\nSub MySub()\n    Dim point As Point\n    point.x = 4\n    Call Shift(point.x)\n    result = point.x\nEnd Sub\n",
+        );
+        assert_eq!(vm.variables["result"], Variant::Integer(5));
+    }
+
+    #[test]
+    fn byref_nested_record_field_writes_back_through_the_full_path() {
+        let vm = run(
+            "Type Inner\n    value As Integer\nEnd Type\nType Outer\n    inner As Inner\nEnd Type\nSub Shift(ByRef value As Integer)\n    value = value + 2\nEnd Sub\nSub MySub()\n    Dim item As Outer\n    item.inner.value = 3\n    Call Shift(item.inner.value)\n    result = item.inner.value\nEnd Sub\n",
+        );
+        assert_eq!(vm.variables["result"], Variant::Integer(5));
+    }
+
+    #[test]
+    fn byref_record_array_field_writes_back_to_the_indexed_element() {
+        let vm = run(
+            "Type Point\n    x As Integer\nEnd Type\nSub Shift(ByRef value As Integer)\n    value = value + 1\nEnd Sub\nSub MySub()\n    Dim points(0) As Point\n    points(0).x = 6\n    Call Shift(points(0).x)\n    result = points(0).x\nEnd Sub\n",
+        );
+        assert_eq!(vm.variables["result"], Variant::Integer(7));
+    }
+
+    #[test]
+    fn byref_module_record_field_preserves_module_scope() {
+        let program = parser::parse(
+            "Type Point\n    x As Integer\nEnd Type\nPublic point As Point\nSub Shift(ByRef value As Integer)\n    value = value + 3\nEnd Sub\nSub MySub()\n    point.x = 2\n    Call Shift(point.x)\n    result = point.x\nEnd Sub\n",
+        )
+        .unwrap();
+        let mut vm = Vm::new();
+        vm.run_sub(&program, "mysub").unwrap();
+        assert_eq!(vm.variables["result"], Variant::Integer(5));
+        assert_eq!(
+            vm.module_variables
+                .get(&(None, "point".to_string()))
+                .and_then(|value| match value {
+                    Variant::Record(fields) => fields.get("x"),
+                    _ => None,
+                }),
+            Some(&Variant::Integer(5))
+        );
+    }
+
+    #[test]
+    fn byref_module_record_array_field_preserves_module_scope() {
+        let program = parser::parse(
+            "Type Point\n    x As Integer\nEnd Type\nPublic points(0) As Point\nSub Shift(ByRef value As Integer)\n    value = value + 4\nEnd Sub\nSub MySub()\n    points(0).x = 1\n    Call Shift(points(0).x)\n    result = points(0).x\nEnd Sub\n",
+        )
+        .unwrap();
+        let mut vm = Vm::new();
+        vm.run_sub(&program, "mysub").unwrap();
+        assert_eq!(vm.variables["result"], Variant::Integer(5));
+        assert!(matches!(
+            vm.module_variables.get(&(None, "points".to_string())),
+            Some(Variant::VbaArray(array))
+                if matches!(array.elements.first(), Some(Variant::Record(_)))
+        ));
+    }
+
+    #[test]
+    fn declared_scalar_parameter_types_coerce_at_the_call_boundary() {
+        let vm = run(
+            "Sub Capture(number As Integer, text As String, flag As Boolean)\n    n = number\n    s = text\n    b = flag\nEnd Sub\nSub MySub()\n    Call Capture(3.8, 42, 1)\nEnd Sub\n",
+        );
+        assert_eq!(vm.variables["n"], Variant::Integer(4));
+        assert_eq!(vm.variables["s"], Variant::Str("42".to_string()));
+        assert_eq!(vm.variables["b"], Variant::Boolean(true));
+    }
+
+    #[test]
+    fn declared_integer_and_long_ranges_reject_overflow_at_the_call_boundary() {
+        let cases = [
+            (
+                "Sub Capture(value As Integer)\nEnd Sub\nSub MySub()\n    Call Capture(32768)\nEnd Sub\n",
+                "integer",
+            ),
+            (
+                "Sub Capture(value As Long)\nEnd Sub\nSub MySub()\n    Call Capture(2147483648)\nEnd Sub\n",
+                "long",
+            ),
+        ];
+        for (source, type_name) in cases {
+            let prog = parser::parse(source).unwrap();
+            let mut vm = Vm::new();
+            let error = vm.run_sub(&prog, "mysub").unwrap_err();
+            assert!(
+                error.contains(&format!("declared {type_name} range")),
+                "unexpected error: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn typed_argument_coercion_failure_exposes_structured_argument_evidence() {
+        let program = parser::parse(
+            "Sub Capture(value As Integer)\nEnd Sub\nSub MySub()\n    Call Capture(32768)\nEnd Sub\n",
+        )
+        .unwrap();
+        let mut vm = Vm::new();
+        let error = vm.run_sub(&program, "mysub").unwrap_err();
+        assert!(
+            error.contains("declared integer range"),
+            "unexpected error: {error}"
+        );
+        assert_eq!(
+            vm.take_argument_failure(),
+            Some(ArgumentFailure {
+                procedure: "capture".into(),
+                parameter: Some("value".into()),
+                position: 1,
+                message: error,
+            })
+        );
+    }
+
+    #[test]
+    fn declared_byref_writeback_reapplies_integer_coercion_to_array_elements() {
+        let vm = run(
+            "Sub Bump(ByRef value As Integer)\n    value = value + 0.6\nEnd Sub\nSub MySub()\n    Dim values(0) As Integer\n    values(0) = 1\n    Call Bump(values(0))\n    result = values(0)\nEnd Sub\n",
+        );
+        assert_eq!(vm.variables["result"], Variant::Integer(2));
+    }
+
+    #[test]
+    fn declared_date_byref_writeback_preserves_date_variant() {
+        let vm = run(
+            "Sub SetDate(ByRef value As Date)\n    value = 45292\nEnd Sub\nSub MySub()\n    Dim value As Date\n    value = 0\n    Call SetDate(value)\n    result = TypeName(value)\n    serial = value\nEnd Sub\n",
+        );
+        assert_eq!(vm.variables["result"], Variant::Str("Date".into()));
+        assert_eq!(vm.variables["serial"], Variant::Date(45292));
+    }
+
+    #[test]
+    fn declared_currency_coercion_keeps_four_decimal_places() {
+        let vm = run(
+            "Sub Capture(value As Currency)\n    result = value\nEnd Sub\nSub MySub()\n    Call Capture(1.23456)\nEnd Sub\n",
+        );
+        assert_eq!(vm.variables["result"], Variant::Float(1.2346));
+    }
+
+    #[test]
+    fn declared_string_rejects_null_instead_of_coercing_to_empty() {
+        let source =
+            "Sub Capture(value As String)\nEnd Sub\nSub MySub()\n    Call Capture(Null)\nEnd Sub\n";
+        let prog = parser::parse(source).unwrap();
+        let mut vm = Vm::new();
+        let error = vm.run_sub(&prog, "mysub").unwrap_err();
+        assert!(
+            error.contains("Invalid use of Null"),
+            "unexpected error: {error}"
+        );
+    }
+
     // ── Phase 2C item 6: typed Function parameters and return type ───────────
 
     #[test]
@@ -19418,6 +23645,100 @@ mod tests {
              a = LBound(arr, 1)\n    b = LBound(arr, 2)\nEnd Sub\n");
         assert_eq!(vm.variables["a"], Variant::Integer(1));
         assert_eq!(vm.variables["b"], Variant::Integer(1));
+    }
+
+    #[test]
+    fn strict_resolution_enforces_option_explicit_before_execution() {
+        let prog = parser::parse(
+            "Option Explicit\nSub MySub()\n    Dim total As Long\n    total = missing + 1\nEnd Sub\n",
+        )
+        .unwrap();
+        let mut vm = Vm::new();
+        vm.strict_resolution = true;
+        let error = vm.run_sub(&prog, "mysub").unwrap_err();
+        assert!(error.contains("missing"), "unexpected error: {error}");
+        assert!(!vm.variables.contains_key("total"));
+    }
+
+    #[test]
+    fn option_compare_controls_vba_string_operators() {
+        let binary = parser::parse(
+            "Option Compare Binary\nSub Main()\n    equal = \"A\" = \"a\"\n    before = \"A\" < \"a\"\nEnd Sub\n",
+        )
+        .unwrap();
+        let mut binary_vm = Vm::new();
+        binary_vm.run_sub(&binary, "main").unwrap();
+        assert_eq!(
+            binary_vm.variables.get("equal"),
+            Some(&Variant::Boolean(false))
+        );
+        assert_eq!(
+            binary_vm.variables.get("before"),
+            Some(&Variant::Boolean(true))
+        );
+
+        let text = parser::parse(
+            "Option Compare Text\nSub Main()\n    equal = \"A\" = \"a\"\n    before = \"A\" < \"a\"\nEnd Sub\n",
+        )
+        .unwrap();
+        let mut text_vm = Vm::new();
+        text_vm.run_sub(&text, "main").unwrap();
+        assert_eq!(
+            text_vm.variables.get("equal"),
+            Some(&Variant::Boolean(true))
+        );
+        assert_eq!(
+            text_vm.variables.get("before"),
+            Some(&Variant::Boolean(false))
+        );
+    }
+
+    #[test]
+    fn option_compare_applies_to_select_case_matching() {
+        let program = parser::parse(
+            "Option Compare Binary\nSub Main()\n    Select Case \"A\"\n    Case \"a\"\n        result = 1\n    Case \"A\"\n        result = 2\n    End Select\nEnd Sub\n",
+        )
+        .unwrap();
+        let mut vm = Vm::new();
+        vm.run_sub(&program, "main").unwrap();
+        assert_eq!(vm.variables.get("result"), Some(&Variant::Integer(2)));
+    }
+
+    #[test]
+    fn module_variable_is_shared_by_procedures_and_survives_repeated_runs() {
+        let program = parser::parse(
+            "Private counter As Long\nSub Increment()\n    counter = counter + 1\nEnd Sub\nSub Main()\n    Call Increment\n    Call Increment\n    Cells(1, 1).Value = counter\nEnd Sub\n",
+        )
+        .unwrap();
+        let mut vm = Vm::new();
+        vm.run_sub(&program, "main").unwrap();
+        assert_eq!(vm.get_cell(1, 1), Variant::Integer(2));
+        vm.run_sub(&program, "increment").unwrap();
+        vm.run_sub(&program, "main").unwrap();
+        assert_eq!(vm.get_cell(1, 1), Variant::Integer(5));
+    }
+
+    #[test]
+    fn module_array_supports_bounds_read_write_and_redim_preserve() {
+        let program = parser::parse(
+            "Private values(1 To 3) As Long\nSub Main()\n    values(2) = 7\n    ReDim Preserve values(1 To 5)\n    Cells(1, 1).Value = values(2)\n    Cells(1, 2).Value = UBound(values)\nEnd Sub\n",
+        )
+        .unwrap();
+        let mut vm = Vm::new();
+        vm.run_sub(&program, "main").unwrap();
+        assert_eq!(vm.get_cell(1, 1), Variant::Integer(7));
+        assert_eq!(vm.get_cell(1, 2), Variant::Integer(5));
+    }
+
+    #[test]
+    fn dynamic_module_array_can_be_redimensioned() {
+        let program = parser::parse(
+            "Private values() As Long\nSub Main()\n    ReDim values(1 To 2)\n    values(2) = 9\n    Cells(1, 1).Value = values(2)\nEnd Sub\n",
+        )
+        .unwrap();
+        let mut vm = Vm::new();
+        vm.run_sub(&program, "main").unwrap();
+        assert_eq!(vm.get_cell(1, 1), Variant::Integer(9));
     }
 
     #[test]
@@ -19807,6 +24128,27 @@ mod tests {
     }
 
     #[test]
+    fn formula_rect_read_distinguishes_formula_from_calculated_value_and_replacement() {
+        let mut vm = Vm::new();
+        vm.set_cell_formula(1, 1, "=1+1").unwrap();
+        assert_eq!(
+            vm.read_formula_rect("sheet1", 1, 1, 1, 2),
+            vec![vec![Some("=1+1".to_string()), None]]
+        );
+        assert_eq!(vm.get_cell(1, 1), Variant::Integer(2));
+        vm.write_rect(
+            "sheet1",
+            (1, 1),
+            &[vec![Variant::Integer(9), Variant::Empty]],
+        );
+        assert_eq!(
+            vm.read_formula_rect("sheet1", 1, 1, 1, 2),
+            vec![vec![None, None]]
+        );
+        assert_eq!(vm.get_cell(1, 1), Variant::Integer(9));
+    }
+
+    #[test]
     fn test_range_copy() {
         let vm = run(
             "Sub MySub()\n    Cells(1,1).Value = 10\n    Cells(2,1).Value = 20\n    Cells(3,1).Value = 30\n    Range(\"A1:A3\").Copy Destination:=Range(\"B1\")\nEnd Sub\n",
@@ -19994,6 +24336,15 @@ mod tests {
             "Sub MySub()\n    Cells(2,1).Value = 42\n    r = Cells.Find(What:=42, LookIn:=xlValues, SearchDirection:=xlPrevious).Row\nEnd Sub\n",
         );
         assert_eq!(vm.variables["r"], Variant::Integer(2));
+    }
+
+    #[test]
+    fn test_cells_find_match_case_is_explicit_and_defaults_to_false() {
+        let vm = run(
+            "Sub MySub()\n    Cells(1,1).Value = \"Alpha\"\n    insensitive = Cells.Find(What:=\"alpha\").Row\n    sensitive = Cells.Find(What:=\"alpha\", MatchCase:=True).Row\nEnd Sub\n",
+        );
+        assert_eq!(vm.variables["insensitive"], Variant::Integer(1));
+        assert_eq!(vm.variables["sensitive"], Variant::Integer(0));
     }
 
     // ── EntireRow / EntireColumn ──────────────────────────────────────────────
@@ -20257,6 +24608,25 @@ mod tests {
         );
     }
 
+    #[test]
+    fn test_range_autofilter_composes_multiple_fields_and_reveals_rows() {
+        let vm = run(
+            "Sub MySub()\n    Cells(1,1).Value = \"Name\"\n    Cells(1,2).Value = \"Age\"\n    \
+             Cells(2,1).Value = \"Alice\"\n    Cells(2,2).Value = 25\n    \
+             Cells(3,1).Value = \"Bob\"\n    Cells(3,2).Value = 25\n    \
+             Cells(4,1).Value = \"Alice\"\n    Cells(4,2).Value = 40\n    \
+             Range(\"A1:B4\").AutoFilter Field:=1, Criteria1:=\"Alice\"\n    \
+             Range(\"A1:B4\").AutoFilter Field:=2, Criteria1:=\"25\"\nEnd Sub\n",
+        );
+        assert_eq!(vm.hidden_rows_on_sheet("sheet1"), vec![3, 4]);
+        assert_eq!(
+            vm.autofilters
+                .get("sheet1")
+                .map(|filter| filter.columns.len()),
+            Some(2)
+        );
+    }
+
     // ── Range clear / offset / multi-cell write / Sheets() ───────────────────
 
     #[test]
@@ -20350,6 +24720,35 @@ mod tests {
         assert_eq!(vm.get_cell(1, 1), Variant::Integer(7));
         assert_eq!(vm.get_cell(2, 1), Variant::Integer(7));
         assert_eq!(vm.get_cell(3, 1), Variant::Integer(7));
+    }
+
+    #[test]
+    fn range_value_array_assignment_preserves_row_major_shape() {
+        let vm = run(
+            "Sub MySub()\n    Cells(1,4).Value = 11\n    Cells(1,5).Value = 12\n    Cells(2,4).Value = 21\n    Cells(2,5).Value = 22\n    Range(\"A1:B2\").Value = Range(\"D1:E2\").Value\nEnd Sub\n",
+        );
+        assert_eq!(vm.get_cell(1, 1), Variant::Integer(11));
+        assert_eq!(vm.get_cell(1, 2), Variant::Integer(12));
+        assert_eq!(vm.get_cell(2, 1), Variant::Integer(21));
+        assert_eq!(vm.get_cell(2, 2), Variant::Integer(22));
+        assert_eq!(
+            vm.read_formula_rect("sheet1", 1, 1, 2, 2),
+            vec![vec![None, None], vec![None, None]]
+        );
+    }
+
+    #[test]
+    fn range_value_array_shape_mismatch_is_rejected_before_mutation() {
+        let program = parser::parse(
+            "Sub MySub()\n    Cells(1,4).Value = 11\n    Cells(2,4).Value = 21\n    Cells(1,1).Value = 99\n    Range(\"A1:B2\").Value = Range(\"D1:D2\").Value\nEnd Sub\n",
+        )
+        .unwrap();
+        let mut vm = Vm::new();
+        let error = vm.run_sub(&program, "MySub").unwrap_err();
+        assert!(error.contains("Range.Value: array shape mismatch"));
+        assert_eq!(vm.get_cell(1, 1), Variant::Integer(99));
+        assert_eq!(vm.get_cell(2, 1), Variant::Empty);
+        assert_eq!(vm.get_cell(1, 2), Variant::Empty);
     }
 
     #[test]
@@ -24993,6 +29392,22 @@ mod tests {
     }
 
     #[test]
+    fn opt_in_trace_is_bounded_and_redaction_safe() {
+        let prog =
+            parser::parse("Sub MySub()\n    Range(\"A1\").Value = \"secret\"\nEnd Sub\n").unwrap();
+        let mut vm = Vm::new();
+        vm.enable_trace("job-7", "sha256:abc", 3);
+        vm.run_sub(&prog, "MySub").unwrap();
+        let trace = vm.take_trace();
+        assert_eq!(trace.len(), 4); // three records plus one truncation marker
+        assert_eq!(trace[0].execution_id, "job-7");
+        assert_eq!(trace[0].source_hash, "sha256:abc");
+        assert!(trace.iter().any(|event| event.kind == "cell_change"));
+        assert!(trace.iter().any(|event| event.kind == "truncated"));
+        assert!(trace.iter().all(|event| event.detail != "secret"));
+    }
+
+    #[test]
     fn test_msgbox_blocked_is_recorded_before_failing() {
         let prog = parser::parse("Sub MySub()\n    MsgBox \"blocked\"\nEnd Sub\n").unwrap();
         let mut vm = Vm::new();
@@ -25019,6 +29434,53 @@ mod tests {
         assert_eq!(vm.take_messages(), vec!["once".to_string()]);
         // A second drain with no new MsgBox calls must come back empty.
         assert!(vm.take_messages().is_empty());
+    }
+
+    #[test]
+    fn test_debug_print_is_captured_separately_from_msgbox() {
+        let prog = parser::parse(
+            "Sub MySub()\n    x = 7\n    Debug.Print \"value\", x\n    MsgBox \"shown\"\nEnd Sub\n",
+        )
+        .unwrap();
+        let mut vm = Vm::new();
+        vm.run_sub(&prog, "MySub").unwrap();
+        assert_eq!(vm.take_debug_output(), vec!["value\t7".to_string()]);
+        assert_eq!(vm.take_messages(), vec!["shown".to_string()]);
+    }
+
+    #[test]
+    fn test_debug_output_does_not_leak_across_runs() {
+        let first = parser::parse("Sub First()\n    Debug.Print \"first\"\nEnd Sub\n").unwrap();
+        let second = parser::parse("Sub Second()\n    Debug.Print \"second\"\nEnd Sub\n").unwrap();
+        let mut vm = Vm::new();
+        vm.run_sub(&first, "First").unwrap();
+        vm.run_sub(&second, "Second").unwrap();
+        assert_eq!(vm.take_debug_output(), vec!["second".to_string()]);
+    }
+
+    #[test]
+    fn debug_assert_defaults_to_headless_ignore_policy() {
+        let vm = run("Sub MySub()\n\
+             Debug.Assert False\n\
+             result = 7\n\
+             End Sub\n");
+        assert_eq!(vm.variables["result"], Variant::Integer(7));
+    }
+
+    #[test]
+    fn debug_assert_error_policy_surfaces_a_runtime_failure() {
+        let program = parser::parse(
+            "Sub MySub()\n\
+             Debug.Assert False\n\
+             End Sub\n",
+        )
+        .unwrap();
+        let mut vm = Vm::new();
+        vm.debug_assert_policy = DebugAssertPolicy::Error;
+        assert_eq!(
+            vm.run_sub(&program, "MySub"),
+            Err("Debug.Assert failed".into())
+        );
     }
 
     // ── Dim registers a real Empty-valued variable ──────────────────────────
@@ -25806,6 +30268,19 @@ End Sub
         .unwrap();
         let err = vm.run_sub(&prog, "mysub").unwrap_err();
         assert!(err.starts_with("TIMEOUT:"), "{:?}", err);
+    }
+
+    #[test]
+    fn cancellation_flag_stops_a_tight_for_loop() {
+        let mut vm = Vm::new();
+        let cancellation = Arc::new(std::sync::atomic::AtomicBool::new(true));
+        vm.set_cancellation(Some(cancellation));
+        let prog = parser::parse(
+            "Sub MySub()\n    For i = 1 To 100000000\n        n = i\n    Next i\nEnd Sub\n",
+        )
+        .unwrap();
+        let err = vm.run_sub(&prog, "mysub").unwrap_err();
+        assert!(err.starts_with("CANCELED:"), "{:?}", err);
     }
 
     // ── Milestone B6b: Copy/Paste shape diagnosis + Clipboard state ─────────
@@ -27441,6 +31916,126 @@ End Sub
     }
 
     #[test]
+    fn dictionary_item_assignment_updates_or_adds_by_key() {
+        let vm = run("Sub MySub()\n\
+                Set d = New Scripting.Dictionary\n\
+                d.CompareMode = 1\n\
+                d.Add \"Key\", 1\n\
+                d(\"Key\") = 2\n\
+                d(\"New\") = 3\n\
+                updated = d(\"key\")\n\
+                added = d(\"New\")\n\
+                n = d.Count\n\
+            End Sub\n");
+        assert_eq!(vm.variables["updated"], Variant::Integer(2));
+        assert_eq!(vm.variables["added"], Variant::Integer(3));
+        assert_eq!(vm.variables["n"], Variant::Integer(2));
+    }
+
+    #[test]
+    fn dictionary_keeps_numeric_and_string_keys_distinct() {
+        let vm = run("Sub MySub()\n\
+                Set d = New Scripting.Dictionary\n\
+                d.Add 1, \"numeric\"\n\
+                d.Add \"1\", \"text\"\n\
+                numeric_value = d(1)\n\
+                text_value = d(\"1\")\n\
+                n = d.Count\n\
+            End Sub\n");
+        assert_eq!(
+            vm.variables["numeric_value"],
+            Variant::Str("numeric".to_string())
+        );
+        assert_eq!(vm.variables["text_value"], Variant::Str("text".to_string()));
+        assert_eq!(vm.variables["n"], Variant::Integer(2));
+    }
+
+    #[test]
+    fn dictionary_items_are_iterable_as_a_value_snapshot() {
+        let vm = run("Sub MySub()\n\
+                Set d = New Scripting.Dictionary\n\
+                d.Add \"a\", 10\n\
+                d.Add \"b\", 20\n\
+                total = 0\n\
+                For Each item In d.Items\n\
+                    total = total + item\n\
+                    d(item) = 99\n\
+                Next item\n\
+            End Sub\n");
+        assert_eq!(vm.variables["total"], Variant::Integer(30));
+    }
+
+    #[test]
+    fn collection_and_dictionary_key_iteration_use_start_snapshot_when_mutated() {
+        let vm = run("Sub MySub()\n\
+                Set items = New Collection\n\
+                items.Add 1, \"one\"\n\
+                items.Add 2, \"two\"\n\
+                For Each item In items\n\
+                    items.Add 9\n\
+                Next item\n\
+                collection_count = items.Count\n\
+                Set d = New Scripting.Dictionary\n\
+                d.Add \"a\", 1\n\
+                d.Add \"b\", 2\n\
+                For Each key In d.Keys\n\
+                    d(key & \"_new\") = 3\n\
+                Next key\n\
+                dictionary_count = d.Count\n\
+            End Sub\n");
+        assert_eq!(vm.variables["collection_count"], Variant::Integer(4));
+        assert_eq!(vm.variables["dictionary_count"], Variant::Integer(4));
+    }
+
+    #[test]
+    fn range_value2_reads_and_writes_like_value_without_dropping_errors() {
+        let mut vm = run("Sub MySub()\n\
+                Range(\"A1:B2\").Value2 = 7\n\
+            End Sub\n");
+        vm.set_cell_value(2, 2, Variant::Error(ExcelError::NA))
+            .unwrap();
+        let prog = parser::parse(
+            "Sub MySub()\n\
+                scalar = Range(\"A1\").Value2\n\
+                matrix = Range(\"A1:B2\").Value2\n\
+                error = Range(\"B2\").Value2\n\
+            End Sub\n",
+        )
+        .unwrap();
+        vm.run_sub(&prog, "MySub").unwrap();
+        assert_eq!(vm.variables["scalar"], Variant::Integer(7));
+        assert_eq!(
+            vm.variables["matrix"],
+            Variant::Array(vec![
+                Variant::Integer(7),
+                Variant::Integer(7),
+                Variant::Integer(7),
+                Variant::Error(ExcelError::NA),
+            ])
+        );
+        assert_eq!(vm.variables["error"], Variant::Error(ExcelError::NA));
+    }
+
+    #[test]
+    fn range_value2_array_transfer_preserves_empty_and_error_variants() {
+        let program = parser::parse(
+            "Sub Setup()\n    Range(\"D1:E2\").Value2 = 7\nEnd Sub\n\
+             Sub CopyValues()\n    Range(\"A1:B2\").Value2 = Range(\"D1:E2\").Value2\nEnd Sub\n",
+        )
+        .unwrap();
+        let mut vm = Vm::new();
+        vm.run_sub(&program, "Setup").unwrap();
+        vm.set_cell_value(1, 4, Variant::Error(ExcelError::NA))
+            .unwrap();
+        vm.set_cell_value(2, 5, Variant::Empty).unwrap();
+        vm.run_sub(&program, "CopyValues").unwrap();
+        assert_eq!(vm.get_cell(1, 1), Variant::Error(ExcelError::NA));
+        assert_eq!(vm.get_cell(1, 2), Variant::Integer(7));
+        assert_eq!(vm.get_cell(2, 1), Variant::Integer(7));
+        assert_eq!(vm.get_cell(2, 2), Variant::Empty);
+    }
+
+    #[test]
     fn collection_aliases_share_mutations_and_clearing_one_alias_keeps_the_other_live() {
         let vm = run(concat!(
             "Sub MySub()\n",
@@ -27885,6 +32480,157 @@ End Sub
     }
 
     #[test]
+    fn standard_module_object_variable_can_qualify_worksheet_and_range() {
+        let program = parser::parse(
+            "Private ws As Worksheet\n\
+             Sub Main()\n\
+                 Set ws = ActiveSheet\n\
+                 ws.Range(\"A1\").Value = 7\n\
+                 result = ws.Range(\"A1\").Value\n\
+             End Sub\n",
+        )
+        .unwrap();
+        let mut vm = Vm::new();
+        vm.run_sub(&program, "Main").unwrap();
+        assert_eq!(vm.variables["result"], Variant::Integer(7));
+        assert!(matches!(
+            vm.module_object_variables.values().next(),
+            Some(ObjectRef::Worksheet(_))
+        ));
+    }
+
+    #[test]
+    fn standard_module_object_variable_supports_member_reads_and_persists() {
+        let program = parser::parse(
+            "Private ws As Worksheet\n\
+             Sub Main()\n\
+                 If ws Is Nothing Then Set ws = ActiveSheet\n\
+                 result = ws.Name\n\
+             End Sub\n",
+        )
+        .unwrap();
+        let mut vm = Vm::new();
+        vm.run_sub(&program, "Main").unwrap();
+        vm.run_sub(&program, "Main").unwrap();
+        assert_eq!(vm.variables["result"], Variant::Str("sheet1".to_string()));
+    }
+
+    #[test]
+    fn standard_module_collection_variable_keeps_object_identity() {
+        let program = parser::parse(
+            "Private items As Collection\n\
+             Sub Main()\n\
+                 Set items = New Collection\n\
+                 items.Add 42\n\
+                 result = items.Count\n\
+             End Sub\n\
+             Sub ContinueWork()\n\
+                 items.Add 99\n\
+                 result = items.Count\n\
+             End Sub\n",
+        )
+        .unwrap();
+        let mut vm = Vm::new();
+        vm.run_sub(&program, "Main").unwrap();
+        vm.run_sub(&program, "ContinueWork").unwrap();
+        assert_eq!(vm.variables["result"], Variant::Integer(2));
+    }
+
+    #[test]
+    fn standard_module_collection_alias_preserves_identity_across_calls() {
+        let program = parser::parse(
+            "Private items As Collection\n\
+             Sub Main()\n\
+                 Set items = New Collection\n\
+                 items.Add 1\n\
+                 Call AddViaAlias\n\
+             End Sub\n\
+             Sub AddViaAlias()\n\
+                 Set aliasItems = items\n\
+                 aliasItems.Add 2\n\
+                 result = items.Count\n\
+             End Sub\n",
+        )
+        .unwrap();
+        let mut vm = Vm::new();
+        vm.run_sub(&program, "Main").unwrap();
+        assert_eq!(vm.variables["result"], Variant::Integer(2));
+    }
+
+    #[test]
+    fn standard_module_dictionary_uses_the_vm_local_adapter() {
+        let program = parser::parse(
+            "Private d As Scripting.Dictionary\n\
+             Sub Main()\n\
+                 Set d = New Scripting.Dictionary\n\
+                 d.Add \"answer\", 42\n\
+                 result = d.Item(\"answer\")\n\
+             End Sub\n",
+        )
+        .unwrap();
+        let mut vm = Vm::new();
+        vm.run_sub(&program, "Main").unwrap();
+        assert_eq!(vm.variables["result"], Variant::Integer(42));
+    }
+
+    #[test]
+    fn standard_module_dictionary_works_inside_with_and_persists() {
+        let program = parser::parse(
+            "Private d As Scripting.Dictionary\n\
+             Sub Main()\n\
+                 Set d = New Scripting.Dictionary\n\
+                 With d\n\
+                     .Add \"answer\", 42\n\
+                     result = .Count\n\
+                 End With\n\
+             End Sub\n\
+             Sub ContinueWork()\n\
+                 result = d.Item(\"answer\")\n\
+             End Sub\n",
+        )
+        .unwrap();
+        let mut vm = Vm::new();
+        vm.run_sub(&program, "Main").unwrap();
+        vm.run_sub(&program, "ContinueWork").unwrap();
+        assert_eq!(vm.variables["result"], Variant::Integer(42));
+    }
+
+    #[test]
+    fn standard_module_dictionary_alias_preserves_identity_across_calls() {
+        let program = parser::parse(
+            "Private d As Scripting.Dictionary\n\
+             Sub Main()\n\
+                 Set d = New Scripting.Dictionary\n\
+                 d.Add \"first\", 1\n\
+                 Call AddViaAlias\n\
+             End Sub\n\
+             Sub AddViaAlias()\n\
+                 Set aliasD = d\n\
+                 aliasD.Add \"second\", 2\n\
+                 result = d.Count\n\
+             End Sub\n",
+        )
+        .unwrap();
+        let mut vm = Vm::new();
+        vm.run_sub(&program, "Main").unwrap();
+        assert_eq!(vm.variables["result"], Variant::Integer(2));
+    }
+
+    #[test]
+    fn standard_module_object_variable_starts_as_nothing() {
+        let program = parser::parse(
+            "Private ws As Worksheet\n\
+             Sub Main()\n\
+                 result = ws Is Nothing\n\
+             End Sub\n",
+        )
+        .unwrap();
+        let mut vm = Vm::new();
+        vm.run_sub(&program, "Main").unwrap();
+        assert_eq!(vm.variables["result"], Variant::Boolean(true));
+    }
+
+    #[test]
     fn member_write_through_a_never_set_object_variable_raises_error_91() {
         assert_eq!(
             run_err("Sub MySub()\n    Dim r As Range\n    r.Value = 5\nEnd Sub\n"),
@@ -28263,6 +33009,17 @@ End Sub
         assert_eq!(vm.variables["d"], Variant::Boolean(true));
         assert_eq!(vm.variables["t"], Variant::Str("Null".into()));
         assert_eq!(vm.variables["v"], Variant::Integer(1)); // vbNull
+    }
+
+    #[test]
+    fn isobject_distinguishes_object_nothing_from_empty_and_scalars() {
+        let vm = run(
+            "Sub MySub()\n    Dim r As Range\n    Dim emptyValue\n    r1 = IsObject(r)\n    r2 = IsObject(emptyValue)\n    n = Null\n    r3 = IsObject(n)\n    x = 1\n    r4 = IsObject(x)\nEnd Sub\n",
+        );
+        assert_eq!(vm.variables["r1"], Variant::Boolean(true));
+        assert_eq!(vm.variables["r2"], Variant::Boolean(false));
+        assert_eq!(vm.variables["r3"], Variant::Boolean(false));
+        assert_eq!(vm.variables["r4"], Variant::Boolean(false));
     }
 
     #[test]
@@ -30570,6 +35327,322 @@ End Sub
     }
 
     #[test]
+    fn class_method_byref_argument_writes_back_to_caller() {
+        let worker = parser::parse(concat!(
+            "VERSION 1.0 CLASS\n",
+            "Attribute VB_Name = \"Worker\"\n",
+            "Public Sub Increment(ByRef value As Long)\n",
+            "    value = value + 1\n",
+            "End Sub\n",
+        ))
+        .unwrap();
+        let main = parser::parse(
+            "Sub Main()\n\
+             Set worker = New Worker\n\
+             total = 4\n\
+             Call worker.Increment(total)\n\
+             result = total\n\
+             End Sub\n",
+        )
+        .unwrap();
+        let mut vm = Vm::new();
+        vm.run_sub_multi(
+            &[("Worker".to_string(), worker), ("Main".to_string(), main)],
+            "Main.Main",
+        )
+        .unwrap();
+        assert_eq!(vm.variables["result"], Variant::Integer(5));
+    }
+
+    #[test]
+    fn scalar_byref_property_lvalue_round_trips_through_get_and_let() {
+        let worker = parser::parse(concat!(
+            "VERSION 1.0 CLASS\n",
+            "Attribute VB_Name = \"Worker\"\n",
+            "Private backing As Long\n",
+            "Public Property Get Score() As Long\n",
+            "    Score = backing\n",
+            "End Property\n",
+            "Public Property Let Score(ByVal newValue As Long)\n",
+            "    backing = newValue\n",
+            "End Property\n",
+        ))
+        .unwrap();
+        let main = parser::parse(
+            "Sub Main()\n\
+             Set worker = New Worker\n\
+             worker.Score = 2\n\
+             Call Shift(worker.Score)\n\
+             result = worker.Score\n\
+             End Sub\n\
+             Sub Shift(ByRef value As Long)\n\
+             value = value + 3\n\
+             End Sub\n",
+        )
+        .unwrap();
+        let mut vm = Vm::new();
+        vm.run_sub_multi(
+            &[("Worker".to_string(), worker), ("Main".to_string(), main)],
+            "Main.Main",
+        )
+        .unwrap();
+        assert_eq!(vm.variables["result"], Variant::Integer(5));
+    }
+
+    #[test]
+    fn property_let_byref_value_writes_back_to_the_assigned_expression() {
+        let worker = parser::parse(concat!(
+            "VERSION 1.0 CLASS\n",
+            "Attribute VB_Name = \"Worker\"\n",
+            "Public Property Let Value(ByRef newValue As Long)\n",
+            "    newValue = newValue + 1\n",
+            "End Property\n",
+        ))
+        .unwrap();
+        assert!(matches!(
+            worker.properties[0].param_modes[0],
+            ParamMode::ByRef
+        ));
+        let main = parser::parse(
+            "Sub Main()\n\
+             Set worker = New Worker\n\
+             total = 4\n\
+             worker.Value = total\n\
+             result = total\n\
+             End Sub\n",
+        )
+        .unwrap();
+        let mut vm = Vm::new();
+        vm.run_sub_multi(
+            &[("Worker".to_string(), worker), ("Main".to_string(), main)],
+            "Main.Main",
+        )
+        .unwrap();
+        assert_eq!(vm.variables["result"], Variant::Integer(5));
+    }
+
+    #[test]
+    fn property_set_byref_value_writes_back_to_the_assigned_object_variable() {
+        let child = parser::parse(concat!(
+            "VERSION 1.0 CLASS\n",
+            "Attribute VB_Name = \"Child\"\n",
+            "Public Value As Long\n",
+        ))
+        .unwrap();
+        let holder = parser::parse(concat!(
+            "VERSION 1.0 CLASS\n",
+            "Attribute VB_Name = \"Holder\"\n",
+            "Public Property Set Item(ByRef value As Child)\n",
+            "    Set value = New Child\n",
+            "    value.Value = 99\n",
+            "End Property\n",
+        ))
+        .unwrap();
+        let main = parser::parse(
+            "Sub Main()\n\
+             Set box = New Holder\n\
+             Set item = New Child\n\
+             Set box.Item = item\n\
+             result = item.Value\n\
+             End Sub\n",
+        )
+        .unwrap();
+        let mut vm = Vm::new();
+        vm.run_sub_multi(
+            &[
+                ("Child".to_string(), child),
+                ("Holder".to_string(), holder),
+                ("Main".to_string(), main),
+            ],
+            "Main.Main",
+        )
+        .unwrap();
+        assert_eq!(vm.variables["result"], Variant::Integer(99));
+    }
+
+    #[test]
+    fn property_get_byref_argument_writes_back_to_caller() {
+        let worker = parser::parse(concat!(
+            "VERSION 1.0 CLASS\n",
+            "Attribute VB_Name = \"Worker\"\n",
+            "Public Property Get Bump(ByRef value As Long) As Long\n",
+            "    value = value + 1\n",
+            "    Bump = value\n",
+            "End Property\n",
+        ))
+        .unwrap();
+        let main = parser::parse(
+            "Sub Main()\n\
+             Set worker = New Worker\n\
+             total = 4\n\
+             result = worker.Bump(total)\n\
+             End Sub\n",
+        )
+        .unwrap();
+        let mut vm = Vm::new();
+        vm.run_sub_multi(
+            &[("Worker".to_string(), worker), ("Main".to_string(), main)],
+            "Main.Main",
+        )
+        .unwrap();
+        assert_eq!(vm.variables["total"], Variant::Integer(5));
+        assert_eq!(vm.variables["result"], Variant::Integer(5));
+    }
+
+    #[test]
+    fn class_function_byref_argument_writes_back_to_caller() {
+        let worker = parser::parse(concat!(
+            "VERSION 1.0 CLASS\n",
+            "Attribute VB_Name = \"Worker\"\n",
+            "Public Function Bump(ByRef value As Long) As Long\n",
+            "    value = value + 1\n",
+            "    Bump = value\n",
+            "End Function\n",
+        ))
+        .unwrap();
+        let main = parser::parse(
+            "Sub Main()\n\
+             Set worker = New Worker\n\
+             total = 4\n\
+             result = worker.Bump(total)\n\
+             End Sub\n",
+        )
+        .unwrap();
+        let mut vm = Vm::new();
+        vm.run_sub_multi(
+            &[("Worker".to_string(), worker), ("Main".to_string(), main)],
+            "Main.Main",
+        )
+        .unwrap();
+        assert_eq!(vm.variables["total"], Variant::Integer(5));
+        assert_eq!(vm.variables["result"], Variant::Integer(5));
+    }
+
+    #[test]
+    fn class_function_named_optional_argument_preserves_missing_state() {
+        let worker = parser::parse(concat!(
+            "VERSION 1.0 CLASS\n",
+            "Attribute VB_Name = \"Worker\"\n",
+            "Public Function Total(Optional first As Long = 3, Optional second As Long = 4) As Long\n",
+            "    first_missing = IsMissing(first)\n",
+            "    Total = first + second\n",
+            "End Function\n",
+        ))
+        .unwrap();
+        let main = parser::parse(
+            "Sub Main()\n\
+             Set worker = New Worker\n\
+             result = worker.Total(SECOND:=9)\n\
+             End Sub\n",
+        )
+        .unwrap();
+        let mut vm = Vm::new();
+        vm.run_sub_multi(
+            &[("Worker".to_string(), worker), ("Main".to_string(), main)],
+            "Main.Main",
+        )
+        .unwrap();
+        assert_eq!(vm.variables["first_missing"], Variant::Boolean(true));
+        assert_eq!(vm.variables["result"], Variant::Integer(12));
+    }
+
+    #[test]
+    fn property_get_optional_byref_literal_uses_a_temporary_value() {
+        let worker = parser::parse(concat!(
+            "VERSION 1.0 CLASS\n",
+            "Attribute VB_Name = \"Worker\"\n",
+            "Public Property Get Bump(Optional value As Long = 2) As Long\n",
+            "    Bump = value + 1\n",
+            "End Property\n",
+        ))
+        .unwrap();
+        let main = parser::parse(
+            "Sub Main()\n\
+             Set worker = New Worker\n\
+             result = worker.Bump(5)\n\
+             End Sub\n",
+        )
+        .unwrap();
+        let mut vm = Vm::new();
+        vm.run_sub_multi(
+            &[("Worker".to_string(), worker), ("Main".to_string(), main)],
+            "Main.Main",
+        )
+        .unwrap();
+        assert_eq!(vm.variables["result"], Variant::Integer(6));
+    }
+
+    #[test]
+    fn object_property_get_byref_argument_writes_back_to_caller() {
+        let child = parser::parse(concat!(
+            "VERSION 1.0 CLASS\n",
+            "Attribute VB_Name = \"Child\"\n",
+            "Public Property Get Value(ByRef offset As Long) As Long\n",
+            "    offset = offset + 2\n",
+            "    Value = offset\n",
+            "End Property\n",
+        ))
+        .unwrap();
+        let holder = parser::parse(concat!(
+            "VERSION 1.0 CLASS\n",
+            "Attribute VB_Name = \"Holder\"\n",
+            "Public Property Get Child() As Child\n",
+            "    Set Child = New Child\n",
+            "End Property\n",
+        ))
+        .unwrap();
+        let main = parser::parse(
+            "Sub Main()\n\
+             Set holder = New Holder\n\
+             Set child = holder.Child\n\
+             offset = 3\n\
+             result = child.Value(offset)\n\
+             End Sub\n",
+        )
+        .unwrap();
+        let mut vm = Vm::new();
+        vm.run_sub_multi(
+            &[
+                ("Child".to_string(), child),
+                ("Holder".to_string(), holder),
+                ("Main".to_string(), main),
+            ],
+            "Main.Main",
+        )
+        .unwrap();
+        assert_eq!(vm.variables["offset"], Variant::Integer(5));
+        assert_eq!(vm.variables["result"], Variant::Integer(5));
+    }
+
+    #[test]
+    fn property_get_named_call_preserves_an_omitted_optional_index() {
+        let worker = parser::parse(concat!(
+            "VERSION 1.0 CLASS\n",
+            "Attribute VB_Name = \"Worker\"\n",
+            "Public Property Get Bump(Optional first As Long = 3, Optional second As Long = 4) As Long\n",
+            "    first_missing = IsMissing(first)\n",
+            "    Bump = first + second\n",
+            "End Property\n",
+        ))
+        .unwrap();
+        let main = parser::parse(
+            "Sub Main()\n\
+             Set worker = New Worker\n\
+             result = worker.Bump(second:=9)\n\
+             End Sub\n",
+        )
+        .unwrap();
+        let mut vm = Vm::new();
+        vm.run_sub_multi(
+            &[("Worker".to_string(), worker), ("Main".to_string(), main)],
+            "Main.Main",
+        )
+        .unwrap();
+        assert_eq!(vm.variables["result"], Variant::Integer(12));
+        assert_eq!(vm.variables["first_missing"], Variant::Boolean(true));
+    }
+
+    #[test]
     fn implements_binds_prefixed_member_and_checks_contract() {
         let interface = parser::parse(concat!(
             "VERSION 1.0 CLASS\n",
@@ -30714,6 +35787,210 @@ End Sub
         let mut vm = Vm::new();
         vm.run_sub_multi(&modules, "Main").unwrap();
         assert_eq!(vm.variables["result"], Variant::Integer(29));
+    }
+
+    #[test]
+    fn object_returning_class_function_writes_back_scalar_byref_argument() {
+        let child = parser::parse(concat!(
+            "VERSION 1.0 CLASS\n",
+            "Attribute VB_Name = \"Child\"\n",
+        ))
+        .unwrap();
+        let factory = parser::parse(concat!(
+            "VERSION 1.0 CLASS\n",
+            "Attribute VB_Name = \"Factory\"\n",
+            "Public Function Make(ByRef value As Long) As Child\n",
+            "    value = value + 1\n",
+            "    Set Make = New Child\n",
+            "End Function\n",
+        ))
+        .unwrap();
+        let main = parser::parse(concat!(
+            "Sub Main()\n",
+            "    Dim factory As New Factory\n",
+            "    total = 4\n",
+            "    Set child = factory.Make(total)\n",
+            "End Sub\n",
+        ))
+        .unwrap();
+        let modules = vec![
+            ("main".to_string(), main),
+            ("child".to_string(), child),
+            ("factory".to_string(), factory),
+        ];
+        let mut vm = Vm::new();
+        vm.run_sub_multi(&modules, "Main").unwrap();
+        assert_eq!(vm.variables["total"], Variant::Integer(5));
+    }
+
+    #[test]
+    fn object_returning_class_function_writes_back_object_byref_argument() {
+        let child = parser::parse(concat!(
+            "VERSION 1.0 CLASS\n",
+            "Attribute VB_Name = \"Child\"\n",
+            "Public Value As Long\n",
+        ))
+        .unwrap();
+        let factory = parser::parse(concat!(
+            "VERSION 1.0 CLASS\n",
+            "Attribute VB_Name = \"Factory\"\n",
+            "Public Function Replace(ByRef value As Child) As Child\n",
+            "    Set value = New Child\n",
+            "    value.Value = 7\n",
+            "    Set Replace = value\n",
+            "End Function\n",
+        ))
+        .unwrap();
+        let main = parser::parse(concat!(
+            "Sub Main()\n",
+            "    Dim factory As New Factory\n",
+            "    Dim current As New Child\n",
+            "    Set replaced = factory.Replace(current)\n",
+            "    result = current.Value\n",
+            "End Sub\n",
+        ))
+        .unwrap();
+        let modules = vec![
+            ("main".to_string(), main),
+            ("child".to_string(), child),
+            ("factory".to_string(), factory),
+        ];
+        let mut vm = Vm::new();
+        vm.run_sub_multi(&modules, "Main").unwrap();
+        assert_eq!(vm.variables["result"], Variant::Integer(7));
+    }
+
+    #[test]
+    fn class_sub_writes_back_object_byref_argument() {
+        let child = parser::parse(concat!(
+            "VERSION 1.0 CLASS\n",
+            "Attribute VB_Name = \"Child\"\n",
+            "Public Value As Long\n",
+        ))
+        .unwrap();
+        let factory = parser::parse(concat!(
+            "VERSION 1.0 CLASS\n",
+            "Attribute VB_Name = \"Factory\"\n",
+            "Public Sub Replace(ByRef value As Child)\n",
+            "    Set value = New Child\n",
+            "    value.Value = 8\n",
+            "End Sub\n",
+        ))
+        .unwrap();
+        let main = parser::parse(concat!(
+            "Sub Main()\n",
+            "    Dim factory As New Factory\n",
+            "    Dim current As New Child\n",
+            "    Call factory.Replace(current)\n",
+            "    result = current.Value\n",
+            "End Sub\n",
+        ))
+        .unwrap();
+        let modules = vec![
+            ("main".to_string(), main),
+            ("child".to_string(), child),
+            ("factory".to_string(), factory),
+        ];
+        let mut vm = Vm::new();
+        vm.run_sub_multi(&modules, "Main").unwrap();
+        assert_eq!(vm.variables["result"], Variant::Integer(8));
+    }
+
+    #[test]
+    fn nested_object_byref_calls_do_not_clobber_same_named_outer_parameter() {
+        let child = parser::parse(concat!(
+            "VERSION 1.0 CLASS\n",
+            "Attribute VB_Name = \"Child\"\n",
+            "Public Value As Long\n",
+        ))
+        .unwrap();
+        let worker = parser::parse(concat!(
+            "VERSION 1.0 CLASS\n",
+            "Attribute VB_Name = \"Worker\"\n",
+            "Public Sub Replace(ByRef value As Child)\n",
+            "    Set value = New Child\n",
+            "    value.Value = 8\n",
+            "End Sub\n",
+        ))
+        .unwrap();
+        let main = parser::parse(concat!(
+            "Sub Outer(ByRef value As Child, ByRef worker As Worker)\n",
+            "    Set other = New Child\n",
+            "    Call worker.Replace(other)\n",
+            "    value.Value = value.Value + 1\n",
+            "End Sub\n",
+            "Sub Main()\n",
+            "    Dim current As New Child\n",
+            "    current.Value = 5\n",
+            "    Dim worker As New Worker\n",
+            "    Call Outer(current, worker)\n",
+            "    result = current.Value\n",
+            "End Sub\n",
+        ))
+        .unwrap();
+        let modules = vec![
+            ("main".to_string(), main),
+            ("child".to_string(), child),
+            ("worker".to_string(), worker),
+        ];
+        let mut vm = Vm::new();
+        vm.run_sub_multi(&modules, "Main").unwrap();
+        assert_eq!(vm.variables["result"], Variant::Integer(6));
+    }
+
+    #[test]
+    fn standard_function_binds_object_arguments_and_writes_back_byref() {
+        let child = parser::parse(concat!(
+            "VERSION 1.0 CLASS\n",
+            "Attribute VB_Name = \"Child\"\n",
+            "Public Value As Long\n",
+        ))
+        .unwrap();
+        let main = parser::parse(concat!(
+            "Function ReplaceValue(ByRef value As Child) As Long\n",
+            "    Set value = New Child\n",
+            "    value.Value = 11\n",
+            "    ReplaceValue = value.Value\n",
+            "End Function\n",
+            "Sub Main()\n",
+            "    Dim current As New Child\n",
+            "    result = ReplaceValue(current)\n",
+            "    after = current.Value\n",
+            "End Sub\n",
+        ))
+        .unwrap();
+        let modules = vec![("main".to_string(), main), ("child".to_string(), child)];
+        let mut vm = Vm::new();
+        vm.run_sub_multi(&modules, "Main").unwrap();
+        assert_eq!(vm.variables["result"], Variant::Integer(11));
+        assert_eq!(vm.variables["after"], Variant::Integer(11));
+    }
+
+    #[test]
+    fn standard_object_returning_function_is_bound_through_set() {
+        let child = parser::parse(concat!(
+            "VERSION 1.0 CLASS\n",
+            "Attribute VB_Name = \"Child\"\n",
+            "Public Value As Long\n",
+        ))
+        .unwrap();
+        let main = parser::parse(concat!(
+            "Function MakeChild(ByVal source As Child) As Child\n",
+            "    Set MakeChild = New Child\n",
+            "    MakeChild.Value = source.Value + 1\n",
+            "End Function\n",
+            "Sub Main()\n",
+            "    Dim source As New Child\n",
+            "    source.Value = 4\n",
+            "    Set result = MakeChild(source)\n",
+            "    observed = result.Value\n",
+            "End Sub\n",
+        ))
+        .unwrap();
+        let modules = vec![("main".to_string(), main), ("child".to_string(), child)];
+        let mut vm = Vm::new();
+        vm.run_sub_multi(&modules, "Main").unwrap();
+        assert_eq!(vm.variables["observed"], Variant::Integer(5));
     }
 
     #[test]
@@ -30896,6 +36173,53 @@ End Sub
         let mut vm = Vm::new();
         vm.run_sub(&program, "Main").unwrap();
         assert_eq!(vm.variables["result"], Variant::Integer(17));
+    }
+
+    #[test]
+    fn object_array_exposes_bounds_and_array_identity() {
+        let program = parser::parse(concat!(
+            "Sub Main()\n",
+            "    Dim objects(2 To 4, -1 To 1) As Object\n",
+            "    lower1 = LBound(objects, 1)\n",
+            "    upper1 = UBound(objects, 1)\n",
+            "    lower2 = LBound(objects, 2)\n",
+            "    upper2 = UBound(objects, 2)\n",
+            "    arrayFlag = IsArray(objects)\n",
+            "End Sub\n",
+        ))
+        .unwrap();
+        let mut vm = Vm::new();
+        vm.run_sub(&program, "Main").unwrap();
+        assert_eq!(vm.variables["lower1"], Variant::Integer(2));
+        assert_eq!(vm.variables["upper1"], Variant::Integer(4));
+        assert_eq!(vm.variables["lower2"], Variant::Integer(-1));
+        assert_eq!(vm.variables["upper2"], Variant::Integer(1));
+        assert_eq!(vm.variables["arrayflag"], Variant::Boolean(true));
+    }
+
+    #[test]
+    fn uninitialized_object_array_items_are_nothing_until_member_access() {
+        let program = parser::parse(concat!(
+            "Sub Main()\n",
+            "    Dim objects(1 To 2) As Object\n",
+            "    Set item = objects(1)\n",
+            "    before = (item Is Nothing)\n",
+            "    Set cell = Range(\"A1\")\n",
+            "    Set objects(1) = cell\n",
+            "    ReDim Preserve objects(1 To 3)\n",
+            "    Set spare = objects(3)\n",
+            "    after = (spare Is Nothing)\n",
+            "    Set fetched = objects(1)\n",
+            "    fetched.Value = 23\n",
+            "    result = Cells(1, 1).Value\n",
+            "End Sub\n",
+        ))
+        .unwrap();
+        let mut vm = Vm::new();
+        vm.run_sub(&program, "Main").unwrap();
+        assert_eq!(vm.variables["before"], Variant::Boolean(true));
+        assert_eq!(vm.variables["after"], Variant::Boolean(true));
+        assert_eq!(vm.variables["result"], Variant::Integer(23));
     }
 
     #[test]

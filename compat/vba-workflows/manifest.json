@@ -1,0 +1,144 @@
+{
+  "schema_version": 1,
+  "corpus_version": "2026-09-12.1",
+  "license": "MIT",
+  "comparison": {
+    "elixcee_commit": "ca9f2cf49b8c491c04fc8678eb28db4aefbf09de",
+    "xlflow_release": "v0.31.2",
+    "xlflow_commit": "0b8ca0eb47f834cb97be6730d73d688a811da676",
+    "excel_required_for_oracle": true,
+    "measurement_status": "not_measured"
+  },
+  "result_classes": [
+    "pass",
+    "mismatch",
+    "expected_error",
+    "unsupported",
+    "policy_blocked",
+    "timeout",
+    "not_measured"
+  ],
+  "cases": [
+    {
+      "id": "headless-transfer-and-recalculate",
+      "class": "workbook_edit",
+      "workbook": "compat/corpus/workbooks/numeric_grid.xlsx",
+      "workbook_sha256": "bcce7871c8f3a9cd572d2f583e4aca98af04d2dba5463df1fbddd952e626dfa3",
+      "vba_source": "compat/vba-workflows/fixtures/Transfer.bas",
+      "vba_source_sha256": "646a6b58f1021509230c2babd44763e95bbd4b7c2782d59c4c5594f3242f106c",
+      "entrypoint": "TransferAndRecalculate",
+      "arguments": [],
+      "operation_boundary": ["read", "vba", "calculate", "save", "reload"],
+      "expected": {
+        "result_class": "not_measured",
+        "cells": {"Sheet1!B2": 30, "Sheet1!B3": 60},
+        "formulas_preserved": true,
+        "source_unchanged": true
+      },
+      "allowed_effects": ["temporary_output"],
+      "limits": {"timeout_ms": 10000, "max_cells": 10000},
+      "provenance": {"kind": "synthetic", "source": "elixcee V0 seed"}
+    },
+    {
+      "id": "byref-alias-and-optional",
+      "class": "vba_semantics",
+      "workbook": "compat/corpus/workbooks/numeric_grid.xlsx",
+      "workbook_sha256": "bcce7871c8f3a9cd572d2f583e4aca98af04d2dba5463df1fbddd952e626dfa3",
+      "vba_source": "compat/vba-workflows/fixtures/ByRef.bas",
+      "vba_source_sha256": "2267b42c4eaa91e93e5a73c4d99dae9bb2e43d571b022ded9d116a80a72a0426",
+      "entrypoint": "RunByRefCase",
+      "arguments": [],
+      "operation_boundary": ["read", "vba", "calculate", "save", "reload"],
+      "expected": {
+        "result_class": "not_measured",
+        "cells": {"Sheet1!B2": 12, "Sheet1!B3": 7},
+        "source_unchanged": true
+      },
+      "allowed_effects": ["temporary_output"],
+      "limits": {"timeout_ms": 10000, "max_cells": 10000},
+      "provenance": {"kind": "synthetic", "source": "elixcee V1 seed"}
+    },
+    {
+      "id": "headless-table-sort-filter-find",
+      "class": "workbook_edit",
+      "workbook": "compat/corpus/workbooks/numeric_grid.xlsx",
+      "workbook_sha256": "bcce7871c8f3a9cd572d2f583e4aca98af04d2dba5463df1fbddd952e626dfa3",
+      "vba_source": "compat/vba-workflows/fixtures/TableQuality.bas",
+      "vba_source_sha256": "4186628c9af66513b0980056226fd5503fafbe3f63eb378bb6c33fe48e693a69",
+      "entrypoint": "SortFilterAndFind",
+      "arguments": [],
+      "operation_boundary": ["read", "vba", "calculate", "save", "reload"],
+      "expected": {
+        "result_class": "not_measured",
+        "cells": {"Sheet1!D1": 3, "Sheet1!D2": "Bob", "Sheet1!D3": "Alice"},
+        "source_unchanged": true
+      },
+      "allowed_effects": ["temporary_output"],
+      "limits": {"timeout_ms": 10000, "max_cells": 10000},
+      "provenance": {"kind": "synthetic", "source": "elixcee V4c seed"}
+    },
+    {
+      "id": "headless-object-aliases",
+      "class": "vba_semantics",
+      "workbook": "compat/corpus/workbooks/numeric_grid.xlsx",
+      "workbook_sha256": "bcce7871c8f3a9cd572d2f583e4aca98af04d2dba5463df1fbddd952e626dfa3",
+      "vba_source": "compat/vba-workflows/fixtures/ObjectAliases.bas",
+      "vba_source_sha256": "fde1c3cf917551ad34d7ad8f5e927ff0abea88443ca46d8a4a8742c14647bc36",
+      "entrypoint": "RunObjectAliasCase",
+      "arguments": [],
+      "operation_boundary": ["read", "vba", "calculate", "save", "reload"],
+      "expected": {
+        "result_class": "not_measured",
+        "cells": {"Sheet1!B2": 2, "Sheet1!B3": 2, "Sheet1!B4": 10},
+        "source_unchanged": true
+      },
+      "allowed_effects": ["temporary_output"],
+      "limits": {"timeout_ms": 10000, "max_cells": 10000},
+      "provenance": {"kind": "synthetic", "source": "elixcee V4b seed"}
+    },
+    {
+      "id": "headless-range-value2-transfer",
+      "class": "workbook_edit",
+      "workbook": "compat/corpus/workbooks/numeric_grid.xlsx",
+      "workbook_sha256": "bcce7871c8f3a9cd572d2f583e4aca98af04d2dba5463df1fbddd952e626dfa3",
+      "vba_source": "compat/vba-workflows/fixtures/RangeTransfer.bas",
+      "vba_source_sha256": "3db44a1f4e275b51ee1ab6ab7aa9da393a25c7ac9662d3178f2a3b7867e7a9e0",
+      "entrypoint": "TransferValue2Matrix",
+      "arguments": [],
+      "operation_boundary": ["read", "vba", "calculate", "save", "reload"],
+      "expected": {
+        "result_class": "not_measured",
+        "cells": {"Sheet1!A1": 3, "Sheet1!B1": 8, "Sheet1!A2": 9},
+        "formulas_preserved": false,
+        "formulas_absent": ["Sheet1!A1", "Sheet1!B1", "Sheet1!A2", "Sheet1!B2"],
+        "formulas_present": ["Sheet1!D1"],
+        "source_unchanged": true
+      },
+      "allowed_effects": ["temporary_output"],
+      "limits": {"timeout_ms": 10000, "max_cells": 10000},
+      "provenance": {"kind": "synthetic", "source": "elixcee V4a seed"}
+    },
+    {
+      "id": "headless-failure-boundary",
+      "class": "failure_safety",
+      "workbook": "compat/corpus/workbooks/numeric_grid.xlsx",
+      "workbook_sha256": "bcce7871c8f3a9cd572d2f583e4aca98af04d2dba5463df1fbddd952e626dfa3",
+      "vba_source": "compat/vba-workflows/fixtures/FailureBoundary.bas",
+      "vba_source_sha256": "272e185febf217a3969f52ad7b9561a8534e59121c131a69a143abfb2d69bbdd",
+      "entrypoint": "FailsAfterWrite",
+      "arguments": [],
+      "operation_boundary": ["read", "vba", "calculate", "save", "reload"],
+      "expected": {
+        "result_class": "not_measured",
+        "source_unchanged": true
+      },
+      "local": {
+        "result_class": "runtime_error",
+        "existing_output": "existing output must survive runtime failure"
+      },
+      "allowed_effects": ["temporary_output"],
+      "limits": {"timeout_ms": 10000, "max_cells": 10000},
+      "provenance": {"kind": "synthetic", "source": "elixcee V5b failure boundary seed"}
+    }
+  ]
+}

@@ -6,8 +6,8 @@ use std::collections::HashSet;
 
 use crate::diagnostics::{SourceLocation, json_string, locate};
 use crate::parser::{
-    self, CaseMatch, Expr, ObjectExpr, Program, SourceSpan, SpannedStmt, Stmt, WithMember,
-    WithTarget,
+    self, CaseMatch, CollectionTarget, Expr, ObjectExpr, ObjectTarget, ParamMode, Program,
+    SourceSpan, SpannedStmt, Stmt, WithMember, WithTarget,
 };
 use crate::vm;
 
@@ -193,6 +193,7 @@ fn class_scope_names(
     body: &[SpannedStmt],
 ) -> HashSet<String> {
     let mut names = local_scope_names(own_name, params, body);
+    names.extend(prog.module_variables.iter().map(|field| field.name.clone()));
     if prog.is_class_module {
         names.extend(prog.class_fields.iter().map(|field| field.name.clone()));
         names.insert("me".to_string());
@@ -320,6 +321,15 @@ fn collect_declared_names(body: &[SpannedStmt], names: &mut HashSet<String>) {
                 names.insert(name.clone());
             }
             Stmt::Dim => {}
+            Stmt::StaticDecl { declaration } => {
+                collect_declared_names(
+                    std::slice::from_ref(&SpannedStmt {
+                        stmt: (*declaration.clone()),
+                        span: SourceSpan { start: 0, end: 0 },
+                    }),
+                    names,
+                );
+            }
             Stmt::DimBare { var } => {
                 names.insert(var.clone());
             }
@@ -345,6 +355,8 @@ fn collect_declared_names(body: &[SpannedStmt], names: &mut HashSet<String>) {
             }
             Stmt::WithDot { .. } => {}
             Stmt::MsgBox { .. } => {}
+            Stmt::DebugPrint { .. } => {}
+            Stmt::DebugAssert { .. } => {}
             Stmt::RecordSet { var, .. } => {
                 names.insert(var.clone());
             }
@@ -461,6 +473,7 @@ fn nested_bodies(stmt: &Stmt) -> Vec<&[SpannedStmt]> {
         | Stmt::ObjectPropertyLet { .. }
         | Stmt::SetObjectArray { .. }
         | Stmt::Dim
+        | Stmt::StaticDecl { .. }
         | Stmt::DimBare { .. }
         | Stmt::DimArray { .. }
         | Stmt::ReDim { .. }
@@ -468,6 +481,8 @@ fn nested_bodies(stmt: &Stmt) -> Vec<&[SpannedStmt]> {
         | Stmt::Erase { .. }
         | Stmt::WithDot { .. }
         | Stmt::MsgBox { .. }
+        | Stmt::DebugPrint { .. }
+        | Stmt::DebugAssert { .. }
         | Stmt::RecordSet { .. }
         | Stmt::DimRecord { .. }
         | Stmt::DimObjectNew { .. }
@@ -529,7 +544,14 @@ fn collect_func_calls<'a>(expr: &'a Expr, out: &mut Vec<&'a Expr>) {
             collect_func_calls(row_off, out);
             collect_func_calls(col_off, out);
         }
-        Expr::CellsFind { what, .. } => collect_func_calls(what, out),
+        Expr::CellsFind {
+            what, match_case, ..
+        } => {
+            collect_func_calls(what, out);
+            if let Some(match_case) = match_case {
+                collect_func_calls(match_case, out);
+            }
+        }
         Expr::SheetCellRead { sheet, row, col } => {
             collect_func_calls(sheet, out);
             collect_func_calls(row, out);
@@ -566,21 +588,54 @@ fn collect_func_calls<'a>(expr: &'a Expr, out: &mut Vec<&'a Expr>) {
 /// check only fires when the callee's own declared arity is actually known,
 /// which this project only tracks for a Sub/Function defined in the same
 /// module being checked.
-fn resolved_user_proc_arity(
+fn resolved_user_proc_arg_bounds(
     name: &str,
     prog: &Program,
     local_names: &HashSet<String>,
-) -> Option<usize> {
+) -> Option<(usize, Option<usize>)> {
     if local_names.contains(name) {
         return None;
     }
     if let Some(s) = prog.subs.iter().find(|s| s.name == name) {
-        return Some(s.params.len());
+        return Some(param_arg_bounds(&s.param_modes, s.params.len()));
     }
     if let Some(f) = prog.funcs.iter().find(|f| f.name == name) {
-        return Some(f.params.len());
+        return Some(param_arg_bounds(&f.param_modes, f.params.len()));
     }
     None
+}
+
+fn param_arg_bounds(modes: &[ParamMode], param_count: usize) -> (usize, Option<usize>) {
+    let required = modes
+        .iter()
+        .filter(|mode| {
+            !matches!(
+                *mode,
+                ParamMode::OptionalByRef(_) | ParamMode::OptionalByVal(_) | ParamMode::ParamArray
+            )
+        })
+        .count();
+    let max = if modes
+        .iter()
+        .any(|mode| matches!(mode, ParamMode::ParamArray))
+    {
+        None
+    } else {
+        Some(param_count)
+    };
+    (required, max)
+}
+
+fn argument_count_matches(count: usize, bounds: (usize, Option<usize>)) -> bool {
+    count >= bounds.0 && bounds.1.is_none_or(|max| count <= max)
+}
+
+fn format_arg_bounds(bounds: (usize, Option<usize>)) -> String {
+    match bounds.1 {
+        Some(max) if max == bounds.0 => max.to_string(),
+        Some(max) => format!("{}..{}", bounds.0, max),
+        None => format!("{} or more", bounds.0),
+    }
 }
 
 /// The subset of this module's own findings that are genuine VBA
@@ -661,6 +716,279 @@ pub fn compile_check_errors(
     None
 }
 
+/// Strict-profile companion to `compile_check_errors`. When a module declares
+/// `Option Explicit`, reject reads of names that are neither procedure
+/// parameters, explicit `Dim` declarations, nor known built-ins. The normal
+/// compatibility profile deliberately keeps implicit variables enabled.
+pub fn compile_check_errors_strict(
+    prog: &Program,
+    other_module_names: &HashSet<String>,
+) -> Option<(String, SourceSpan)> {
+    if !prog.option_explicit {
+        return None;
+    }
+    for sub in &prog.subs {
+        let declared = explicit_scope_names(&sub.name, &sub.params, &sub.body, prog);
+        if let Some((name, span)) =
+            strict_undeclared_in_body(&sub.body, &declared, prog, other_module_names)
+        {
+            return Some((
+                format!(
+                    "Variable '{}' used without declaration under Option Explicit",
+                    name
+                ),
+                span,
+            ));
+        }
+    }
+    for func in &prog.funcs {
+        let declared = explicit_scope_names(&func.name, &func.params, &func.body, prog);
+        if let Some((name, span)) =
+            strict_undeclared_in_body(&func.body, &declared, prog, other_module_names)
+        {
+            return Some((
+                format!(
+                    "Variable '{}' used without declaration under Option Explicit",
+                    name
+                ),
+                span,
+            ));
+        }
+    }
+    for property in &prog.properties {
+        let declared = explicit_scope_names(&property.name, &property.params, &property.body, prog);
+        if let Some((name, span)) =
+            strict_undeclared_in_body(&property.body, &declared, prog, other_module_names)
+        {
+            return Some((
+                format!(
+                    "Variable '{}' used without declaration under Option Explicit",
+                    name
+                ),
+                span,
+            ));
+        }
+    }
+    None
+}
+
+fn explicit_scope_names(
+    own_name: &str,
+    params: &[String],
+    body: &[SpannedStmt],
+    prog: &Program,
+) -> HashSet<String> {
+    let mut names: HashSet<String> = params.iter().cloned().collect();
+    names.insert(own_name.to_string());
+    names.extend(prog.module_variables.iter().map(|field| field.name.clone()));
+    if prog.is_class_module {
+        names.extend(prog.class_fields.iter().map(|field| field.name.clone()));
+        names.insert("me".to_string());
+    }
+    collect_explicit_declarations(body, &mut names);
+    names
+}
+
+fn collect_explicit_declarations(body: &[SpannedStmt], names: &mut HashSet<String>) {
+    for statement in body {
+        match &statement.stmt {
+            Stmt::DimBare { var }
+            | Stmt::DimRecord { var, .. }
+            | Stmt::DimObjectNew { var, .. } => {
+                names.insert(var.clone());
+            }
+            Stmt::DimArray { name, .. } | Stmt::DimArrayRecord { name, .. } => {
+                names.insert(name.clone());
+            }
+            Stmt::DimMulti(declarations) => {
+                let spanned = declarations_as_spanned(declarations);
+                collect_explicit_declarations(&spanned, names);
+            }
+            Stmt::WithSheet { body, .. }
+            | Stmt::For { body, .. }
+            | Stmt::ForEach { body, .. }
+            | Stmt::DoLoop { body, .. }
+            | Stmt::With { body, .. } => collect_explicit_declarations(body, names),
+            Stmt::If {
+                then_body,
+                else_body,
+                ..
+            } => {
+                collect_explicit_declarations(then_body, names);
+                collect_explicit_declarations(else_body, names);
+            }
+            Stmt::SelectCase {
+                cases, else_body, ..
+            } => {
+                for (_, case_body) in cases {
+                    collect_explicit_declarations(case_body, names);
+                }
+                collect_explicit_declarations(else_body, names);
+            }
+            _ => {}
+        }
+    }
+}
+
+// `DimMulti` stores statements without spans. They are declarations only, so
+// a temporary empty span is sufficient for this name collector.
+fn declarations_as_spanned(declarations: &[Stmt]) -> Vec<SpannedStmt> {
+    declarations
+        .iter()
+        .cloned()
+        .map(|stmt| SpannedStmt {
+            stmt,
+            span: SourceSpan { start: 0, end: 0 },
+        })
+        .collect()
+}
+
+fn strict_undeclared_in_body(
+    body: &[SpannedStmt],
+    declared: &HashSet<String>,
+    prog: &Program,
+    other_module_names: &HashSet<String>,
+) -> Option<(String, SourceSpan)> {
+    for statement in body {
+        let assigned_name = match &statement.stmt {
+            Stmt::Assignment { var, .. }
+            | Stmt::Set { var, .. }
+            | Stmt::ArrayWrite { name: var, .. }
+            | Stmt::RecordSet { var, .. }
+            | Stmt::RecordSetNested { var, .. }
+            | Stmt::ArrayRecordSet { name: var, .. }
+            | Stmt::For { var, .. }
+            | Stmt::ForEach { var, .. } => Some(var.as_str()),
+            _ => None,
+        };
+        if let Some(name) = assigned_name
+            && !declared.contains(name)
+            && !prog.subs.iter().any(|sub| sub.name == name)
+            && !prog.funcs.iter().any(|func| func.name == name)
+            && !other_module_names.contains(name)
+        {
+            return Some((name.to_string(), statement.span));
+        }
+        let mut expressions = Vec::new();
+        collect_stmt_exprs(&statement.stmt, &mut expressions);
+        for expression in expressions {
+            if let Some(name) = find_undeclared_var(expression, declared, prog, other_module_names)
+            {
+                return Some((name.to_string(), statement.span));
+            }
+        }
+        for nested in nested_bodies(&statement.stmt) {
+            if let Some(found) =
+                strict_undeclared_in_body(nested, declared, prog, other_module_names)
+            {
+                return Some(found);
+            }
+        }
+    }
+    None
+}
+
+fn find_undeclared_var<'a>(
+    expression: &'a Expr,
+    declared: &HashSet<String>,
+    prog: &Program,
+    other_module_names: &HashSet<String>,
+) -> Option<&'a str> {
+    let known = |name: &str| {
+        declared.contains(name)
+            || prog.subs.iter().any(|sub| sub.name == name)
+            || prog.funcs.iter().any(|func| func.name == name)
+            || other_module_names.contains(name)
+            || vm::is_known_builtin_function(name)
+            || matches!(
+                name,
+                "true" | "false" | "null" | "empty" | "nothing" | "date" | "now" | "time"
+            )
+    };
+    match expression {
+        Expr::Var(name) => (!known(name)).then_some(name.as_str()),
+        Expr::NamedArg { value, .. } | Expr::UnaryMinus(value) | Expr::UnaryNot(value) => {
+            find_undeclared_var(value, declared, prog, other_module_names)
+        }
+        Expr::BinOp { lhs, rhs, .. } => {
+            find_undeclared_var(lhs, declared, prog, other_module_names)
+                .or_else(|| find_undeclared_var(rhs, declared, prog, other_module_names))
+        }
+        Expr::CellRead { row, col }
+        | Expr::SheetCellRead { row, col, .. }
+        | Expr::CellsEndProp { row, col, .. } => {
+            find_undeclared_var(row, declared, prog, other_module_names)
+                .or_else(|| find_undeclared_var(col, declared, prog, other_module_names))
+        }
+        Expr::FuncCall { args, .. } => args
+            .iter()
+            .find_map(|arg| find_undeclared_var(arg, declared, prog, other_module_names)),
+        Expr::ObjectMethodCall { target, args, .. } => {
+            let receiver = match target {
+                ObjectTarget::Variable(name) => (!known(name)).then_some(name.as_str()),
+                ObjectTarget::CurrentWith => None,
+            };
+            receiver.or_else(|| {
+                args.iter()
+                    .find_map(|arg| find_undeclared_var(arg, declared, prog, other_module_names))
+            })
+        }
+        Expr::RangeOffsetRead {
+            row_off, col_off, ..
+        } => find_undeclared_var(row_off, declared, prog, other_module_names)
+            .or_else(|| find_undeclared_var(col_off, declared, prog, other_module_names)),
+        Expr::CellsFind {
+            what, match_case, ..
+        } => find_undeclared_var(what, declared, prog, other_module_names).or_else(|| {
+            match_case
+                .as_deref()
+                .and_then(|expr| find_undeclared_var(expr, declared, prog, other_module_names))
+        }),
+        Expr::SheetRangeRead { sheet, .. } => {
+            find_undeclared_var(sheet, declared, prog, other_module_names)
+        }
+        Expr::WorkbookQualifiedSheet { workbook, sheet } => {
+            find_undeclared_var(workbook, declared, prog, other_module_names)
+                .or_else(|| find_undeclared_var(sheet, declared, prog, other_module_names))
+        }
+        Expr::CollectionItem { target, index } => {
+            let receiver = match target {
+                CollectionTarget::Variable(name) => (!known(name)).then_some(name.as_str()),
+                CollectionTarget::CurrentWith => None,
+            };
+            receiver.or_else(|| find_undeclared_var(index, declared, prog, other_module_names))
+        }
+        Expr::ArrayRecordGet { name, indices, .. } => {
+            (!known(name)).then_some(name.as_str()).or_else(|| {
+                indices.iter().find_map(|index| {
+                    find_undeclared_var(index, declared, prog, other_module_names)
+                })
+            })
+        }
+        Expr::Integer(_)
+        | Expr::Float(_)
+        | Expr::Str(_)
+        | Expr::Bool(_)
+        | Expr::OmittedArg
+        | Expr::RangeRead { .. }
+        | Expr::RowsCount
+        | Expr::ColsCount
+        | Expr::ActiveSheetRef
+        | Expr::WithDot(_)
+        | Expr::ErrNumber
+        | Expr::ErrDescription
+        | Expr::ErrSource
+        | Expr::ErrHelpFile
+        | Expr::ErrHelpContext => None,
+        Expr::ObjectVarSheet(name) | Expr::IsNothing(name) => {
+            (!known(name)).then_some(name.as_str())
+        }
+        Expr::RecordGet { var, .. } | Expr::RecordGetNested { var, .. } => {
+            (!known(var)).then_some(var.as_str())
+        }
+    }
+}
+
 fn check_body_for_compile_errors(
     body: &[SpannedStmt],
     prog: &Program,
@@ -683,14 +1011,14 @@ fn check_body_for_compile_errors(
                 if !is_resolvable(name, prog, local_names, other_module_names) {
                     return Some((format!("Sub/Function '{}' not found", name), s.span));
                 }
-                if let Some(arity) = resolved_user_proc_arity(name, prog, local_names)
-                    && args.len() != arity
+                if let Some(bounds) = resolved_user_proc_arg_bounds(name, prog, local_names)
+                    && !argument_count_matches(args.len(), bounds)
                 {
                     return Some((
                         format!(
                             "'{}' expects {} argument(s), got {}",
                             name,
-                            arity,
+                            format_arg_bounds(bounds),
                             args.len()
                         ),
                         s.span,
@@ -723,14 +1051,14 @@ fn check_body_for_compile_errors(
                         .unwrap_or_else(|| format!("Unknown VBA function: '{}'", name));
                     return Some((msg, s.span));
                 }
-                if let Some(arity) = resolved_user_proc_arity(name, prog, local_names)
-                    && args.len() != arity
+                if let Some(bounds) = resolved_user_proc_arg_bounds(name, prog, local_names)
+                    && !argument_count_matches(args.len(), bounds)
                 {
                     return Some((
                         format!(
                             "'{}' expects {} argument(s), got {}",
                             name,
-                            arity,
+                            format_arg_bounds(bounds),
                             args.len()
                         ),
                         s.span,
@@ -844,8 +1172,8 @@ fn collect_extra_compile_diagnostics_body(
                 });
             }
             Stmt::CallSub { name, args } => {
-                if let Some(arity) = resolved_user_proc_arity(name, prog, local_names)
-                    && args.len() != arity
+                if let Some(bounds) = resolved_user_proc_arg_bounds(name, prog, local_names)
+                    && !argument_count_matches(args.len(), bounds)
                 {
                     diags.push(Diagnostic {
                         severity: "error",
@@ -854,7 +1182,7 @@ fn collect_extra_compile_diagnostics_body(
                         message: format!(
                             "'{}' expects {} argument(s), got {}",
                             name,
-                            arity,
+                            format_arg_bounds(bounds),
                             args.len()
                         ),
                         location: Some(locate(source, file, s.span)),
@@ -873,8 +1201,8 @@ fn collect_extra_compile_diagnostics_body(
                 let Expr::FuncCall { name, args } = call else {
                     continue;
                 };
-                if let Some(arity) = resolved_user_proc_arity(name, prog, local_names)
-                    && args.len() != arity
+                if let Some(bounds) = resolved_user_proc_arg_bounds(name, prog, local_names)
+                    && !argument_count_matches(args.len(), bounds)
                 {
                     diags.push(Diagnostic {
                         severity: "error",
@@ -883,7 +1211,7 @@ fn collect_extra_compile_diagnostics_body(
                         message: format!(
                             "'{}' expects {} argument(s), got {}",
                             name,
-                            arity,
+                            format_arg_bounds(bounds),
                             args.len()
                         ),
                         location: Some(locate(source, file, s.span)),
@@ -1049,6 +1377,7 @@ fn walk_body(
 fn collect_stmt_exprs<'a>(stmt: &'a Stmt, out: &mut Vec<&'a Expr>) {
     match stmt {
         Stmt::Assignment { value, .. } => out.push(value),
+        Stmt::StaticDecl { declaration } => collect_stmt_exprs(declaration, out),
         Stmt::CellWrite { row, col, value } => {
             out.push(row);
             out.push(col);
@@ -1248,6 +1577,8 @@ fn collect_stmt_exprs<'a>(stmt: &'a Stmt, out: &mut Vec<&'a Expr>) {
             out.push(value);
         }
         Stmt::MsgBox { message } => out.push(message),
+        Stmt::DebugPrint { values } => out.extend(values),
+        Stmt::DebugAssert { condition } => out.push(condition),
         Stmt::RecordSet { value, .. } => out.push(value),
         Stmt::DimRecord { .. } => {}
         Stmt::DimObjectNew { value, .. } => collect_object_exprs(value, out),
@@ -1449,16 +1780,32 @@ fn walk_expr(
                 diags,
             );
         }
-        Expr::CellsFind { what, .. } => walk_expr(
-            what,
-            prog,
-            local_names,
-            other_module_names,
-            stmt_span,
-            source,
-            file,
-            diags,
-        ),
+        Expr::CellsFind {
+            what, match_case, ..
+        } => {
+            walk_expr(
+                what,
+                prog,
+                local_names,
+                other_module_names,
+                stmt_span,
+                source,
+                file,
+                diags,
+            );
+            if let Some(match_case) = match_case {
+                walk_expr(
+                    match_case,
+                    prog,
+                    local_names,
+                    other_module_names,
+                    stmt_span,
+                    source,
+                    file,
+                    diags,
+                );
+            }
+        }
         Expr::SheetCellRead { sheet, row, col } => {
             walk_expr(
                 sheet,
@@ -1585,11 +1932,24 @@ fn walk_expr(
                 );
             }
         }
+        Expr::NamedArg { value, .. } => {
+            walk_expr(
+                value,
+                prog,
+                local_names,
+                other_module_names,
+                stmt_span,
+                source,
+                file,
+                diags,
+            );
+        }
         Expr::Integer(_)
         | Expr::Float(_)
         | Expr::Str(_)
         | Expr::Bool(_)
         | Expr::Var(_)
+        | Expr::OmittedArg
         | Expr::RangeRead { .. }
         | Expr::RowsCount
         | Expr::ColsCount
@@ -1692,6 +2052,36 @@ mod tests {
     fn entrypoint_check_is_case_insensitive() {
         let diags = run_check("Sub Main()\n    x = 1\nEnd Sub\n", "f.bas", Some("MAIN"));
         assert!(diags.is_empty());
+    }
+
+    #[test]
+    fn strict_compile_check_rejects_undeclared_option_explicit_reads() {
+        let prog = parser::parse("Option Explicit\nSub Main()\n    Dim total As Long\n    total = missing + 1\nEnd Sub\n").unwrap();
+        let (message, span) = compile_check_errors_strict(&prog, &HashSet::new()).unwrap();
+        assert_eq!(
+            message,
+            "Variable 'missing' used without declaration under Option Explicit"
+        );
+        assert!(span.end > span.start);
+    }
+
+    #[test]
+    fn strict_compile_check_allows_explicit_dim_reads() {
+        let prog = parser::parse(
+            "Option Explicit\nSub Main()\n    Dim total As Long\n    total = 1\nEnd Sub\n",
+        )
+        .unwrap();
+        assert!(compile_check_errors_strict(&prog, &HashSet::new()).is_none());
+    }
+
+    #[test]
+    fn strict_compile_check_rejects_undeclared_assignment_targets() {
+        let prog = parser::parse("Option Explicit\nSub Main()\n    total = 1\nEnd Sub\n").unwrap();
+        let (message, _) = compile_check_errors_strict(&prog, &HashSet::new()).unwrap();
+        assert_eq!(
+            message,
+            "Variable 'total' used without declaration under Option Explicit"
+        );
     }
 
     #[test]
@@ -1970,21 +2360,13 @@ mod tests {
     // ── unsupported-construct detection (I1002) ─────────────────────────────
 
     #[test]
-    fn debug_print_is_an_unsupported_construct_diagnostic() {
+    fn debug_print_is_not_an_unsupported_construct_diagnostic() {
         let diags = run_check(
             "Sub Main()\n    Debug.Print \"hi\"\nEnd Sub\n",
             "f.bas",
             Some("Main"),
         );
-        assert_eq!(codes(&diags), vec!["I1002"]);
-        assert_eq!(diags[0].severity, "info");
-        assert_eq!(diags[0].kind, "unsupported_construct");
-        assert!(
-            diags[0].message.contains("Debug.Print"),
-            "{:?}",
-            diags[0].message
-        );
-        assert_eq!(diags[0].location.as_ref().unwrap().line, 2);
+        assert!(diags.is_empty());
     }
 
     #[test]
@@ -2073,7 +2455,7 @@ mod tests {
             "f.bas",
             Some("Main"),
         );
-        assert_eq!(codes(&diags), vec!["I1002"]);
+        assert!(diags.is_empty());
     }
 
     #[test]
@@ -2095,21 +2477,22 @@ mod tests {
             "f.bas",
             Some("Main"),
         );
-        assert_eq!(codes(&diags), vec!["I1002", "E1002"]);
+        assert_eq!(codes(&diags), vec!["E1002"]);
         assert!(!all_ok(&diags));
     }
 
     #[test]
-    fn module_level_const_with_modifier_is_an_unsupported_construct_diagnostic() {
+    fn module_level_const_with_modifier_is_supported() {
         let diags = run_check(
             "Public Const MAX_RETRIES = 5\nSub Main()\n    a = 1\nEnd Sub\n",
             "f.bas",
             Some("Main"),
         );
-        assert_eq!(codes(&diags), vec!["I1002"]);
-        assert_eq!(diags[0].severity, "info");
-        assert!(diags[0].message.contains("Const"), "{:?}", diags[0].message);
-        assert_eq!(diags[0].location.as_ref().unwrap().line, 1);
+        assert!(
+            codes(&diags).is_empty(),
+            "unexpected diagnostics: {}",
+            codes(&diags).join(",")
+        );
         assert!(all_ok(&diags));
     }
 

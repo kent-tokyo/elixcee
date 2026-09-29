@@ -26,6 +26,8 @@ use std::sync::{
 use std::time::{Duration, Instant};
 #[cfg(test)]
 use vm::CellContent;
+#[cfg(feature = "python")]
+use vm::RuntimeFailureKind;
 #[cfg(any(feature = "python", test))]
 use vm::{FillEdit, StyleAttrEdit};
 use vm::{Variant, Vm, WorksheetOrigin};
@@ -36,6 +38,39 @@ use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
 #[cfg(feature = "python")]
 use vm::{ExcelError, serial_to_display};
+
+// A Rust panic escaping a PyO3 entry point becomes PanicException, which is a
+// BaseException-only type. Keep reader/diagnostic failures catchable by normal
+// Python `except Exception` handlers.
+#[cfg(feature = "python")]
+pyo3::create_exception!(
+    elixcee,
+    InternalError,
+    pyo3::exceptions::PyRuntimeError,
+    "An internal elixcee bug was hit (a Rust panic)."
+);
+
+#[cfg(feature = "python")]
+fn panic_payload_message(payload: &(dyn std::any::Any + Send)) -> String {
+    if let Some(message) = payload.downcast_ref::<&str>() {
+        (*message).to_string()
+    } else if let Some(message) = payload.downcast_ref::<String>() {
+        message.clone()
+    } else {
+        "unknown panic payload".to_string()
+    }
+}
+
+#[cfg(feature = "python")]
+pub(crate) fn contain_panic<T>(context: &str, f: impl FnOnce() -> PyResult<T>) -> PyResult<T> {
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)) {
+        Ok(result) => result,
+        Err(payload) => Err(InternalError::new_err(format!(
+            "elixcee internal error while {context}: {}",
+            panic_payload_message(payload.as_ref())
+        ))),
+    }
+}
 
 // ── ExcelError Python class ───────────────────────────────────────────────────
 
@@ -604,8 +639,43 @@ pub struct PyVm {
     inner: Vm,
     timeout_ms: Option<u64>,
     program_cache: Option<(String, parser::Program)>,
+    last_termination_class: Option<String>,
     #[cfg(test)]
     program_parse_count: u32,
+}
+
+#[cfg(feature = "python")]
+fn record_termination(vm: &mut PyVm, class: &'static str) {
+    vm.last_termination_class = Some(class.to_owned());
+}
+
+#[cfg(feature = "python")]
+fn record_error_termination(vm: &mut PyVm, message: &str) {
+    let failure = vm.inner.take_runtime_failure();
+    let class = if message.starts_with("TIMEOUT:") {
+        "timeout"
+    } else if message.starts_with("CANCELED:") {
+        "canceled"
+    } else if matches!(
+        failure,
+        Some(RuntimeFailureKind::SecurityBlockedExternalEffect | RuntimeFailureKind::MsgBoxBlocked)
+    ) {
+        "policy_blocked"
+    } else if message.starts_with("Parse error") || message.starts_with("parse error") {
+        "parse_error"
+    } else {
+        "runtime_error"
+    };
+    record_termination(vm, class);
+}
+
+#[cfg(feature = "python")]
+fn exception_for_error(message: String) -> PyErr {
+    if message.starts_with("TIMEOUT:") {
+        PyErr::new::<pyo3::exceptions::PyTimeoutError, _>(message)
+    } else {
+        PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(message)
+    }
 }
 
 #[cfg(feature = "python")]
@@ -622,6 +692,14 @@ fn validate_execution_timeout_ms(timeout_ms: Option<u64>) -> PyResult<()> {
 #[cfg(feature = "python")]
 #[pymethods]
 impl PyVm {
+    /// Return the stable category for the most recent Python execution.
+    /// This is ``None`` before the first execution, and does not replace the
+    /// existing Python exception raised for a failed execution.
+    #[getter]
+    fn last_termination_class(&self) -> Option<String> {
+        self.last_termination_class.clone()
+    }
+
     #[new]
     #[pyo3(signature = (on_msgbox = "skip", timeout_ms = None))]
     fn new(on_msgbox: &str, timeout_ms: Option<u64>) -> PyResult<Self> {
@@ -632,9 +710,18 @@ impl PyVm {
             inner: vm,
             timeout_ms,
             program_cache: None,
+            last_termination_class: None,
             #[cfg(test)]
             program_parse_count: 0,
         })
+    }
+
+    /// Attach a host-owned cooperative cancellation handle to VBA execution and
+    /// recalculation. Passing ``None`` clears the handle; the same handle may be
+    /// canceled from another Python thread while a batch is running.
+    fn set_cancellation(&mut self, cancellation: Option<PyRef<'_, PyReadCancellation>>) {
+        self.inner
+            .set_cancellation(cancellation.map(|value| value.flag.clone()));
     }
 
     /// Configure deterministic VBA value/execution budgets for this VM.
@@ -682,17 +769,88 @@ impl PyVm {
         Ok(())
     }
 
+    /// Enable a bounded, redaction-safe execution trace. Trace records never
+    /// include cell values or formulas and are available through
+    /// :meth:`take_trace` after :meth:`run` returns (including on failure).
+    #[pyo3(signature = (execution_id, source_hash, max_events = 4096, max_bytes = 262144))]
+    fn enable_trace(
+        &mut self,
+        execution_id: &str,
+        source_hash: &str,
+        max_events: usize,
+        max_bytes: usize,
+    ) -> PyResult<()> {
+        if max_events == 0 {
+            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+                "max_events must be greater than zero",
+            ));
+        }
+        if max_bytes == 0 {
+            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+                "max_bytes must be greater than zero",
+            ));
+        }
+        self.inner
+            .enable_trace_with_limits(execution_id, source_hash, max_events, max_bytes);
+        Ok(())
+    }
+
+    /// Select the headless policy for a failed ``Debug.Assert``. ``"ignore"``
+    /// preserves VBA batch compatibility; ``"error"`` returns a runtime
+    /// failure instead of attempting GUI/VBE break behavior.
+    fn set_debug_assert_policy(&mut self, policy: &str) -> PyResult<()> {
+        self.inner.debug_assert_policy = match policy.to_ascii_lowercase().as_str() {
+            "ignore" => crate::vm::DebugAssertPolicy::Ignore,
+            "error" => crate::vm::DebugAssertPolicy::Error,
+            _ => {
+                return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+                    "debug assert policy must be 'ignore' or 'error'",
+                ));
+            }
+        };
+        Ok(())
+    }
+
+    /// Drain the redaction-safe execution trace as a list of dictionaries.
+    fn take_trace(&mut self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        let events = PyList::empty(py);
+        for event in self.inner.take_trace() {
+            let item = PyDict::new(py);
+            item.set_item("sequence", event.sequence)?;
+            item.set_item("execution_id", event.execution_id)?;
+            item.set_item("source_hash", event.source_hash)?;
+            item.set_item("kind", event.kind)?;
+            item.set_item("procedure", event.procedure)?;
+            let span = event.span.map(|span| {
+                let value = PyDict::new(py);
+                value.set_item("start", span.start)?;
+                value.set_item("end", span.end)?;
+                Ok::<_, PyErr>(value.unbind().into_any())
+            });
+            match span {
+                Some(value) => item.set_item("span", value?)?,
+                None => item.set_item("span", py.None())?,
+            }
+            item.set_item("detail", event.detail)?;
+            events.append(item)?;
+        }
+        Ok(events.into_any().unbind())
+    }
+
     /// Parse and execute *vba_code*, running the Sub named *macro_name*.
     #[pyo3(signature = (vba_code, macro_name, timeout_ms = None))]
     fn run(&mut self, vba_code: &str, macro_name: &str, timeout_ms: Option<u64>) -> PyResult<()> {
         validate_execution_timeout_ms(timeout_ms)?;
+        self.last_termination_class = None;
         if self
             .program_cache
             .as_ref()
             .is_none_or(|(cached_source, _)| cached_source != vba_code)
         {
-            let prog = parser::parse(vba_code)
-                .map_err(|e| PyErr::new::<pyo3::exceptions::PySyntaxError, _>(e.to_string()))?;
+            let prog = parser::parse(vba_code).map_err(|e| {
+                record_termination(self, "parse_error");
+                PyErr::new::<pyo3::exceptions::PySyntaxError, _>(e.to_string())
+            })?;
             self.program_cache = Some((vba_code.to_owned(), prog));
             #[cfg(test)]
             {
@@ -706,15 +864,65 @@ impl PyVm {
             .1;
         let timeout_ms = timeout_ms.or(self.timeout_ms);
         self.inner.deadline = timeout_ms.map(|ms| Instant::now() + Duration::from_millis(ms));
-        let result = self.inner.run_sub(prog, macro_name).map_err(|err| {
-            if err.starts_with("TIMEOUT:") {
-                PyErr::new::<pyo3::exceptions::PyTimeoutError, _>(err)
-            } else {
-                PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(err)
-            }
-        });
+        let result = self.inner.run_sub(prog, macro_name);
         self.inner.deadline = None;
-        result
+        match result {
+            Ok(()) => {
+                record_termination(self, "success");
+                Ok(())
+            }
+            Err(err) => {
+                record_error_termination(self, &err);
+                Err(exception_for_error(err))
+            }
+        }
+    }
+
+    /// Execute a VBA macro, recalculate the workbook, and publish it through
+    /// the durable atomic-save path. If execution or recalculation fails,
+    /// the destination is not touched; if saving fails, an existing
+    /// destination remains intact.
+    #[pyo3(signature = (vba_code, macro_name, output_path, timeout_ms = None))]
+    fn run_and_save(
+        &mut self,
+        vba_code: &str,
+        macro_name: &str,
+        output_path: &str,
+        timeout_ms: Option<u64>,
+    ) -> PyResult<()> {
+        // Execute on an isolated fork. A failed macro or recalculation may have
+        // performed earlier writes; those must not contaminate the reusable host VM
+        // even though the destination file is already protected by atomic publish.
+        let mut candidate = PyVm {
+            inner: self.inner.fork(),
+            timeout_ms: self.timeout_ms,
+            program_cache: self.program_cache.clone(),
+            last_termination_class: None,
+            #[cfg(test)]
+            program_parse_count: 0,
+        };
+        if let Err(error) = candidate.run(vba_code, macro_name, timeout_ms) {
+            self.last_termination_class = candidate.last_termination_class;
+            return Err(error);
+        }
+        if let Err(error) = candidate.inner.recalculate_all_with_spills() {
+            record_error_termination(&mut candidate, &error);
+            self.last_termination_class = candidate.last_termination_class;
+            return Err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(error));
+        }
+        if let Err(error) = save_workbook_verified_impl(&candidate.inner, output_path) {
+            record_termination(&mut candidate, "io_error");
+            self.last_termination_class = candidate.last_termination_class;
+            return Err(PyErr::new::<pyo3::exceptions::PyIOError, _>(error));
+        }
+        self.inner = candidate.inner;
+        self.program_cache = candidate.program_cache;
+        #[cfg(test)]
+        {
+            self.program_parse_count += candidate.program_parse_count;
+        }
+        record_termination(self, "success");
+        Ok(())
     }
 
     /// Parse and execute *macro_name*, dispatching ``Workbook_Open`` first
@@ -729,13 +937,16 @@ impl PyVm {
         timeout_ms: Option<u64>,
     ) -> PyResult<()> {
         validate_execution_timeout_ms(timeout_ms)?;
+        self.last_termination_class = None;
         if self
             .program_cache
             .as_ref()
             .is_none_or(|(cached_source, _)| cached_source != vba_code)
         {
-            let prog = parser::parse(vba_code)
-                .map_err(|e| PyErr::new::<pyo3::exceptions::PySyntaxError, _>(e.to_string()))?;
+            let prog = parser::parse(vba_code).map_err(|e| {
+                record_termination(self, "parse_error");
+                PyErr::new::<pyo3::exceptions::PySyntaxError, _>(e.to_string())
+            })?;
             self.program_cache = Some((vba_code.to_owned(), prog));
             #[cfg(test)]
             {
@@ -749,18 +960,18 @@ impl PyVm {
             .1;
         let timeout_ms = timeout_ms.or(self.timeout_ms);
         self.inner.deadline = timeout_ms.map(|ms| Instant::now() + Duration::from_millis(ms));
-        let result = self
-            .inner
-            .run_sub_with_events(prog, macro_name)
-            .map_err(|err| {
-                if err.starts_with("TIMEOUT:") {
-                    PyErr::new::<pyo3::exceptions::PyTimeoutError, _>(err)
-                } else {
-                    PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(err)
-                }
-            });
+        let result = self.inner.run_sub_with_events(prog, macro_name);
         self.inner.deadline = None;
-        result
+        match result {
+            Ok(()) => {
+                record_termination(self, "success");
+                Ok(())
+            }
+            Err(err) => {
+                record_error_termination(self, &err);
+                Err(exception_for_error(err))
+            }
+        }
     }
 
     /// Dispatch an explicitly requested zero-argument VBA event procedure.
@@ -776,16 +987,25 @@ impl PyVm {
         timeout_ms: Option<u64>,
     ) -> PyResult<bool> {
         validate_execution_timeout_ms(timeout_ms)?;
-        let prog = parser::parse(vba_code)
-            .map_err(|e| PyErr::new::<pyo3::exceptions::PySyntaxError, _>(e.to_string()))?;
+        self.last_termination_class = None;
+        let prog = parser::parse(vba_code).map_err(|e| {
+            record_termination(self, "parse_error");
+            PyErr::new::<pyo3::exceptions::PySyntaxError, _>(e.to_string())
+        })?;
         let timeout_ms = timeout_ms.or(self.timeout_ms);
         self.inner.deadline = timeout_ms.map(|ms| Instant::now() + Duration::from_millis(ms));
-        let result = self
-            .inner
-            .run_event(&prog, event_name)
-            .map_err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>);
+        let result = self.inner.run_event(&prog, event_name);
         self.inner.deadline = None;
-        result
+        match result {
+            Ok(value) => {
+                record_termination(self, "success");
+                Ok(value)
+            }
+            Err(err) => {
+                record_error_termination(self, &err);
+                Err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(err))
+            }
+        }
     }
 
     /// Dispatch ``Worksheet_Change(Target)`` with an explicit A1 target range
@@ -798,16 +1018,25 @@ impl PyVm {
         timeout_ms: Option<u64>,
     ) -> PyResult<bool> {
         validate_execution_timeout_ms(timeout_ms)?;
-        let prog = parser::parse(vba_code)
-            .map_err(|e| PyErr::new::<pyo3::exceptions::PySyntaxError, _>(e.to_string()))?;
+        self.last_termination_class = None;
+        let prog = parser::parse(vba_code).map_err(|e| {
+            record_termination(self, "parse_error");
+            PyErr::new::<pyo3::exceptions::PySyntaxError, _>(e.to_string())
+        })?;
         let timeout_ms = timeout_ms.or(self.timeout_ms);
         self.inner.deadline = timeout_ms.map(|ms| Instant::now() + Duration::from_millis(ms));
-        let result = self
-            .inner
-            .run_worksheet_change(&prog, target_address)
-            .map_err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>);
+        let result = self.inner.run_worksheet_change(&prog, target_address);
         self.inner.deadline = None;
-        result
+        match result {
+            Ok(value) => {
+                record_termination(self, "success");
+                Ok(value)
+            }
+            Err(err) => {
+                record_error_termination(self, &err);
+                Err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(err))
+            }
+        }
     }
 
     /// Set ``Application.EnableEvents`` for explicit headless event dispatch.
@@ -882,6 +1111,7 @@ impl PyVm {
             inner: self.inner.fork(),
             timeout_ms: self.timeout_ms,
             program_cache: self.program_cache.clone(),
+            last_termination_class: None,
             #[cfg(test)]
             program_parse_count: 0,
         }
@@ -1996,6 +2226,40 @@ impl PyVm {
             .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)?;
         let grid = self.inner.read_rect(&key, start.0, start.1, end.0, end.1);
         grid_to_py(py, &grid)
+    }
+
+    /// Read the stored formula text for a rectangular range. The returned
+    /// row-major grid contains ``None`` for value-only/empty cells and the
+    /// original formula string for formula cells; calculated values are read
+    /// separately with :meth:`get_range`.
+    #[pyo3(signature = (addr, sheet = None))]
+    fn get_range_formulas(
+        &self,
+        py: Python<'_>,
+        addr: &str,
+        sheet: Option<&str>,
+    ) -> PyResult<Py<PyAny>> {
+        let (start, end) =
+            validate_range_addr(addr).map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)?;
+        let key = self
+            .inner
+            .resolve_sheet_key(sheet)
+            .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)?;
+        let formulas = self
+            .inner
+            .read_formula_rect(&key, start.0, start.1, end.0, end.1);
+        let rows = PyList::empty(py);
+        for row in formulas {
+            let cells = PyList::empty(py);
+            for formula in row {
+                match formula {
+                    Some(formula) => cells.append(formula)?,
+                    None => cells.append(py.None())?,
+                }
+            }
+            rows.append(cells)?;
+        }
+        Ok(rows.into_any().unbind())
     }
 
     /// Write a rectangular range (e.g. ``"A1:C2"``), 1-based A1 notation.
@@ -3983,22 +4247,24 @@ fn grid_to_py(py: Python<'_>, grid: &[Vec<Variant>]) -> PyResult<Py<PyAny>> {
 #[pyfunction]
 #[pyo3(signature = (vba_code, macro_name, workbook_path))]
 fn diagnose_macro(vba_code: &str, macro_name: &str, workbook_path: &str) -> PyResult<String> {
-    let program = parser::parse(vba_code)
-        .map_err(|e| PyErr::new::<pyo3::exceptions::PySyntaxError, _>(e.to_string()))?;
-    let programs = vec![("python".to_string(), program)];
-    let diagnosis = diagnose::run_diagnosis(&programs, workbook_path, macro_name)
-        .map_err(PyErr::new::<pyo3::exceptions::PyIOError, _>)?;
-    let location = diagnosis
-        .span
-        .map(|span| diagnostics::locate(vba_code, "<vba>", span));
-    let copy_location = diagnosis
-        .copy_span
-        .map(|span| diagnostics::locate(vba_code, "<vba>", span));
-    Ok(diagnose::to_json(
-        &diagnosis,
-        location.as_ref(),
-        copy_location.as_ref(),
-    ))
+    contain_panic("diagnosing macro", || {
+        let program = parser::parse(vba_code)
+            .map_err(|e| PyErr::new::<pyo3::exceptions::PySyntaxError, _>(e.to_string()))?;
+        let programs = vec![("python".to_string(), program)];
+        let diagnosis = diagnose::run_diagnosis(&programs, workbook_path, macro_name)
+            .map_err(PyErr::new::<pyo3::exceptions::PyIOError, _>)?;
+        let location = diagnosis
+            .span
+            .map(|span| diagnostics::locate(vba_code, "<vba>", span));
+        let copy_location = diagnosis
+            .copy_span
+            .map(|span| diagnostics::locate(vba_code, "<vba>", span));
+        Ok(diagnose::to_json(
+            &diagnosis,
+            location.as_ref(),
+            copy_location.as_ref(),
+        ))
+    })
 }
 
 /// Run a VBA macro string and return the resulting cells as ``{(row, col): value}``.
@@ -4064,59 +4330,62 @@ fn load_workbook(
     cancellation: Option<PyRef<'_, PyReadCancellation>>,
     external_links: &str,
 ) -> PyResult<PyVm> {
-    let external_links = match external_links.to_ascii_lowercase().as_str() {
-        "preserve" => reader::ExternalLinksPolicy::Preserve,
-        "reject" => reader::ExternalLinksPolicy::Reject,
-        "drop" => reader::ExternalLinksPolicy::Drop,
-        _ => {
+    contain_panic("loading workbook", || {
+        let external_links = match external_links.to_ascii_lowercase().as_str() {
+            "preserve" => reader::ExternalLinksPolicy::Preserve,
+            "reject" => reader::ExternalLinksPolicy::Reject,
+            "drop" => reader::ExternalLinksPolicy::Drop,
+            _ => {
+                return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+                    "external_links must be 'preserve', 'reject', or 'drop'",
+                ));
+            }
+        };
+        let options = reader::ReadOptions {
+            max_work_units: max_work_units.or(Some(reader::DEFAULT_READ_MAX_WORK_UNITS)),
+            timeout_ms,
+            cancellation: cancellation.map(|value| value.flag.clone()),
+            external_links,
+        };
+        options
+            .validate()
+            .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)?;
+        let sheets = reader::read_workbook_with_options(path, &options)
+            .map_err(PyErr::new::<pyo3::exceptions::PyIOError, _>)?;
+
+        if sheets.is_empty() {
             return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-                "external_links must be 'preserve', 'reject', or 'drop'",
+                "Workbook has no sheets",
             ));
         }
-    };
-    let options = reader::ReadOptions {
-        max_work_units: max_work_units.or(Some(reader::DEFAULT_READ_MAX_WORK_UNITS)),
-        timeout_ms,
-        cancellation: cancellation.map(|value| value.flag.clone()),
-        external_links,
-    };
-    options
-        .validate()
-        .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)?;
-    let sheets = reader::read_workbook_with_options(path, &options)
-        .map_err(PyErr::new::<pyo3::exceptions::PyIOError, _>)?;
 
-    if sheets.is_empty() {
-        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-            "Workbook has no sheets",
-        ));
-    }
+        let mut vm = Vm::new();
+        vm.error_on_msgbox = on_msgbox == "error";
+        vm.external_links_policy = external_links;
+        vm.set_workbook_date1904(
+            reader::xlsx_date1904_for_path(path)
+                .map_err(PyErr::new::<pyo3::exceptions::PyIOError, _>)?,
+        );
+        vm.populate_from_sheets(sheets);
+        vm.loaded_workbook_path = Some(path.to_string());
+        vm.load_sheet_code_names(path)
+            .map_err(PyErr::new::<pyo3::exceptions::PyIOError, _>)?;
+        vm.load_simple_defined_names(path)
+            .map_err(PyErr::new::<pyo3::exceptions::PyIOError, _>)?;
 
-    let mut vm = Vm::new();
-    vm.error_on_msgbox = on_msgbox == "error";
-    vm.external_links_policy = external_links;
-    vm.set_workbook_date1904(
-        reader::xlsx_date1904_for_path(path)
-            .map_err(PyErr::new::<pyo3::exceptions::PyIOError, _>)?,
-    );
-    vm.populate_from_sheets(sheets);
-    vm.loaded_workbook_path = Some(path.to_string());
-    vm.load_sheet_code_names(path)
-        .map_err(PyErr::new::<pyo3::exceptions::PyIOError, _>)?;
-    vm.load_simple_defined_names(path)
-        .map_err(PyErr::new::<pyo3::exceptions::PyIOError, _>)?;
+        if let Some(s) = sheet {
+            vm.set_active_sheet(&s.to_lowercase())
+                .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)?;
+        }
 
-    if let Some(s) = sheet {
-        vm.set_active_sheet(&s.to_lowercase())
-            .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)?;
-    }
-
-    Ok(PyVm {
-        inner: vm,
-        timeout_ms: None,
-        program_cache: None,
-        #[cfg(test)]
-        program_parse_count: 0,
+        Ok(PyVm {
+            inner: vm,
+            timeout_ms: None,
+            program_cache: None,
+            last_termination_class: None,
+            #[cfg(test)]
+            program_parse_count: 0,
+        })
     })
 }
 
@@ -4131,6 +4400,13 @@ fn hello() -> &'static str {
 /// Save all sheets in `vm` to a file. Supports `.xlsx` and `.ods`.
 pub fn save_workbook(vm: &Vm, path: &str) -> Result<(), String> {
     save_workbook_impl(vm, path)
+}
+
+/// Save a headless batch result only after the generated workbook passes
+/// elixcee's own reader roundtrip. This is the safe boundary for callers that
+/// must not publish an artifact that the same runtime cannot reopen.
+pub fn save_workbook_verified(vm: &Vm, path: &str) -> Result<(), String> {
+    save_workbook_verified_impl(vm, path)
 }
 
 /// Save an XLSX without the final filesystem durability barrier. Intended for
@@ -4197,7 +4473,17 @@ fn save_workbook_impl_with_sync(vm: &Vm, path: &str, sync: bool) -> Result<(), S
     if path.to_lowercase().ends_with(".ods") {
         return save_ods_impl(vm, path);
     }
-    save_xlsx_impl(vm, path, sync)
+    save_xlsx_impl(vm, path, sync, false)
+}
+
+/// Save a batch output and require the package to be readable by elixcee's own
+/// headless reader before publishing it. Ordinary saves retain their lower-overhead path.
+fn save_workbook_verified_impl(vm: &Vm, path: &str) -> Result<(), String> {
+    validate_output_extension(path)?;
+    if path.to_lowercase().ends_with(".ods") {
+        return save_ods_impl(vm, path);
+    }
+    save_xlsx_impl(vm, path, true, true)
 }
 
 /// Keep the file-format contract explicit: the writer must not silently emit
@@ -4314,10 +4600,14 @@ fn create_atomic_output_temp(path: &str) -> Result<(std::path::PathBuf, std::fs:
         .file_name()
         .ok_or_else(|| "output path must name a file".to_string())?
         .to_string_lossy();
+    let extension = output
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .unwrap_or("tmp");
     let prefix = format!(".{filename}.elixcee-tmp-{}", std::process::id());
 
     for attempt in 0..100u32 {
-        let temporary = parent.join(format!("{prefix}-{attempt}"));
+        let temporary = parent.join(format!("{prefix}-{attempt}.{extension}"));
         let mut options = OpenOptions::new();
         options.write(true).create_new(true);
         #[cfg(unix)]
@@ -7178,12 +7468,16 @@ fn rewrite_defined_names_xml(
     }
 }
 
-fn save_xlsx_impl(vm: &Vm, path: &str, sync: bool) -> Result<(), String> {
+fn save_xlsx_impl(vm: &Vm, path: &str, sync: bool, verify_readback: bool) -> Result<(), String> {
     use std::collections::HashMap;
     use std::io::Read;
     use std::io::Write;
     use zip::CompressionMethod;
     use zip::write::ZipWriter;
+
+    if vm.cancellation_requested() {
+        return Err("CANCELED: workbook save was canceled".to_string());
+    }
 
     // Real tab order, not `vm.sheet_names()`'s alphabetical order — a
     // workbook's physical sheet order (part naming, `<sheets>` order,
@@ -8264,6 +8558,7 @@ fn save_xlsx_impl(vm: &Vm, path: &str, sync: bool) -> Result<(), String> {
     carried_overrides.sort_by(|a, b| a.0.cmp(&b.0));
 
     let (temporary, file) = create_atomic_output_temp(path)?;
+    let mut temporary_guard = TemporaryOutputGuard::new(temporary.clone());
     // ZIP headers and streamed XML produce many small writes. Bound the buffer
     // independently of workbook size and flush it before syncing/publishing.
     // Data descriptors avoid seeking back to patch each local header, which
@@ -8636,8 +8931,12 @@ fn save_xlsx_impl(vm: &Vm, path: &str, sync: bool) -> Result<(), String> {
             .map_err(|e| e.to_string())?;
         // Batch XML fragments before compression as well as compressed bytes
         // before filesystem writes. Memory remains bounded for large sheets.
-        let mut sheet_sink = ZipXmlSink(std::io::BufWriter::with_capacity(64 * 1024, &mut zip));
-        write_xlsx_sheet(
+        let sheet_writer = CancellableWriter {
+            cancellation: vm.cancellation_flag(),
+            inner: std::io::BufWriter::with_capacity(64 * 1024, &mut zip),
+        };
+        let mut sheet_sink = ZipXmlSink(sheet_writer);
+        if let Err(error) = write_xlsx_sheet(
             vm,
             sheet_name,
             &str_index,
@@ -8646,20 +8945,25 @@ fn save_xlsx_impl(vm: &Vm, path: &str, sync: bool) -> Result<(), String> {
             row_style_override,
             column_style_override,
             &mut sheet_sink,
-        )
-        .map_err(|e| e.to_string())?;
+        ) {
+            return Err(error.to_string());
+        }
         // Unlike flush(), into_inner() drains our buffer without forcing a
         // compressor sync-flush. Propagate drain errors before starting a part.
-        sheet_sink.0.into_inner().map_err(|e| e.to_string())?;
+        sheet_sink.0.inner.into_inner().map_err(|e| e.to_string())?;
     }
 
     if !defer_source_shared_strings {
         zip.start_file("xl/sharedStrings.xml", deflated)
             .map_err(|e| e.to_string())?;
-        let mut strings_sink = std::io::BufWriter::with_capacity(64 * 1024, &mut zip);
+        let strings_writer = CancellableWriter {
+            cancellation: vm.cancellation_flag(),
+            inner: std::io::BufWriter::with_capacity(64 * 1024, &mut zip),
+        };
+        let mut strings_sink = strings_writer;
         write_xlsx_shared_strings_from_index(&mut strings_sink, &str_index)
             .map_err(|e| e.to_string())?;
-        strings_sink.into_inner().map_err(|e| e.to_string())?;
+        strings_sink.inner.into_inner().map_err(|e| e.to_string())?;
     }
 
     if let Some(bytes) = new_styles_bytes.as_deref() {
@@ -8732,7 +9036,47 @@ fn save_xlsx_impl(vm: &Vm, path: &str, sync: bool) -> Result<(), String> {
         file.get_ref().sync_all().map_err(|e| e.to_string())?;
     }
     drop(file);
+    if vm.cancellation_requested() {
+        let _ = std::fs::remove_file(&temporary);
+        return Err("CANCELED: workbook save was canceled before publish".to_string());
+    }
+    if let Err(error) = validate_xlsx_archive_before_publish(&temporary) {
+        let _ = std::fs::remove_file(&temporary);
+        return Err(format!("output validation failed: {error}"));
+    }
+    if verify_readback {
+        let mut verifier = Vm::new();
+        if let Err(error) = verifier.load_workbook_file(temporary.to_string_lossy().as_ref()) {
+            let _ = std::fs::remove_file(&temporary);
+            return Err(format!("output readback validation failed: {error}"));
+        }
+    }
     publish_atomic_output(path, &temporary)?;
+    temporary_guard.disarm();
+    Ok(())
+}
+
+/// Validate the closed temporary OOXML package before atomic publication. This is
+/// deliberately a structural gate, not an Excel compatibility oracle: it verifies
+/// that the ZIP central directory and the package's required roots are readable, while
+/// the existing reader/oracle suites remain responsible for semantic validation.
+fn validate_xlsx_archive_before_publish(path: &std::path::Path) -> Result<(), String> {
+    use std::io::Read;
+
+    let file = std::fs::File::open(path).map_err(|error| error.to_string())?;
+    let mut archive = zip::ZipArchive::new(file).map_err(|error| error.to_string())?;
+    for required in ["[Content_Types].xml", "xl/workbook.xml"] {
+        let mut entry = archive
+            .by_name(required)
+            .map_err(|error| format!("missing {required}: {error}"))?;
+        let mut bytes = Vec::new();
+        entry
+            .read_to_end(&mut bytes)
+            .map_err(|error| format!("cannot read {required}: {error}"))?;
+        if bytes.is_empty() {
+            return Err(format!("required part {required} is empty"));
+        }
+    }
     Ok(())
 }
 
@@ -9751,6 +10095,71 @@ impl<W: std::io::Write> XmlSink for ZipXmlSink<W> {
 
     fn xml_fmt(&mut self, args: std::fmt::Arguments<'_>) -> std::io::Result<()> {
         std::io::Write::write_fmt(&mut self.0, args)
+    }
+}
+
+/// A bounded writer wrapper that checks the host-owned cancellation flag at
+/// every XML write boundary. The underlying writer remains responsible for
+/// buffering and ZIP compression; this wrapper adds no workbook-sized buffer.
+struct CancellableWriter<'a, W> {
+    cancellation: Option<&'a std::sync::atomic::AtomicBool>,
+    inner: W,
+}
+
+impl<W: std::io::Write> std::io::Write for CancellableWriter<'_, W> {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        if self
+            .cancellation
+            .is_some_and(|flag| flag.load(std::sync::atomic::Ordering::Relaxed))
+        {
+            return Err(std::io::Error::other(
+                "CANCELED: workbook save was canceled",
+            ));
+        }
+        let written = self.inner.write(bytes)?;
+        if self
+            .cancellation
+            .is_some_and(|flag| flag.load(std::sync::atomic::Ordering::Relaxed))
+        {
+            return Err(std::io::Error::other(
+                "CANCELED: workbook save was canceled",
+            ));
+        }
+        Ok(written)
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        if self
+            .cancellation
+            .is_some_and(|flag| flag.load(std::sync::atomic::Ordering::Relaxed))
+        {
+            return Err(std::io::Error::other(
+                "CANCELED: workbook save was canceled",
+            ));
+        }
+        self.inner.flush()
+    }
+}
+
+struct TemporaryOutputGuard {
+    path: Option<std::path::PathBuf>,
+}
+
+impl TemporaryOutputGuard {
+    fn new(path: std::path::PathBuf) -> Self {
+        Self { path: Some(path) }
+    }
+
+    fn disarm(&mut self) {
+        self.path = None;
+    }
+}
+
+impl Drop for TemporaryOutputGuard {
+    fn drop(&mut self) {
+        if let Some(path) = self.path.take() {
+            let _ = std::fs::remove_file(path);
+        }
     }
 }
 
@@ -10974,6 +11383,8 @@ pub(crate) fn xml_escape(s: &str) -> String {
 #[cfg(feature = "python")]
 #[pymodule]
 mod elixcee {
+    use pyo3::prelude::*;
+
     #[pymodule_export]
     use super::stream::{PyStreamReader, PyStreamWriter};
     #[pymodule_export]
@@ -10981,6 +11392,14 @@ mod elixcee {
         PyExcelError, PyReadCancellation, PyVm, create_stream, create_stream_bounded,
         diagnose_macro, hello, load_workbook, open_stream, run_macro,
     };
+
+    #[pymodule_init]
+    fn init(module: &Bound<'_, PyModule>) -> PyResult<()> {
+        module.add(
+            "InternalError",
+            module.py().get_type::<super::InternalError>(),
+        )
+    }
 }
 
 #[cfg(test)]
@@ -12108,6 +12527,36 @@ mod tests {
 
     #[cfg(feature = "python")]
     #[test]
+    fn pyvm_exposes_a_stable_termination_class_without_changing_python_errors() {
+        let mut vm = PyVm::new("skip", None).unwrap();
+        assert_eq!(vm.last_termination_class(), None);
+
+        vm.run(
+            "Sub Main()\n    Cells(1, 1).Value = 7\nEnd Sub\n",
+            "Main",
+            None,
+        )
+        .unwrap();
+        assert_eq!(vm.last_termination_class(), Some("success".to_owned()));
+
+        let error = vm.run(
+            "Sub Main()\n    Cells(1, 1).Value = missing\nEnd Sub\n",
+            "Main",
+            None,
+        );
+        assert!(error.is_err());
+        assert_eq!(
+            vm.last_termination_class(),
+            Some("runtime_error".to_owned())
+        );
+
+        let syntax_error = vm.run("Sub Main(\n", "Main", None);
+        assert!(syntax_error.is_err());
+        assert_eq!(vm.last_termination_class(), Some("parse_error".to_owned()));
+    }
+
+    #[cfg(feature = "python")]
+    #[test]
     fn pyvm_fork_isolates_workbook_state() {
         let mut original = PyVm::new("skip", None).unwrap();
         original.inner.cells_mut().insert(
@@ -12129,6 +12578,73 @@ mod tests {
 
         assert_eq!(original.inner.get_cell(1, 1), Variant::Integer(10));
         assert_eq!(fork.inner.get_cell(1, 1), Variant::Integer(20));
+    }
+
+    #[cfg(feature = "python")]
+    #[test]
+    fn pyvm_run_and_save_is_transactional_on_macro_failure() {
+        let directory =
+            std::env::temp_dir().join(format!("elixcee-pyvm-run-and-save-{}", std::process::id()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let output = directory.join("output.xlsx");
+        std::fs::write(&output, b"sentinel").unwrap();
+
+        let mut vm = PyVm::new("skip", None).unwrap();
+        let result = vm.run_and_save(
+            "Sub Main()\n    Cells(1,1).Value = 99\n    Err.Raise 5\nEnd Sub\n",
+            "Main",
+            output.to_str().unwrap(),
+            None,
+        );
+
+        assert!(result.is_err());
+        assert_eq!(std::fs::read(&output).unwrap(), b"sentinel");
+        assert_eq!(vm.inner.get_cell(1, 1), Variant::Empty);
+        let _ = std::fs::remove_dir_all(directory);
+    }
+
+    #[cfg(feature = "python")]
+    #[test]
+    fn pyvm_run_and_save_cancellation_keeps_caller_and_destination_clean() {
+        const CASES: usize = 100;
+        let directory = std::env::temp_dir().join(format!(
+            "elixcee-pyvm-run-and-save-cancel-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&directory).unwrap();
+        let cancellation = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
+        let mut vm = PyVm::new("skip", None).unwrap();
+        vm.inner.set_cancellation(Some(cancellation));
+
+        for case in 0..CASES {
+            let output = directory.join(format!("output-{case}.xlsx"));
+            let sentinel = format!("sentinel {case}");
+            std::fs::write(&output, sentinel.as_bytes()).unwrap();
+            let result = vm.run_and_save(
+                "Sub Main()\n    Cells(1,1).Value = 99\nEnd Sub\n",
+                "Main",
+                output.to_str().unwrap(),
+                None,
+            );
+            assert!(result.is_err(), "case={case} should be canceled");
+            assert_eq!(
+                std::fs::read(&output).unwrap(),
+                sentinel.as_bytes(),
+                "case={case}"
+            );
+            assert_eq!(vm.inner.get_cell(1, 1), Variant::Empty, "case={case}");
+        }
+
+        let mut independent = PyVm::new("skip", None).unwrap();
+        independent
+            .run(
+                "Sub Main()\n    Cells(1,1).Value = 7\nEnd Sub\n",
+                "Main",
+                None,
+            )
+            .unwrap();
+        assert_eq!(independent.inner.get_cell(1, 1), Variant::Integer(7));
+        let _ = std::fs::remove_dir_all(directory);
     }
 
     #[test]
@@ -12173,6 +12689,97 @@ mod tests {
         let range = wb.worksheet_range("sheet1").expect("sheet1 should exist");
         let cells: Vec<_> = range.cells().collect();
         assert!(!cells.is_empty(), "saved file should have cells");
+    }
+
+    #[test]
+    fn verified_save_requires_a_reader_roundtrip_before_publish() {
+        let suffix = std::process::id();
+        let path = std::env::temp_dir().join(format!("elixcee-verified-save-{suffix}.xlsx"));
+        let mut vm = Vm::new();
+        vm.cells_mut().insert(
+            (1, 1),
+            CellContent {
+                formula: None,
+                value: Variant::Str("verified".into()),
+            },
+        );
+
+        save_workbook_verified_impl(&vm, path.to_str().unwrap()).unwrap();
+        let mut verifier = Vm::new();
+        verifier.load_workbook_file(path.to_str().unwrap()).unwrap();
+        assert_eq!(verifier.get_cell(1, 1), Variant::Str("verified".into()));
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn canceled_save_does_not_publish_or_leave_a_temporary_output() {
+        let suffix = std::process::id();
+        let path = std::env::temp_dir().join(format!("elixcee-canceled-save-{suffix}.xlsx"));
+        std::fs::write(&path, b"sentinel").unwrap();
+        let cancellation = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
+        let mut vm = Vm::new();
+        vm.set_cancellation(Some(cancellation));
+
+        let result = save_workbook_impl(&vm, path.to_str().unwrap());
+
+        assert_eq!(
+            result,
+            Err("CANCELED: workbook save was canceled".to_string())
+        );
+        assert_eq!(std::fs::read(&path).unwrap(), b"sentinel");
+        let temporary_prefix = format!(
+            ".elixcee-canceled-save-{suffix}.xlsx.elixcee-tmp-{}-",
+            std::process::id()
+        );
+        assert!(
+            !std::fs::read_dir(std::env::temp_dir())
+                .unwrap()
+                .flatten()
+                .any(|entry| entry
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with(&temporary_prefix))
+        );
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn cancellable_writer_stops_when_cancellation_arrives_during_a_write() {
+        use std::io::Write;
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        struct FlipWriter {
+            cancellation: Arc<AtomicBool>,
+            bytes: Vec<u8>,
+        }
+
+        impl Write for FlipWriter {
+            fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+                self.bytes.extend_from_slice(bytes);
+                self.cancellation.store(true, Ordering::Relaxed);
+                Ok(bytes.len())
+            }
+
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+
+        let cancellation = Arc::new(AtomicBool::new(false));
+        let mut vm = Vm::new();
+        vm.set_cancellation(Some(Arc::clone(&cancellation)));
+        let mut writer = CancellableWriter {
+            cancellation: vm.cancellation_flag(),
+            inner: FlipWriter {
+                cancellation,
+                bytes: Vec::new(),
+            },
+        };
+
+        let error = writer.write_all(b"worksheet fragment").unwrap_err();
+        assert!(error.to_string().starts_with("CANCELED:"));
+        assert_eq!(writer.inner.bytes, b"worksheet fragment");
     }
 
     #[cfg(unix)]
@@ -12462,6 +13069,21 @@ mod tests {
         assert_eq!(reloaded.row_height_on_sheet(&key, 1), None);
         assert_eq!(reloaded.column_width_on_sheet(&key, 1), None);
 
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn temporary_xlsx_validation_rejects_a_truncated_zip() {
+        let path = std::env::temp_dir().join(format!(
+            "elixcee-invalid-package-{}.xlsx",
+            std::process::id()
+        ));
+        std::fs::write(&path, b"truncated package").unwrap();
+        let result = validate_xlsx_archive_before_publish(&path);
+        assert!(
+            result.is_err(),
+            "invalid ZIP must not pass pre-publish validation"
+        );
         let _ = std::fs::remove_file(path);
     }
 

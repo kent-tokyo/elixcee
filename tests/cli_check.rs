@@ -149,18 +149,15 @@ fn unsupported_construct_is_reported_as_info() {
 }
 
 #[test]
-fn module_level_unsupported_construct_is_reported_as_info() {
+fn module_level_const_is_supported() {
     let (ok, v) = run_check_json(
         "Public Const MAX_RETRIES = 5\nSub Main()\n    x = 1\nEnd Sub\n",
         Some("Main"),
         "module_level_unsupported",
     );
-    assert!(ok, "an info-only diagnostic must not fail check: {:?}", v);
+    assert!(ok, "module-level constants should pass check: {:?}", v);
     let diags = v["diagnostics"].as_array().unwrap();
-    assert_eq!(diags.len(), 1);
-    assert_eq!(diags[0]["severity"], "info");
-    assert_eq!(diags[0]["code"], "I1002");
-    assert_eq!(diags[0]["location"]["line"], 1);
+    assert!(diags.is_empty(), "unexpected diagnostics: {:?}", v);
 }
 
 #[test]
