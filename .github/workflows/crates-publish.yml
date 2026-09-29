@@ -66,8 +66,15 @@ jobs:
       - name: pin the published elixcee-types patch release
         run: cargo update -p elixcee-types --precise "${{ steps.types.outputs.version }}"
 
-      - name: cargo publish -p elixcee
-        run: cargo publish -p elixcee
+      - name: cargo publish -p elixcee (skips if this version is already live)
+        run: |
+          VERSION=$(grep -m1 '^version' Cargo.toml | sed -E 's/version = "(.*)"/\1/')
+          if curl -sf -H "User-Agent: elixcee-ci (https://github.com/kent-tokyo/elixcee)" \
+               "https://crates.io/api/v1/crates/elixcee/$VERSION" -o /dev/null; then
+            echo "elixcee $VERSION is already published, skipping"
+          else
+            cargo publish -p elixcee
+          fi
 
       - name: wait for elixcee to appear in the index
         run: |
@@ -86,5 +93,12 @@ jobs:
 
       # This ordering is required: the crate calls APIs from the matching
       # public elixcee release and cannot be verified against an older index.
-      - name: cargo publish -p elixcee-wasm
-        run: cargo publish -p elixcee-wasm
+      - name: cargo publish -p elixcee-wasm (skips if this version is already live)
+        run: |
+          VERSION=$(grep -m1 '^version' crates/elixcee-wasm/Cargo.toml | sed -E 's/version = "(.*)"/\1/')
+          if curl -sf -H "User-Agent: elixcee-ci (https://github.com/kent-tokyo/elixcee)" \
+               "https://crates.io/api/v1/crates/elixcee-wasm/$VERSION" -o /dev/null; then
+            echo "elixcee-wasm $VERSION is already published, skipping"
+          else
+            cargo publish -p elixcee-wasm
+          fi
