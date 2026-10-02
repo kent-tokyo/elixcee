@@ -10418,10 +10418,9 @@ fn func_bessel_second_kind(
 }
 
 fn bessel_y(x: f64, order: usize) -> Result<f64, String> {
-    const EULER_GAMMA: f64 = 0.5772156649015329;
     let j0 = bessel_first_kind(x, 0, false)?;
     let j1 = bessel_first_kind(x, 1, false)?;
-    let a = (x / 2.0).ln() + EULER_GAMMA;
+    let a = (x / 2.0).ln() + std::f64::consts::EULER_GAMMA;
     let mut term = x * x / 4.0;
     let mut harmonic = 1.0;
     let mut sum = 0.0;
@@ -10456,10 +10455,9 @@ fn bessel_y(x: f64, order: usize) -> Result<f64, String> {
 }
 
 fn bessel_k(x: f64, order: usize) -> Result<f64, String> {
-    const EULER_GAMMA: f64 = 0.5772156649015329;
     let i0 = bessel_first_kind(x, 0, true)?;
     let i1 = bessel_first_kind(x, 1, true)?;
-    let a = (x / 2.0).ln() + EULER_GAMMA;
+    let a = (x / 2.0).ln() + std::f64::consts::EULER_GAMMA;
     let mut term = x * x / 4.0;
     let mut harmonic = 1.0;
     let mut sum = 0.0;

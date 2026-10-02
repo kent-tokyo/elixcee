@@ -539,19 +539,11 @@ jobs:
       # default, which still requires every invocation below to say `cargo +nightly`.
       - uses: dtolnay/rust-toolchain@nightly
 
-      # Version-pinned and installed via cargo itself, matching the wasm job's own
-      # `cargo install wasm-pack --version 0.13.1 --locked` precedent — this job's
-      # cargo-fuzz version is exactly what's declared here, not whatever a marketplace
-      # Action happens to resolve today. Deliberately NOT --locked, unlike that wasm-pack
-      # precedent: cargo-fuzz 0.13.1's own published Cargo.lock pins rustix 0.36.5, which
-      # uses an internal rustc_attrs-gated attribute current nightly rejects outright
-      # ("cannot find attribute `rustc_layout_scalar_valid_range_start`") — reproduced and
-      # confirmed in a real ubuntu/nightly Docker container, not assumed from the error
-      # text alone. Omitting --locked lets Cargo re-resolve rustix's version against the
-      # current registry instead of that stale bundled lockfile, which resolved cleanly in
-      # the same container. The tool version itself (0.13.1) stays pinned either way.
+      # Version-pinned and installed via cargo itself. cargo-fuzz 0.13.1's published
+      # dependency graph selected rustix 0.36.5, which no longer compiles on current
+      # nightly. 0.13.2 is the current upstream release and carries an updated lockfile.
       - name: install cargo-fuzz
-        run: cargo install cargo-fuzz --version 0.13.1
+        run: cargo install cargo-fuzz --version 0.13.2 --locked
 
       # 30s per target — the same budget that found the fuzz_vba_parser crash above on
       # this job's very first real run, kept here as a fast regression smoke check
