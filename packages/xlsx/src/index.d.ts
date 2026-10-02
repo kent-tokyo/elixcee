@@ -1,4 +1,4 @@
-// Type shapes mirror xlsx@0.18.5's own types/index.d.ts (CellAddress, Range, Origin/AOA/
+// Type shapes mirror the covered subset of xlsx@0.20.3's own types/index.d.ts (CellAddress, Range, Origin/AOA/
 // JSON/CSV option interfaces) so existing `xlsx`-typed consumer code keeps compiling
 // unchanged. Phase 1B-1 added worksheet mutation (sheet_add_aoa/sheet_add_json) and a
 // number-format subset (format_cell/cell_set_number_format, now full — Phase 1B-2B).
@@ -76,7 +76,9 @@ export interface ColumnInfo {
   wch?: number;
 }
 export type WorkSheet = { [address: string]: CellObject | unknown } & {
+  '!data'?: CellObject[][];
   '!ref'?: string;
+  '!merges'?: Range[];
   '!rows'?: Array<RowInfo | undefined>;
   '!cols'?: Array<ColumnInfo | undefined>;
   '!dataValidations'?: DataValidationProjection[];
@@ -158,7 +160,7 @@ export interface Sheet2CSVOpts {
 }
 
 export interface Sheet2TXTOpts extends Sheet2CSVOpts {
-  /** If 'string', return a plain string instead of BOM + UTF-16LE encoding */
+  /** Retained for SheetJS call compatibility; text output is a plain string */
   type?: 'string';
 }
 
@@ -309,7 +311,7 @@ export function sheet_add_dom(ws: WorkSheet, data: any, opts?: Table2SheetOpts):
 export function table_to_sheet(data: any, opts?: Table2SheetOpts): WorkSheet;
 export function table_to_book(data: any, opts?: Table2SheetOpts): WorkBook;
 
-// Not present in xlsx@0.18.5's own types/index.d.ts at all (confirmed: no `get_cell`
+// Not present in xlsx@0.20.3's own types/index.d.ts at all (confirmed: no `get_cell`
 // entry there) even though it's a real runtime export (`sheet_get_cell: ws_get_cell_stub`
 // in the oracle's own source) — this is pure addition, not a narrowing of any existing
 // oracle declaration. Mirrors the runtime's 3 call shapes exactly.
@@ -319,8 +321,9 @@ export function sheet_get_cell(ws: WorkSheet, row: number, col?: number): CellOb
 
 export function format_cell(cell: CellObject, v?: unknown, opts?: { dateNF?: string | number }): string;
 export function cell_set_number_format(cell: CellObject, fmt: string | number): CellObject;
+export function sheet_new(opts?: { dense?: boolean }): WorkSheet;
 
-// Mirrors xlsx@0.18.5's own overload set verbatim (types/index.d.ts) — including the two
+// Mirrors xlsx@0.20.3's own overload set for the covered call shapes, including the
 // non-generic overloads below the generic one, even though normal TS overload resolution
 // makes them largely unreachable in practice, so any call site pattern the real oracle's
 // types accept is still accepted here.
@@ -328,7 +331,7 @@ export function sheet_to_json<T>(worksheet: WorkSheet, opts?: Sheet2JSONOpts): T
 export function sheet_to_json(worksheet: WorkSheet, opts?: Sheet2JSONOpts): any[][];
 export function sheet_to_json(worksheet: WorkSheet, opts?: Sheet2JSONOpts): any[];
 
-// Not present in xlsx@0.18.5's own types/index.d.ts at all (confirmed absent, the same
+// Not present in xlsx@0.20.3's own types/index.d.ts at all (confirmed absent, the same
 // gap class as sheet_get_cell) despite being a real runtime export — a literal alias for
 // sheet_to_json (confirmed live: same function object, same .name). Typed identically to
 // sheet_to_json's own overload set for that reason.

@@ -3,7 +3,7 @@
 ## Threat model
 
 Workbooks and caller-supplied worksheet objects are untrusted input.
-Compatibility with `xlsx@0.18.5` must not reproduce unsafe behavior.
+Compatibility with the private SheetJS 0.20.3 oracle must not reproduce unsafe behavior.
 The [compatibility goal](xlsx-compatibility-goal.md) separates normal-input
 compatibility from intentional security and resource-limit differences.
 
@@ -11,7 +11,7 @@ This describes implemented safeguards, not immunity to unknown vulnerabilities.
 Versioned changes and future Unreleased work are distinguished in
 [CHANGELOG](../CHANGELOG.md).
 
-## Existing limits (1.0.12)
+## Existing limits (1.0.13)
 
 The numeric inventory and calibration notes are maintained in **[Resource limits](limits.md)**.
 Do not duplicate thresholds here: ZIP, XML, workbook model, formula, VBA parser,

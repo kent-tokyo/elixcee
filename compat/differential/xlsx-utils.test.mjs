@@ -1,5 +1,5 @@
 // Permanent differential test suite (Phase 1A + Phase 1B-1): runs the boundary-value
-// matrix specified for each phase through both the real oracle (xlsx@0.18.5) and
+// matrix specified for each phase through both the real oracle (xlsx@0.20.3) and
 // @elixcee/xlsx, classifying every case with classify.mjs. This file itself IS the
 // runnable check — it exits non-zero if anything is left UNCLASSIFIED (or otherwise
 // fails to resolve to an acceptable verdict), so nothing can pass CI by accident.
@@ -164,6 +164,10 @@ for (const v of [
 
 // ---- book_new ----
 runCase('utils.book_new', U.book_new, elixcee.book_new, [], 'book_new()');
+
+// ---- sheet_new ----
+runCase('utils.sheet_new', U.sheet_new, elixcee.sheet_new, [], 'sheet_new()');
+runCase('utils.sheet_new', U.sheet_new, elixcee.sheet_new, [{ dense: true }], 'sheet_new({dense:true})');
 
 // ---- book_append_sheet (stateful — scenario-based) ----
 function bookAppendScenario(label, run) {
@@ -460,14 +464,14 @@ jsonCase(
   'utils.sheet_add_json'
 );
 jsonCase(
-  'opts.dense has no effect when _ws is null (confirmed oracle quirk, reproduced)',
+  'opts.dense creates a !data-backed worksheet',
   (u) => u.json_to_sheet([{ a: 1 }], { dense: true }),
   (e) => e.json_to_sheet([{ a: 1 }], { dense: true })
 );
 jsonCase(
-  'dense target: scalar values land in the nested array; header/object values leak as stray string-keyed props (confirmed oracle quirk, reproduced)',
-  (u) => u.sheet_add_json([], [{ a: 1, b: 'x' }]),
-  (e) => e.sheet_add_json([], [{ a: 1, b: 'x' }]),
+  'dense target uses the !data row store',
+  (u) => u.sheet_add_json({ '!data': [] }, [{ a: 1, b: 'x' }]),
+  (e) => e.sheet_add_json({ '!data': [] }, [{ a: 1, b: 'x' }]),
   'utils.sheet_add_json'
 );
 // Backfilled before Phase 1B-2A per user review — same reasoning as json_to_sheet's
@@ -501,9 +505,9 @@ getCellCase('CellAddress object, miss creates a stub', () => ({}), [{ r: 3, c: 2
 getCellCase('numeric R, C, existing cell', () => ({ B1: { t: 'n', v: 7 } }), [0, 1]);
 getCellCase('numeric R only (C defaults to 0)', () => ({ A2: { t: 'n', v: 9 } }), [1]);
 getCellCase('numeric R, C=0 explicit', () => ({ A1: { t: 's', v: 'x' } }), [0, 0]);
-getCellCase('dense worksheet, existing cell', () => { const ws = []; ws[0] = [{ t: 'n', v: 1 }]; return ws; }, ['A1']);
-getCellCase('dense worksheet, miss materializes ws[R]', () => [], ['C5']);
-getCellCase('dense worksheet, numeric R/C', () => { const ws = []; ws[1] = [, { t: 'n', v: 2 }]; return ws; }, [1, 1]);
+getCellCase('dense worksheet, existing cell', () => ({ '!data': [[{ t: 'n', v: 1 }]] }), ['A1']);
+getCellCase('dense worksheet, miss materializes !data[R]', () => ({ '!data': [] }), ['C5']);
+getCellCase('dense worksheet, numeric R/C', () => ({ '!data': [, [, { t: 'n', v: 2 }]] }), [1, 1]);
 // Repeated miss on the same ref returns the SAME stub object (idempotent) — captures
 // identity as a boolean, same pattern as hyperlinkCase, since object identity itself
 // doesn't survive normalize()'s structural comparison.
@@ -625,7 +629,7 @@ jsonOutCase('error cell, v!=0, defval set -> defval used', () => ({ A1: { t: 's'
 jsonOutCase("'z' stub cell, v null (default stub shape)", () => ({ A1: { t: 's', v: 'a' }, A2: { t: 'z' }, '!ref': 'A1:A2' }), { defval: 'D' });
 jsonOutCase("'z' stub cell with a non-null v (unusual) -> column skipped entirely", () => ({ A1: { t: 's', v: 'a' }, A2: { t: 'z', v: 5 }, '!ref': 'A1:A2' }), { defval: 'D' });
 // Sparse array (dense worksheet with a hole in the middle of the row range).
-jsonOutCase('dense, sparse array hole in the middle', () => { const ws = []; ws[0] = [{ t: 's', v: 'a' }]; ws[1] = [{ t: 'n', v: 1 }]; ws[3] = [{ t: 'n', v: 3 }]; ws['!ref'] = 'A1:A4'; return ws; });
+jsonOutCase('dense, sparse array hole in the middle', () => ({ '!data': [[{ t: 's', v: 'a' }], [{ t: 'n', v: 1 }], , [{ t: 'n', v: 3 }]], '!ref': 'A1:A4' }));
 // Unrecognized cell type throws in both — confirmed live, not assumed.
 jsonOutCase('unrecognized cell type -> throws in both', () => ({ A1: { t: 's', v: 'a' }, A2: { t: 'bogus', v: 1 }, '!ref': 'A1:A2' }));
 
@@ -760,7 +764,7 @@ htmlCase('basic 2x2', (lib) => lib.aoa_to_sheet([['a', 'b'], [1, 2]]));
 htmlCase('single cell', () => ({ A1: { t: 's', v: 'x' }, '!ref': 'A1:A1' }));
 htmlCase('!ref absent -> throws in both', () => ({}));
 htmlCase('null sheet -> throws in both', () => null);
-htmlCase('dense worksheet', () => { const ws = []; ws[0] = [{ t: 's', v: 'x' }]; ws['!ref'] = 'A1:A1'; return ws; });
+htmlCase('dense worksheet', () => ({ '!data': [[{ t: 's', v: 'x' }]], '!ref': 'A1:A1' }));
 htmlCase('editable:true wraps every cell (even empty)', () => ({ A1: { t: 's', v: 'x' }, '!ref': 'A1:B1' }), { editable: true });
 htmlCase('custom header/footer strings', () => ({ A1: { t: 's', v: 'x' }, '!ref': 'A1:A1' }), { header: '<div>', footer: '</div>' });
 htmlCase('merge: top-left gets colspan, covered cells skipped', (lib) => { const ws = lib.aoa_to_sheet([['a', 'b'], ['c', 'd']]); ws['!merges'] = [{ s: { r: 0, c: 0 }, e: { r: 0, c: 1 } }]; return ws; });
@@ -820,14 +824,14 @@ htmlCase('hyperlink: fragment (starts with #, never wrapped at all)', () => ({ A
   const eOut = elixcee.sheet_to_html(wse);
   const verdict = classify({
     api: 'utils.sheet_to_html',
-    oracleA: { containsRawHandler: oOut.includes('onmouseover="alert(1)"') },
-    elixcee: { containsRawHandler: eOut.includes('onmouseover="alert(1)"') },
-    securityDivergenceKey: 'sheet_to_html:unescaped_attribute',
+    oracleA: oOut,
+    elixcee: eOut,
   });
-  record('utils.sheet_to_html', 'cell value with embedded quote breaks out of data-v (oracle creates a live onmouseover handler; elixcee escapes it)', verdict);
-  assert.ok(oOut.includes('onmouseover="alert(1)"'), 'sanity: the oracle\'s own output contains a live event handler');
+  record('utils.sheet_to_html', 'cell value with embedded quote is escaped in data-v', verdict);
+  assert.ok(!oOut.includes('onmouseover="alert(1)"'), 'the oracle must escape the embedded quote');
   assert.ok(!eOut.includes('onmouseover="alert(1)"'), 'elixcee must not produce a live event handler');
-  assert.ok(eOut.includes('&quot;'), 'elixcee must escape the quote instead');
+  assert.ok(oOut.includes('&quot;'), 'the oracle must escape the quote');
+  assert.ok(eOut.includes('&quot;'), 'elixcee must escape the quote');
 }
 {
   const wso = { A1: { t: 's', v: 'x' }, '!ref': 'A1:A1' };
@@ -854,14 +858,15 @@ for (const [schemeLabel, target] of [
   const wse = { A1: { t: 's', v: 'click', l: { Target: target } }, '!ref': 'A1:A1' };
   const oOut = U.sheet_to_html(wso);
   const eOut = elixcee.sheet_to_html(wse);
+  const hrefPrefix = 'href="' + target.slice(0, target.indexOf(':') + 1);
   const verdict = classify({
     api: 'utils.sheet_to_html',
-    oracleA: { hasDangerousHref: oOut.includes('href="' + target) },
-    elixcee: { hasDangerousHref: eOut.includes('href="' + target) },
+    oracleA: { hasDangerousHref: oOut.includes(hrefPrefix) },
+    elixcee: { hasDangerousHref: eOut.includes(hrefPrefix) },
     securityDivergenceKey: 'sheet_to_html:unsafe_href_scheme',
   });
   record('utils.sheet_to_html', `hyperlink Target with a ${schemeLabel} scheme (oracle renders a clickable, code-executing link; elixcee renders plain text)`, verdict);
-  assert.ok(oOut.includes('href="' + target), `sanity: the oracle's own output contains a clickable ${schemeLabel} link`);
+  assert.ok(oOut.includes(hrefPrefix), `sanity: the oracle's own output contains a clickable ${schemeLabel} link`);
   assert.ok(!eOut.includes('<a '), `elixcee must not wrap ${schemeLabel} content in an <a> tag at all`);
   assert.ok(eOut.includes('click'), 'the text content itself must still be present, just not as a link');
 }
@@ -953,7 +958,7 @@ function sheetAddDomCase(label, wsFactory, html, opts) {
 }
 sheetAddDomCase('append onto an existing sheet at origin:-1', (lib) => lib.aoa_to_sheet([['x']]), '<table><tr><td>y</td></tr></table>', { origin: -1 });
 sheetAddDomCase('add onto an empty {} target', () => ({}), '<table><tr><td>a</td><td>b</td></tr></table>');
-sheetAddDomCase('dense target', () => [], '<table><tr><td>a</td></tr></table>');
+sheetAddDomCase('dense target', () => ({ '!data': [] }), '<table><tr><td>a</td></tr></table>');
 sheetAddDomCase('return value is the same ws object (identity, checked separately below)', () => ({}), '<table><tr><td>x</td></tr></table>');
 sheetAddDomCase('!ref extends to cover a pre-existing sheet range', (lib) => lib.aoa_to_sheet([['a', 'b'], ['c', 'd']]), '<table><tr><td>e</td></tr></table>', { origin: 'D4' });
 sheetAddDomCase('!merges concatenates onto a sheet that already has merges', (lib) => { const ws = lib.aoa_to_sheet([['x', 'y'], ['z', 'w']]); ws['!merges'] = [{ s: { r: 0, c: 0 }, e: { r: 0, c: 1 } }]; return ws; }, '<table><tr><td colspan="2">merged</td></tr></table>', { origin: 'A3' });
@@ -1048,10 +1053,7 @@ formulaeCase('sparse worksheet, mixed types', () => ({
   '!ref': 'A1:B2',
 }));
 formulaeCase('dense worksheet', () => {
-  const ws = [];
-  ws[0] = [{ t: 'n', v: 1 }, { t: 's', v: 'x' }];
-  ws['!ref'] = 'A1:B1';
-  return ws;
+  return { '!data': [[{ t: 'n', v: 1 }, { t: 's', v: 'x' }]], '!ref': 'A1:B1' };
 });
 formulaeCase('!ref absent -> []', () => ({}));
 formulaeCase('sheet is null -> []', () => null);
@@ -1090,11 +1092,7 @@ formulaeCase('invalid cell type, no v/f/w -> skipped', () => ({ A1: { t: 'bogus'
 formulaeCase('non-ASCII string content', () => ({ A1: { t: 's', v: 'こんにちは' }, '!ref': 'A1:A1' }));
 formulaeCase('reversed !ref -> loop body never runs -> []', () => ({ A1: { t: 'n', v: 1 }, B2: { t: 'n', v: 2 }, '!ref': 'B2:A1' }));
 formulaeCase('sparse array hole (dense, missing row)', () => {
-  const ws = [];
-  ws[0] = [{ t: 'n', v: 1 }];
-  ws[2] = [{ t: 'n', v: 3 }];
-  ws['!ref'] = 'A1:A3';
-  return ws;
+  return { '!data': [[{ t: 'n', v: 1 }], , [{ t: 'n', v: 3 }]], '!ref': 'A1:A3' };
 });
 formulaeCase('sparse object hole (missing cell key entirely)', () => ({ A1: { t: 'n', v: 1 }, '!ref': 'A1:B1' }));
 formulaeCase('column boundary (single-column range)', () => ({ C1: { t: 'n', v: 3 }, '!ref': 'C1:C1' }));
@@ -1241,47 +1239,48 @@ function arrayFormulaCase(label, wsFactory, range, formula, dynamic) {
   );
 }
 
-arrayFormulaCase('"A1:B2" string range', () => ({}), 'A1:B2', 'SUM(A1:B2)');
-arrayFormulaCase('range object', () => ({}), { s: { r: 0, c: 0 }, e: { r: 1, c: 1 } }, 'SUM(A1:B2)');
+const arrayFormulaSheet = () => ({ '!ref': 'A1:A1' });
+arrayFormulaCase('"A1:B2" string range', arrayFormulaSheet, 'A1:B2', 'SUM(A1:B2)');
+arrayFormulaCase('range object', arrayFormulaSheet, { s: { r: 0, c: 0 }, e: { r: 1, c: 1 } }, 'SUM(A1:B2)');
 arrayFormulaCase(
   'single cell: string "A1:A1" kept verbatim vs object range collapsed to "A1" by encode_range',
-  () => ({}),
+  arrayFormulaSheet,
   'A1:A1',
   'X'
 );
-arrayFormulaCase('single cell: object range (collapses .F to "A1", no colon)', () => ({}), { s: { r: 0, c: 0 }, e: { r: 0, c: 0 } }, 'X');
-arrayFormulaCase('multiple cells (3x1)', () => ({}), 'A1:C1', 'X');
-arrayFormulaCase('reversed range (s>e after safe_decode_range) -> loop never runs, ws unchanged', () => ({}), 'B2:A1', 'X');
+arrayFormulaCase('single cell: object range (collapses .F to "A1", no colon)', arrayFormulaSheet, { s: { r: 0, c: 0 }, e: { r: 0, c: 0 } }, 'X');
+arrayFormulaCase('multiple cells (3x1)', arrayFormulaSheet, 'A1:C1', 'X');
+arrayFormulaCase('reversed range (s>e after safe_decode_range) -> no cells changed', arrayFormulaSheet, 'B2:A1', 'X');
 arrayFormulaCase(
   'existing cell: other fields (e.g. .z) survive the mutation',
-  () => ({ A1: { t: 's', v: 'old', z: '@' } }),
+  () => ({ A1: { t: 's', v: 'old', z: '@' }, '!ref': 'A1:A1' }),
   'A1:A1',
   'NEW'
 );
 arrayFormulaCase(
   'existing formula: overwritten by the new one',
-  () => ({ A1: { t: 'n', v: 1, f: 'OLD()' } }),
+  () => ({ A1: { t: 'n', v: 1, f: 'OLD()' }, '!ref': 'A1:A1' }),
   'A1:A1',
   'NEW()'
 );
-arrayFormulaCase('dense worksheet target', () => { const ws = []; ws[0] = [{ t: 's', v: 'x' }]; return ws; }, 'A1:B2', 'D');
-arrayFormulaCase('sparse worksheet target', () => ({}), 'A1:B2', 'S');
-arrayFormulaCase('!ref absent -> stays absent (never set by this function)', () => ({}), 'A1:A1', 'X');
+arrayFormulaCase('dense worksheet target', () => ({ '!data': [[{ t: 's', v: 'x' }]], '!ref': 'A1:A1' }), 'A1:B2', 'D');
+arrayFormulaCase('sparse worksheet target', arrayFormulaSheet, 'A1:B2', 'S');
+arrayFormulaCase('!ref absent -> throws in both', () => ({}), 'A1:A1', 'X');
 arrayFormulaCase(
-  '!ref present -> stays exactly as-is, NOT extended even when the range goes past it',
+  '!ref present -> extends to include the array range',
   () => { const ws = { A1: { t: 'n', v: 1 }, '!ref': 'A1:A1' }; return ws; },
   'D5:E6',
   'X'
 );
-arrayFormulaCase('dynamic:true -> .D=true on the top-left cell only', () => ({}), 'A1:B1', 'X', true);
-arrayFormulaCase('dynamic:false -> no .D key at all (not set to false)', () => ({}), 'A1:A1', 'X', false);
-arrayFormulaCase('dynamic omitted -> no .D key', () => ({}), 'A1:A1', 'X');
-arrayFormulaCase('formula with leading =', () => ({}), 'A1:A1', '=SUM(1,2)');
-arrayFormulaCase('formula without leading =', () => ({}), 'A1:A1', 'SUM(1,2)');
-arrayFormulaCase('empty formula string', () => ({}), 'A1:A1', '');
-arrayFormulaCase('null formula (.f set to null, not omitted)', () => ({}), 'A1:A1', null);
-arrayFormulaCase('undefined formula (.f key present with value undefined, not omitted)', () => ({}), 'A1:A1', undefined);
-arrayFormulaCase('invalid range string (no colon, garbage) -> safe_decode_range degrades, does not throw', () => ({}), 'garbage', 'X');
+arrayFormulaCase('dynamic:true -> .D=true on the top-left cell only', arrayFormulaSheet, 'A1:B1', 'X', true);
+arrayFormulaCase('dynamic:false -> no .D key at all (not set to false)', arrayFormulaSheet, 'A1:A1', 'X', false);
+arrayFormulaCase('dynamic omitted -> no .D key', arrayFormulaSheet, 'A1:A1', 'X');
+arrayFormulaCase('formula with leading =', arrayFormulaSheet, 'A1:A1', '=SUM(1,2)');
+arrayFormulaCase('formula without leading =', arrayFormulaSheet, 'A1:A1', 'SUM(1,2)');
+arrayFormulaCase('empty formula string', arrayFormulaSheet, 'A1:A1', '');
+arrayFormulaCase('null formula (.f set to null, not omitted)', arrayFormulaSheet, 'A1:A1', null);
+arrayFormulaCase('undefined formula (.f key present with value undefined, not omitted)', arrayFormulaSheet, 'A1:A1', undefined);
+arrayFormulaCase('invalid range string -> invalid-column error', arrayFormulaSheet, 'garbage', 'X');
 runCase(
   'utils.sheet_set_array_formula',
   () => { try { U.sheet_set_array_formula({}, null, 'X'); return { threw: false }; } catch (e) { return { threw: true, ctor: e.constructor.name }; } },
@@ -1354,12 +1353,8 @@ function txtCase(label, wsFactory, opts) {
     label
   );
 }
-// Both sheet_to_csv and sheet_to_txt mutate their `opts` argument (sheet_to_csv sets
-// then deletes o.dense; sheet_to_txt sets o.FS/o.RS) — a shared `opts` object handed to
-// both the oracle and elixcee calls would leak mutation from one call into the other
-// (the same class of hazard as Phase 1B-1's shared-worksheet lesson), so every case
-// builds a FRESH worksheet AND a fresh opts object per side. Returns { out, opts } so a
-// fixture can assert on the mutation itself, not just the string output.
+// sheet_to_txt mutates opts.FS/opts.RS. Every case builds a fresh worksheet and fresh
+// options object per side so the mutation cannot leak between oracle and elixcee calls.
 function sheetToCsvWithFreshOpts(fn, wsFactory, opts) {
   const o = opts ? { ...opts } : undefined;
   const out = o === undefined ? fn(wsFactory()) : fn(wsFactory(), o);
@@ -1398,10 +1393,7 @@ csvCase(
   () => ({ A1: { t: 'n', v: 1 }, A2: { t: 'n', v: 2 }, '!ref': 'A1:A2', '!rows': [{ hidden: true }, {}] })
 );
 csvCase('dense worksheet', () => {
-  const ws = [];
-  ws[0] = [{ t: 'n', v: 1 }, { t: 'n', v: 2 }];
-  ws['!ref'] = 'A1:B1';
-  return ws;
+  return { '!data': [[{ t: 'n', v: 1 }, { t: 'n', v: 2 }]], '!ref': 'A1:B1' };
 });
 csvCase('sparse worksheet', () => ({ A1: { t: 'n', v: 1 }, B1: { t: 'n', v: 2 }, '!ref': 'A1:B1' }));
 csvCase('!ref absent -> ""', () => ({}));
@@ -1414,17 +1406,15 @@ csvCase('forceQuotes', () => ({ A1: { t: 'n', v: 1 }, '!ref': 'A1:A1' }), { forc
 csvCase('rawNumbers:true (skips format_cell for numeric cells)', () => ({ A1: { t: 'n', v: 1234.5, z: '0.00' }, '!ref': 'A1:A1' }), { rawNumbers: true });
 csvCase('"ID"-valued cell gets quoted (SYLK-detection legacy)', () => ({ A1: { t: 's', v: 'ID' }, '!ref': 'A1:A1' }));
 csvCase(
-  'strip:true with FS="." strips the whole row (FS used raw as a regex fragment, only "|" is escaped)',
+  'strip:true with FS="." removes trailing empty fields only',
   () => ({ A1: { t: 'n', v: 1 }, B1: { t: 'n', v: 2 }, '!ref': 'A1:B1' }),
   { FS: '.', strip: true }
 );
-// opts.dense is set then deleted by sheet_to_csv, and opts.FS/RS are set by
-// sheet_to_txt — asserted directly on the returned `opts` (see sheetToCsvWithFreshOpts).
-csvCase('opts.dense is set then deleted (mutation fidelity)', () => ({ A1: { t: 'n', v: 1 }, '!ref': 'A1:A1' }), { dense: true });
+csvCase('opts.dense is left unchanged', () => ({ A1: { t: 'n', v: 1 }, '!ref': 'A1:A1' }), { dense: true });
 
-txtCase('default (BOM + UTF-16LE)', () => ({ A1: { t: 'n', v: 1 }, A2: { t: 'n', v: 2 }, '!ref': 'A1:A2' }));
+txtCase('default string output', () => ({ A1: { t: 'n', v: 1 }, A2: { t: 'n', v: 2 }, '!ref': 'A1:A2' }));
 txtCase('type:"string" (plain tab/newline text)', () => ({ A1: { t: 'n', v: 1 }, A2: { t: 'n', v: 2 }, '!ref': 'A1:A2' }), { type: 'string' });
-txtCase('empty sheet -> BOM only', () => ({}));
+txtCase('empty sheet -> empty string', () => ({}));
 txtCase('surrogate pair (emoji) content, type:"string"', () => ({ A1: { t: 's', v: '😀emoji' }, '!ref': 'A1:A1' }), { type: 'string' });
 txtCase('opts.FS/RS are set by sheet_to_txt itself (mutation fidelity)', () => ({ A1: { t: 'n', v: 1 }, '!ref': 'A1:A1' }), {});
 

@@ -4417,7 +4417,8 @@ pub fn save_workbook_fast(vm: &Vm, path: &str) -> Result<(), String> {
 
 #[cfg(feature = "python")]
 #[pyfunction]
-#[pyo3(signature = (path, sheet = None, include_row_numbers = false, max_rows = None, max_row_bytes = None, max_columns = None, timeout_ms = None))]
+#[pyo3(signature = (path, sheet = None, include_row_numbers = false, max_rows = None, max_row_bytes = None, max_columns = None, timeout_ms = None, cancellation = None))]
+#[allow(clippy::too_many_arguments)] // Public Python signature is append-only for compatibility.
 fn open_stream(
     path: &str,
     sheet: Option<&str>,
@@ -4426,6 +4427,7 @@ fn open_stream(
     max_row_bytes: Option<usize>,
     max_columns: Option<usize>,
     timeout_ms: Option<u64>,
+    cancellation: Option<PyRef<'_, PyReadCancellation>>,
 ) -> PyResult<stream::PyStreamReader> {
     stream::stream_reader_from_path(
         path,
@@ -4435,6 +4437,7 @@ fn open_stream(
         max_row_bytes,
         max_columns,
         timeout_ms,
+        cancellation.map(|value| Arc::clone(&value.flag)),
     )
 }
 

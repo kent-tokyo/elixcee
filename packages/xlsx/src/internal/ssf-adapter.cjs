@@ -3,7 +3,7 @@
 // Isolated boundary around the `ssf` npm package (Apache-2.0, SheetJS) — the ONLY file
 // in this package that `require`s it. This is a deliberate, disclosed, TRANSITIONAL
 // runtime dependency (see docs/xlsx-architecture.md's "SSF backend" decision and
-// docs/licensing.md): xlsx@0.18.5 bundles the identical format-string engine inline
+// docs/licensing.md): SheetJS xlsx@0.20.3 bundles the same SSF format-string engine inline
 // (no `require('ssf')` in its own source), confirmed empirically against the bundled
 // engine across a permanent 900+ case matrix (compat/differential/ssf-format.test.mjs)
 // — every table_fmt built-in and its SSF_default_map indirection, crossed with
@@ -54,6 +54,9 @@ function hasOwn(obj, key) {
 }
 
 function format(fmt, v, opts) {
+  if (typeof v === 'number' && !Number.isFinite(v)) {
+    return Number.isNaN(v) ? '#NUM!' : '#DIV/0!';
+  }
   if (typeof fmt === 'number' && hasOwn(DEFAULT_MAP_CORRECTION, fmt) && !hasOwn(opts && opts.table, fmt)) {
     const target = DEFAULT_MAP_CORRECTION[fmt];
     const sfmt = hasOwn(opts && opts.table, target) ? opts.table[target] : TARGET_FORMAT[target];

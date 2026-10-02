@@ -1,7 +1,7 @@
 # Migration and boundary guide
 
 This guide describes the safe first step when replacing an Excel-dependent
-batch job with elixcee 1.0.12. It is a migration guide, not a claim of full
+batch job with elixcee 1.0.13. It is a migration guide, not a claim of full
 Excel compatibility.
 
 ## Choose the runtime surface
@@ -10,9 +10,10 @@ Excel compatibility.
   formula recalculation, VBA data processing, and a saved workbook.
 - Use the CLI when the job needs a reproducible headless run, JSON diagnostics,
   or an explicit external-link policy.
-- Use the private JavaScript package only for its documented Node/browser/WASM
-  read, data-only edit, and bounded editor operations. Its preservation and VBA
-  contract is not identical to the native runtime.
+- Use the independently versioned `@elixcee/xlsx` package only for its
+  documented Node/browser/WASM read, data-only edit, and bounded editor
+  operations. Its preservation and VBA contract is not identical to the native
+  runtime.
 
 ## Minimal migration pattern
 

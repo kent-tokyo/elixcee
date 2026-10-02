@@ -19,6 +19,7 @@ export {
   decode_cell,
   decode_range,
   format_cell,
+  sheet_new,
   sheet_add_aoa,
   sheet_add_json,
   sheet_add_dom,

@@ -1,9 +1,10 @@
 # @elixcee/xlsx
 
-Experimental, private JavaScript workbook package (`0.0.0-development`); **not published to npm**.
+Experimental JavaScript workbook package, published independently from the
+native Rust/Python runtime. Install it with `npm install @elixcee/xlsx`.
 It is one package surface of elixcee's broader headless workbook automation
 project, not the native Rust/Python VBA runtime and not a complete Excel clone.
-Targets the documented subset of `xlsx@0.18.5` behavior, not a complete drop-in replacement.
+Targets the documented subset of SheetJS `xlsx@0.20.3` behavior, not a complete drop-in replacement.
 Reads use the Rust/WASM bridge; writes use a separate JavaScript OOXML/ZIP writer.
 The parent Rust/Python version does not describe this package's publication status.
 
@@ -16,7 +17,7 @@ those UI features are not additional exports from this package.
 
 | API | Scope |
 |---|---|
-| `utils.*` | All 33 runtime utility exports in the pinned oracle; intentional security/limit differences are documented |
+| `utils.*` | All 34 runtime utility exports in the pinned oracle; intentional security/limit differences are documented |
 | `SSF` | Number formatting through `ssf@0.11.2` |
 | `read(data, opts)` | Synchronous WASM-backed input, with no asynchronous initialization step |
 | `readFile` / `readFileSync` | The same Node-only function; normal filesystem errors propagate |
@@ -43,7 +44,7 @@ Browser file APIs are present but throw `ELIXCEE_UNSUPPORTED_IN_BROWSER`.
 Use FileReader/fetch to supply bytes, and download the result of `write` yourself.
 Unsupported output book types throw `ELIXCEE_UNSUPPORTED_BOOK_TYPE`.
 
-The private `@elixcee/xlsx/runtime` entry also exposes `executeOperationPlan` and
+The `@elixcee/xlsx/runtime` entry also exposes `executeOperationPlan` and
 `executeOperationPlanOnEditor`.
 This is a data-only automation boundary: plans support `setNumber`, `setString`,
 and `setBoolean` cell writes with 1-based coordinates, matching

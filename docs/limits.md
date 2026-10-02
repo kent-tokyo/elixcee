@@ -16,6 +16,13 @@ and generated XML during `append`, not all accepted rows until `close`.
 The existing `max_pending_bytes` default (64 MiB) remains a **cumulative admission
 budget**, not an RSS cap. `pending_bytes` counts accepted estimates until close
 and then resets to zero. `max_rows` and `max_columns` are optional positive limits.
+After a `StreamReader` is exhausted, `termination_reason` distinguishes clean
+`eof` from `max_rows`, `closed`, `canceled`, `timeout`, `read_error`, and
+`internal_error`. `limit_reached` is true only when the reader looked one row
+ahead and confirmed that input existed beyond `max_rows`; a worksheet with
+exactly that many rows ends as `eof`. The extra row is never returned. Optional
+`cancellation=ReadCancellation()` uses the same cooperative cancellation handle
+as bounded workbook reads.
 
 G1 checks the row-count limit before opening the iterable, then checks column and
 byte limits while consuming each item. Detecting excess width consumes at most

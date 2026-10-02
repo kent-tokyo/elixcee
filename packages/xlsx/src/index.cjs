@@ -10,7 +10,7 @@
 // Exact edge-case behavior (including quirks that look like bugs — e.g. decode_range
 // never validates or swaps a reversed range; book_append_sheet's error message mentions
 // ":" as a forbidden sheet-name character but the actual check never blocks it) was
-// verified against the real xlsx@0.18.5 (SheetJS, Apache-2.0) source and confirmed
+// verified against the real xlsx@0.20.3 (SheetJS, Apache-2.0) source and confirmed
 // against a live oracle run — see compat/differential/. Code below is an independent
 // implementation, not copied text; see docs/licensing.md for the licensing boundary.
 
@@ -148,7 +148,7 @@ function decodeRange(range) {
   return { s: decodeCell(range.slice(0, idx)), e: decodeCell(range.slice(idx + 1)) };
 }
 
-// safe_decode_range deliberately does NOT live here: it is not part of xlsx@0.18.5's
+// safe_decode_range deliberately does NOT live here: it is not part of xlsx@0.20.3's
 // public `utils` surface (confirmed:
 // `Object.prototype.hasOwnProperty.call(XLSX.utils, "safe_decode_range") === false` at
 // runtime). Publishing it under this compat namespace would itself be a compatibility
@@ -192,7 +192,7 @@ function toBytes(data, opts) {
   if (typeof data === 'string' && o.type === 'base64') return Uint8Array.from(Buffer.from(data, 'base64'));
   const err = new Error(
     "read(): unsupported input — pass a Buffer/Uint8Array, or a base64 string with opts.type " +
-      "=== 'base64'. Other xlsx@0.18.5 `type` values (binary/array/string/file) are not " +
+      "=== 'base64'. Other xlsx@0.20.3 `type` values (binary/array/string/file) are not " +
       'implemented yet.'
   );
   err.code = ELIXCEE_UNSUPPORTED_READ_TYPE;
@@ -288,7 +288,7 @@ function write(wb, opts) {
       const err = new Error(
         "write(): unsupported opts.type " +
           JSON.stringify(o.type) +
-          " — pass 'buffer', 'array', or 'base64'. Other xlsx@0.18.5 `type` values " +
+          " — pass 'buffer', 'array', or 'base64'. Other xlsx@0.20.3 `type` values " +
           "('binary'/'string'/'file') are not implemented yet."
       );
       err.code = ELIXCEE_UNSUPPORTED_WRITE_TYPE;
@@ -315,18 +315,21 @@ function writeFileSyncImpl(wb, filename, opts) {
 
 // ---- workbook / sheet ----
 
-function bookNew() {
-  return { SheetNames: [], Sheets: {} };
+function bookNew(ws, wsname) {
+  const wb = { SheetNames: [], Sheets: {} };
+  if (ws) bookAppendSheet(wb, ws, wsname || 'Sheet1');
+  return wb;
 }
 
-// Characters actually rejected by the real oracle — note ":" is NOT in this list even
-// though the thrown error message text claims it is (a confirmed oracle quirk: the
-// message and the check disagree). Replicated as-is, message text included, since the
-// message text itself is part of what a caller might match on or display.
-const SHEET_NAME_BAD_CHARS = ['[', ']', '*', '?', '/', '\\'];
+const SHEET_NAME_BAD_CHARS = [':', ']', '[', '*', '?', '/', '\\'];
 
 function checkSheetName(name) {
-  if (name.length > 31) throw new Error('Sheet names cannot exceed 31 chars');
+  if (name === '') throw new Error('Sheet name cannot be blank');
+  if (name.length > 31) throw new Error('Sheet name cannot exceed 31 chars');
+  if (name.charCodeAt(0) === 0x27 || name.charCodeAt(name.length - 1) === 0x27) {
+    throw new Error("Sheet name cannot start or end with apostrophe (')");
+  }
+  if (name.toLowerCase() === 'history') throw new Error("Sheet name cannot be 'History'");
   for (const ch of SHEET_NAME_BAD_CHARS) {
     if (name.indexOf(ch) !== -1) {
       throw new Error('Sheet name cannot contain : \\ / ? * [ ]');
@@ -344,7 +347,7 @@ function bookAppendSheet(wb, ws, name, roll) {
   }
   if (!name || wb.SheetNames.length >= 0xffff) throw new Error('Too many worksheets');
 
-  if (roll && wb.SheetNames.indexOf(name) >= 0) {
+  if (roll && wb.SheetNames.indexOf(name) >= 0 && name.length < 32) {
     const m = name.match(/(^.*?)(\d+)$/);
     i = (m && +m[2]) || 0;
     const root = (m && m[1]) || name;
@@ -419,8 +422,8 @@ function bookSetSheetVisibility(wb, sh, vis) {
 
 // ---- sheet_add_aoa / aoa_to_sheet ----
 //
-// Independent port of the oracle's sheet_add_aoa(_ws, data, opts): dense (array-of-
-// -arrays) vs. sparse (cell-ref-keyed object) storage — inferred from `_ws` when given,
+// Independent port of the oracle's sheet_add_aoa(_ws, data, opts): dense (`!data`
+// array-of-arrays) vs. sparse (cell-ref-keyed object) storage — inferred from `_ws` when given,
 // else `opts.dense` — origin (number row, -1 "append after existing range", "A1"-style
 // string, or {r,c} object), extending an existing `!ref` via safe_decode_range,
 // preserving an existing cell's `.z` when overwriting, null/undefined cell skipping,
@@ -428,10 +431,21 @@ function bookSetSheetVisibility(wb, sh, vis) {
 // rendered `.w` via the narrow SSF subset above; `opts.cellDates` keeps `t:'d'`/`v` as a
 // Date instead). `opts.dateNF` overrides the format string; anything other than the
 // literal 'm/d/yy' throws ELIXCEE_NUMFMT_UNSUPPORTED (see the section above).
+function denseData(ws) {
+  if (ws && Array.isArray(ws['!data'])) return ws['!data'];
+  if (Array.isArray(ws)) return ws;
+  return null;
+}
+
+function localToUtc(local) {
+  return new Date(Date.UTC(local.getFullYear(), local.getMonth(), local.getDate(), local.getHours(), local.getMinutes(), local.getSeconds(), local.getMilliseconds()));
+}
+
 function sheetAddAoa(_ws, data, opts) {
   const o = opts || {};
-  const dense = _ws ? Array.isArray(_ws) : !!o.dense;
-  const ws = _ws || (dense ? [] : {});
+  const isDense = _ws ? denseData(_ws) !== null : !!o.dense;
+  const ws = _ws || (isDense ? { '!data': [] } : {});
+  const dense = isDense ? (denseData(ws) || (ws['!data'] = [])) : null;
   let _R = 0;
   let _C = 0;
   if (ws && o.origin != null) {
@@ -480,24 +494,34 @@ function sheetAddAoa(_ws, data, opts) {
             cell.v = 0;
           } else if (!o.sheetStubs) continue;
           else cell.t = 'z';
-        } else if (typeof cell.v === 'number') cell.t = 'n';
+        } else if (typeof cell.v === 'number') {
+          if (Number.isFinite(cell.v)) cell.t = 'n';
+          else if (Number.isNaN(cell.v)) {
+            cell.t = 'e';
+            cell.v = 0x0f;
+          } else {
+            cell.t = 'e';
+            cell.v = 0x07;
+          }
+        }
         else if (typeof cell.v === 'boolean') cell.t = 'b';
         else if (cell.v instanceof Date) {
           cell.z = o.dateNF || 'm/d/yy';
+          if (!o.UTC) cell.v = localToUtc(cell.v);
           if (o.cellDates) {
             cell.t = 'd';
-            cell.w = ssfFormat(cell.z, datenum(cell.v));
+            cell.w = ssfFormat(cell.z, datenum(cell.v, o.date1904));
           } else {
             cell.t = 'n';
-            cell.v = datenum(cell.v);
+            cell.v = datenum(cell.v, o.date1904);
             cell.w = ssfFormat(cell.z, cell.v);
           }
         } else cell.t = 's';
       }
       if (dense) {
-        if (!ws[__R]) ws[__R] = [];
-        if (ws[__R][__C] && ws[__R][__C].z) cell.z = ws[__R][__C].z;
-        ws[__R][__C] = cell;
+        if (!dense[__R]) dense[__R] = [];
+        if (dense[__R][__C] && dense[__R][__C].z) cell.z = dense[__R][__C].z;
+        dense[__R][__C] = cell;
       } else {
         const cellRef = encodeCell({ c: __C, r: __R });
         if (ws[cellRef] && ws[cellRef].z) cell.z = ws[cellRef].z;
@@ -513,6 +537,12 @@ function aoaToSheet(data, opts) {
   return sheetAddAoa(null, data, opts);
 }
 
+function sheetNew(opts) {
+  const ws = {};
+  if (opts && opts.dense) ws['!data'] = [];
+  return ws;
+}
+
 // ---- sheet_add_json / json_to_sheet ----
 //
 // Independent port of the oracle's sheet_add_json(_ws, js, opts): header-row inference
@@ -523,20 +553,14 @@ function aoaToSheet(data, opts) {
 // real oracle quirk, reproduced as-is), and Date cells (serial `v` + `z:'m/d/yy'`, but —
 // also confirmed live — no `.w` is ever computed here, unlike sheet_add_aoa).
 //
-// Dense (`_ws` given as an array) is supported only as faithfully as the oracle supports
-// it: scalar values land correctly in the nested array via ws_get_cell_stub, but object-
-// typed JSON values AND the header row are both written as stray string-ref properties
-// on the array (`ws.A1 = ...`) rather than into the nested rows — confirmed live
-// (`sheet_add_json([], [{a:1}])` leaves `ws[0]` `null` and the header text only
-// reachable via `ws.A1`). `opts.dense` itself has no effect when `_ws` is null — also
-// confirmed live (json_to_sheet(data, {dense:true}) still returns a plain sparse
-// object). Reproduced exactly, not "fixed", per this project's fidelity-over-tidiness
-// rule for the real oracle's own quirks. See docs/compatibility-known-defects.md.
+// Dense worksheets use SheetJS 0.20's `{ "!data": [...] }` representation. The helper
+// also accepts the pre-0.20 array representation as a backwards-compatible extension.
 function wsGetCellStub(ws, ref) {
-  if (Array.isArray(ws)) {
+  const dense = denseData(ws);
+  if (dense) {
     const RC = decodeCell(ref);
-    if (!ws[RC.r]) ws[RC.r] = [];
-    return ws[RC.r][RC.c] || (ws[RC.r][RC.c] = { t: 'z' });
+    if (!dense[RC.r]) dense[RC.r] = [];
+    return dense[RC.r][RC.c] || (dense[RC.r][RC.c] = { t: 'z' });
   }
   return ws[ref] || (ws[ref] = { t: 'z' });
 }
@@ -545,7 +569,7 @@ function wsGetCellStub(ws, ref) {
 // that name — confirmed by reading compat/node_modules/xlsx/xlsx.js: `sheet_get_cell:
 // ws_get_cell_stub`), accepting all 3 call shapes it does: an A1 string ref (handled by
 // wsGetCellStub above), a CellAddress-like object (recurse via encode_cell), or 0-based
-// (row, col) numbers (recurse via encode_cell({r,c})). Not in xlsx@0.18.5's own
+// (row, col) numbers (recurse via encode_cell({r,c})). Not in xlsx@0.20.3's own
 // types/index.d.ts at all (confirmed: no `get_cell` entry in types/index.d.ts) even
 // though it's a real runtime export — src/index.d.ts adds a type for it as pure
 // ADDITION, not tightening (there is no oracle declaration to narrow). Like
@@ -559,8 +583,10 @@ function sheetGetCell(ws, R, C) {
 
 function sheetAddJson(_ws, js, opts) {
   const o = opts || {};
+  const isDense = _ws ? denseData(_ws) !== null : !!o.dense;
   const offset = +!o.skipHeader;
-  const ws = _ws || {};
+  const ws = _ws || (isDense ? { '!data': [] } : {});
+  const dense = isDense ? (denseData(ws) || (ws['!data'] = [])) : null;
   let _R = 0;
   let _C = 0;
   if (ws && o.origin != null) {
@@ -587,32 +613,42 @@ function sheetAddJson(_ws, js, opts) {
   const hdr = o.header || [];
   let C = 0;
   js.forEach((JS, R) => {
+    const rowIndex = _R + R + offset;
+    if (dense && !dense[rowIndex]) dense[rowIndex] = [];
     Object.keys(JS).forEach((k) => {
       if ((C = hdr.indexOf(k)) === -1) hdr[(C = hdr.length)] = k;
       let v = JS[k];
       let t = 'z';
       let z = '';
-      const ref = encodeCell({ c: _C + C, r: _R + R + offset });
-      const cell = wsGetCellStub(ws, ref);
+      const ref = encodeCell({ c: _C + C, r: rowIndex });
+      let cell = dense ? dense[rowIndex][_C + C] : ws[ref];
       if (v && typeof v === 'object' && !(v instanceof Date)) {
-        ws[ref] = v;
+        if (dense) dense[rowIndex][_C + C] = v;
+        else ws[ref] = v;
       } else {
         if (typeof v === 'number') t = 'n';
         else if (typeof v === 'boolean') t = 'b';
         else if (typeof v === 'string') t = 's';
         else if (v instanceof Date) {
           t = 'd';
+          if (!o.UTC) v = localToUtc(v);
           if (!o.cellDates) {
             t = 'n';
             v = datenum(v);
           }
-          z = o.dateNF || 'm/d/yy';
+          z = (cell && cell.z) || o.dateNF || 'm/d/yy';
         } else if (v === null && o.nullError) {
           t = 'e';
           v = 0;
         }
-        cell.t = t;
-        cell.v = v;
+        if (!cell) {
+          cell = { t, v };
+          if (dense) dense[rowIndex][_C + C] = cell;
+          else ws[ref] = cell;
+        } else {
+          cell.t = t;
+          cell.v = v;
+        }
         delete cell.w;
         delete cell.R;
         if (z) cell.z = z;
@@ -621,9 +657,11 @@ function sheetAddJson(_ws, js, opts) {
   });
   range.e.c = Math.max(range.e.c, _C + hdr.length - 1);
   const __R = encodeRow(_R);
+  if (dense && !dense[_R]) dense[_R] = [];
   if (offset) {
     for (C = 0; C < hdr.length; ++C) {
-      ws[encodeCol(C + _C) + __R] = { t: 's', v: hdr[C] };
+      if (dense) dense[_R][C + _C] = { t: 's', v: hdr[C] };
+      else ws[encodeCol(C + _C) + __R] = { t: 's', v: hdr[C] };
     }
   }
   ws['!ref'] = encodeRange(range);
@@ -698,16 +736,16 @@ function sheetToJson(sheet, opts) {
   const cols = [];
   const out = [];
   let outi = 0;
-  const dense = Array.isArray(sheet);
+  const dense = denseData(sheet);
   let R = r.s.r;
   const header_cnt = {};
-  if (dense && !sheet[R]) sheet[R] = [];
+  if (dense && !dense[R]) dense[R] = [];
   const colinfo = (o.skipHidden && sheet['!cols']) || [];
   const rowinfo = (o.skipHidden && sheet['!rows']) || [];
   for (let C = r.s.c; C <= r.e.c; ++C) {
     if ((colinfo[C] || {}).hidden) continue;
     cols[C] = encodeCol(C);
-    let val = dense ? sheet[R][C] : sheet[cols[C] + rr];
+    let val = dense ? dense[R][C] : sheet[cols[C] + rr];
     switch (header) {
       case 1:
         hdr[C] = C - r.s.c;
@@ -780,9 +818,9 @@ function makeJsonRow(sheet, r, R, cols, header, hdr, dense, o) {
     if (header === 1) row[key] = value;
     else setJsonRowKey(row, key, value);
   }
-  if (!dense || sheet[R]) {
+  if (!dense || dense[R]) {
     for (let C = r.s.c; C <= r.e.c; ++C) {
-      const val = dense ? sheet[R][C] : sheet[cols[C] + rr];
+      const val = dense ? dense[R][C] : sheet[cols[C] + rr];
       if (val === undefined || val.t === undefined) {
         if (defval === undefined) continue;
         if (hdr[C] != null) setRow(hdr[C], defval);
@@ -838,11 +876,11 @@ function makeJsonRow(sheet, r, R, cols, header, hdr, dense, o) {
 // function's initial Phase 1B-2A implementation, once a crafted full-grid !ref was
 // confirmed live to make sheet_to_csv (which walks !ref the same way) not return within
 // 25s on the real oracle.
-function sheetToFormulae(sheet) {
+function sheetToFormulae(sheet, opts) {
   if (sheet == null || sheet['!ref'] == null) return [];
   const r = safeDecodeRange(sheet['!ref']);
   checkRangeSize(r);
-  const dense = Array.isArray(sheet);
+  const dense = denseData(sheet);
   const cols = [];
   for (let C = r.s.c; C <= r.e.c; ++C) cols[C] = encodeCol(C);
   const cmds = [];
@@ -850,7 +888,7 @@ function sheetToFormulae(sheet) {
     const rr = encodeRow(R);
     for (let C = r.s.c; C <= r.e.c; ++C) {
       let y = cols[C] + rr;
-      const x = dense ? (sheet[R] || [])[C] : sheet[y];
+      const x = dense ? (dense[R] || [])[C] : sheet[y];
       if (x === undefined) continue;
       let val;
       if (x.F != null) {
@@ -860,6 +898,7 @@ function sheetToFormulae(sheet) {
         if (y.indexOf(':') === -1) y = y + ':' + y;
       }
       if (x.f != null) val = x.f;
+      else if (opts && opts.values === false) continue;
       else if (x.t === 'z') continue;
       else if (x.t === 'n' && x.v != null) val = '' + x.v;
       else if (x.t === 'b') val = x.v ? 'TRUE' : 'FALSE';
@@ -888,22 +927,19 @@ function sheetToFormulae(sheet) {
 // separator only precedes an actually-EMITTED row (a skipped row doesn't consume a
 // leading separator) — confirmed live via aoa_to_sheet([[1],[],[3]]).
 //
-// sheet_to_csv mutates its `opts` argument: sets o.dense (Array.isArray(sheet)) for the
-// duration of the call, then deletes it — confirmed live (an opts object with a
-// pre-existing `dense` key comes back WITHOUT that key afterward). o.strip builds
-// `new RegExp((FS=="|" ? "\\|" : FS)+"+$")` — only `|` is escaped; any other FS is used
-// RAW as a regex fragment, so e.g. FS:"." strips the entire row (matches "any char,
-// greedy") and FS:"(" throws a native SyntaxError (invalid regex) — both confirmed live,
-// reproduced as-is with no extra escaping added.
+// Dense storage is read from `sheet["!data"]`. `strip:true` removes trailing empty
+// fields before joining, so arbitrary field separators are treated as data rather than
+// interpolated into a regular expression.
 const CSV_QUOTE_RE = /"/g;
 
 function makeCsvRow(sheet, r, R, cols, fs, rs, FS, o) {
   let isempty = true;
   const row = [];
   const rr = encodeRow(R);
+  const dense = denseData(sheet);
   for (let C = r.s.c; C <= r.e.c; ++C) {
     if (!cols[C]) continue;
-    const val = o.dense ? (sheet[R] || [])[C] : sheet[cols[C] + rr];
+    const val = dense ? (dense[R] || [])[C] : sheet[cols[C] + rr];
     let txt;
     if (val == null) txt = '';
     else if (val.v != null) {
@@ -916,7 +952,7 @@ function makeCsvRow(sheet, r, R, cols, fs, rs, FS, o) {
           break;
         }
       }
-      if (txt === 'ID') txt = '"ID"';
+      if (txt === 'ID' && row.length === 0) txt = '"ID"';
     } else if (val.f != null && !val.F) {
       isempty = false;
       txt = '=' + val.f;
@@ -924,6 +960,7 @@ function makeCsvRow(sheet, r, R, cols, fs, rs, FS, o) {
     } else txt = '';
     row.push(txt);
   }
+  if (o.strip) while (row[row.length - 1] === '') --row.length;
   if (o.blankrows === false && isempty) return null;
   return row.join(FS);
 }
@@ -938,9 +975,7 @@ function sheetToCsv(sheet, opts) {
   const fs = FS.charCodeAt(0);
   const RS = o.RS !== undefined ? o.RS : '\n';
   const rs = RS.charCodeAt(0);
-  const endregex = new RegExp((FS === '|' ? '\\|' : FS) + '+$');
   const cols = [];
-  o.dense = Array.isArray(sheet);
   const colinfo = (o.skipHidden && sheet['!cols']) || [];
   const rowinfo = (o.skipHidden && sheet['!rows']) || [];
   for (let C = r.s.c; C <= r.e.c; ++C) {
@@ -951,47 +986,21 @@ function sheetToCsv(sheet, opts) {
     if ((rowinfo[R] || {}).hidden) continue;
     let row = makeCsvRow(sheet, r, R, cols, fs, rs, FS, o);
     if (row == null) continue;
-    if (o.strip) row = row.replace(endregex, '');
     if (row || o.blankrows !== false) out.push((w++ ? RS : '') + row);
   }
-  delete o.dense;
   return out.join('');
-}
-
-// UTF-16LE-encoding codepage 1200 needs no lookup table (unlike e.g. codepage 932) —
-// verified byte-exact against the real oracle's codepage encoder across ASCII/BMP/
-// astral/lone-surrogate cases, so this package implements it directly rather than
-// taking on the separate "codepage" npm package as another dependency just for this.
-function utf16leEncode(str) {
-  let out = '';
-  for (let i = 0; i < str.length; ++i) {
-    const cu = str.charCodeAt(i);
-    out += String.fromCharCode(cu & 0xff) + String.fromCharCode((cu >> 8) & 0xff);
-  }
-  return out;
 }
 
 // sheet_to_txt sets opts.FS='\t'/opts.RS='\n' on the CALLER'S opts object (mutates it in
 // place, confirmed live — an opts:{} object comes back as {FS:'\t',RS:'\n'} after the
-// call), then delegates to sheet_to_csv. Unless opts.type === 'string', the oracle
-// UTF-16LE-encodes the result with a leading BOM — but ONLY when its internal
-// "$cptable" codepage support happens to be loaded, which differs by how the real
-// oracle package itself is reached: confirmed live that both `require('xlsx')` and a
-// bare `import 'xlsx'` in Node ESM resolve to its CJS build (no `exports` map on the
-// real package, so ESM falls back to `main`), which auto-loads codepage support — so
-// BOM+UTF-16LE is what any normal Node consumer of the real "xlsx" package name
-// actually observes by default, regardless of require/import. Only a bundler-resolved
-// deep import of the oracle's separate xlsx.mjs file (not reachable through the
-// "xlsx" package name) sees the opposite default. This package has one canonical
-// sheet_to_txt implementation shared by its own CJS and ESM entrypoints, so it always
-// matches the require/bare-import default.
+// call), then delegates to sheet_to_csv. SheetJS 0.20.3's standard package does not
+// preload a codepage table, so this returns the plain string result.
 function sheetToTxt(sheet, opts) {
   const o = opts || {};
   o.FS = '\t';
   o.RS = '\n';
   const s = sheetToCsv(sheet, o);
-  if (o.type === 'string') return s;
-  return String.fromCharCode(255) + String.fromCharCode(254) + utf16leEncode(s);
+  return s;
 }
 
 // ---- sheet_to_html ----
@@ -1008,9 +1017,7 @@ function sheetToTxt(sheet, opts) {
 // decodeRange (matching the oracle's own call site — sheet_to_html calls decode_range,
 // not safe_decode_range), so a malformed !ref throws here exactly as it does on the
 // oracle, unlike sheet_to_csv/sheet_to_json which use the lenient internal parser.
-// o.dense is set but deliberately never deleted (matches the oracle exactly -- confirmed
-// live sheet_to_html leaks `dense` onto a caller's own opts object, unlike sheet_to_csv
-// which does `delete o.dense`) -- an opts-mutation-fidelity quirk, not a bug to "fix".
+// Dense storage is detected from `sheet["!data"]`; caller options are not mutated.
 //
 // SECURITY: three distinct HTML-injection-shaped findings from reading + live-probing the
 // oracle's source, each handled differently -- see docs/xlsx-security-model.md for the
@@ -1096,7 +1103,8 @@ function makeHtmlRow(sheet, r, R, o) {
     }
     if (RS < 0) continue;
     const coord = encodeCell({ r: R, c: C });
-    const cell = o.dense ? (sheet[R] || [])[C] : sheet[coord];
+    const dense = denseData(sheet);
+    const cell = dense ? (dense[R] || [])[C] : sheet[coord];
     const cellText = cell && cell.h || (cell && cell.w || (cell && formatCell(cell), cell && cell.w) || '');
     const renderedText = cell && cell.h && o.rawHtml === true ? cellText : escapeHtmlText(cellText);
     let w = (cell && cell.v != null && renderedText) || '';
@@ -1131,11 +1139,10 @@ function sheetToHtml(sheet, opts) {
   const header = o.header != null ? o.header : HTML_BEGIN;
   const footer = o.footer != null ? o.footer : HTML_END;
   const out = [header];
-  const r = decodeRange(sheet['!ref']);
+  const r = decodeRange(sheet['!ref'] || 'A1');
   checkRangeSize(r);
-  o.dense = Array.isArray(sheet);
   out.push(makeHtmlPreamble(o));
-  for (let R = r.s.r; R <= r.e.r; ++R) out.push(makeHtmlRow(sheet, r, R, o));
+  if (sheet['!ref']) for (let R = r.s.r; R <= r.e.r; ++R) out.push(makeHtmlRow(sheet, r, R, o));
   out.push('</table>' + footer);
   return out.join('');
 }
@@ -1185,14 +1192,15 @@ function cellAddComment(cell, text, author) {
 // (unconditionally, even when `formula` is undefined — matching `cell.f = formula` with
 // no guard; the `f` key exists with value undefined rather than being omitted,
 // confirmed live) and `.D` (only when `dynamic` is truthy — omitted entirely otherwise,
-// never set to false). Never touches `!ref` — confirmed live, even when the range
-// extends past an existing one. `range`/`formula` are never used as object keys
+// never set to false). Extends an existing `!ref` to include the array range, matching
+// SheetJS 0.20.3. `range`/`formula` are never used as object keys
 // anywhere in this function, so there is no __proto__-style hazard to guard against.
 function sheetSetArrayFormula(ws, range, formula, dynamic) {
   const rng = typeof range !== 'string' ? range : safeDecodeRange(range);
   const rngstr = typeof range === 'string' ? range : encodeRange(range);
   for (let R = rng.s.r; R <= rng.e.r; ++R) {
     for (let C = rng.s.c; C <= rng.e.c; ++C) {
+      if (C < 0) throw new Error('invalid column ' + C);
       const cell = wsGetCellStub(ws, encodeCell({ r: R, c: C || 0 }));
       cell.t = 'n';
       cell.F = rngstr;
@@ -1203,6 +1211,12 @@ function sheetSetArrayFormula(ws, range, formula, dynamic) {
       }
     }
   }
+  const wsr = decodeRange(ws['!ref']);
+  if (wsr.s.r > rng.s.r) wsr.s.r = rng.s.r;
+  if (wsr.s.c > rng.s.c) wsr.s.c = rng.s.c;
+  if (wsr.e.r < rng.e.r) wsr.e.r = rng.e.r;
+  if (wsr.e.c < rng.e.c) wsr.e.c = rng.e.c;
+  ws['!ref'] = encodeRange(wsr);
   return ws;
 }
 
@@ -1262,13 +1276,16 @@ function fuzzyNum(s) {
 }
 
 const FUZZY_DATE_LOWER_MONTHS = ['january', 'february', 'march', 'april', 'may', 'june', 'july', 'august', 'september', 'october', 'november', 'december'];
+const FUZZY_DATE_ISO_RE = /^(\d+)-(\d+)-(\d+)[T ](\d+):(\d+)(:\d+)(\.\d+)?[Z]?$/;
+const UTC_APPEND_WORKS = new Date('6/9/69 00:00 UTC').valueOf() === -17798400000;
 
 // Matches the oracle's own fuzzydate exactly. Uses .getYear() (not .getFullYear()) for
 // its year-range sanity check, deliberately reproducing that exact legacy API choice —
 // .getYear() returns year-1900 (e.g. 117 for 2017), which is why the "0 < y < 8099" bound
 // below is meaningless as a literal year check but is what the oracle actually tests.
 function fuzzyDate(s) {
-  const o = new Date(s);
+  if (FUZZY_DATE_ISO_RE.test(s)) return s.indexOf('Z') === -1 ? localToUtc(new Date(s)) : new Date(s);
+  const o = new Date(UTC_APPEND_WORKS && s.indexOf('UTC') === -1 ? s + ' UTC' : s);
   const n = new Date(NaN);
   const y = o.getYear();
   const m = o.getMonth();
@@ -1281,9 +1298,7 @@ function fuzzyDate(s) {
   } else if (lower.match(/[a-z]/)) {
     return n;
   }
-  if (y < 0 || y > 8099) return n;
-  if ((m > 0 || d > 1) && y !== 101) return o;
-  if (s.match(/[^-0-9:,/\\]/)) return n;
+  if (y < 0 || y > 8099 || s.match(/[^-0-9:,/\\ ]/)) return n;
   return o;
 }
 
@@ -1299,6 +1314,7 @@ function fuzzyParseDate(str) {
 
 function sheetAddDom(ws, table, opts) {
   const o = opts || {};
+  const dense = denseData(ws);
   let orR = 0;
   let orC = 0;
   if (o.origin != null) {
@@ -1383,9 +1399,9 @@ function sheetAddDom(ws, table, opts) {
         }
       }
       if (l && l.charAt(0) !== '#') cellObj.l = { Target: l };
-      if (o.dense) {
-        if (!ws[R + orR]) ws[R + orR] = [];
-        ws[R + orR][C + orC] = cellObj;
+      if (dense) {
+        if (!dense[R + orR]) dense[R + orR] = [];
+        dense[R + orR][C + orC] = cellObj;
       } else {
         ws[encodeCell({ c: C + orC, r: R + orR })] = cellObj;
       }
@@ -1439,7 +1455,7 @@ function htmlDecode(str) {
 
 function parseDomTable(table, opts) {
   const o = opts || {};
-  const ws = o.dense ? [] : {};
+  const ws = o.dense ? { '!data': [] } : {};
   return sheetAddDom(ws, table, opts);
 }
 
@@ -1577,6 +1593,7 @@ module.exports = {
   decode_cell: decodeCell,
   decode_range: decodeRange,
   format_cell: formatCell,
+  sheet_new: sheetNew,
   sheet_add_aoa: sheetAddAoa,
   sheet_add_json: sheetAddJson,
   sheet_add_dom: sheetAddDom,

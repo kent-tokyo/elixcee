@@ -1,7 +1,7 @@
 'use strict';
 
 // INTERNAL — not exported from the package's public entrypoint (src/index.cjs / .mjs /
-// .d.ts) and not part of `Object.keys` on the public namespace. `xlsx@0.18.5` does not
+// .d.ts) and not part of `Object.keys` on the public namespace. `xlsx@0.20.3` does not
 // export `utils.safe_decode_range` either (confirmed:
 // `Object.prototype.hasOwnProperty.call(XLSX.utils, "safe_decode_range") === false` at
 // runtime, despite an internal same-named function existing in the SheetJS source and

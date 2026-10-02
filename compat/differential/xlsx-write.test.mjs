@@ -202,6 +202,14 @@ runWriteCase('a sparse worksheet with a gap between populated cells', (() => {
   return wb;
 })());
 
+runWriteCase('a dense !data worksheet', (() => {
+  const wb = U.book_new();
+  const ws = U.aoa_to_sheet([['dense', 1], ['row2', true]], { dense: true });
+  ws['!rows'] = [, { hidden: true }];
+  U.book_append_sheet(wb, ws, 'Dense');
+  return wb;
+})());
+
 runWriteCase('formula cells (.f roundtrip, cached value present)', (() => {
   const wb = U.book_new();
   U.book_append_sheet(

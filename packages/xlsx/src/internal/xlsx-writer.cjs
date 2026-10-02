@@ -415,15 +415,16 @@ const CELL_REF_RE = /^[A-Z]+[0-9]+$/;
 
 // Flattens a WorkSheet's populated cells into `[{r, c, cell}]` (0-based), regardless of
 // whether the caller used sparse (cell-ref-keyed object, e.g. aoa_to_sheet's default) or
-// dense (`Array.isArray(ws)`, e.g. sheet_add_aoa's dense mode) storage — one shape the row
+// dense (`ws["!data"]`, with legacy array support) storage — one shape the row
 // -grouping logic below builds `<row>`/`<c>` XML from either way. A worksheet in neither
 // shape (not an object, not an array) is rejected explicitly rather than silently
 // producing an empty sheet — this project's own rule for any input it doesn't recognize.
 function collectCells(ws) {
   const out = [];
-  if (Array.isArray(ws)) {
-    for (let r = 0; r < ws.length; r++) {
-      const row = ws[r];
+  const dense = ws && Array.isArray(ws['!data']) ? ws['!data'] : Array.isArray(ws) ? ws : null;
+  if (dense) {
+    for (let r = 0; r < dense.length; r++) {
+      const row = dense[r];
       if (row == null) continue;
       if (!Array.isArray(row)) {
         throw unsupported(ELIXCEE_UNSUPPORTED_SHEET_SHAPE, `dense worksheet row ${r} is not an array`);
@@ -444,6 +445,11 @@ function collectCells(ws) {
     out.push({ r, c, cell: ws[key] });
   }
   return out;
+}
+
+function worksheetCell(ws, r, c) {
+  const dense = ws && Array.isArray(ws['!data']) ? ws['!data'] : Array.isArray(ws) ? ws : null;
+  return dense ? dense[r]?.[c] : ws?.[encodeCell({ r, c })];
 }
 
 // One `<c>` element, or '' for a cell with nothing to write (a `{t:'z'}` stub, or any
@@ -551,7 +557,7 @@ function buildColsXml(colsMeta) {
 }
 
 function buildSheetViewsXml(ws) {
-  const freeze = Array.isArray(ws) ? undefined : ws?.['!freezePane'];
+  const freeze = ws?.['!freezePane'];
   const rows = Number(freeze?.rows);
   const cols = Number(freeze?.cols);
   if (!Number.isInteger(rows) || !Number.isInteger(cols) || rows < 0 || cols < 0 || (rows === 0 && cols === 0) || rows > 1048575 || cols > 16383) return '';
@@ -601,7 +607,7 @@ function buildTableInfo(ws, table, sheetIndex, sheetName, tableNumber) {
   if (!/^[A-Za-z_][A-Za-z0-9_.]{0,254}$/.test(displayName) || /^[A-Za-z]+[0-9]+$/.test(displayName)) return null;
   const headers = [];
   for (let col = range.s.c; col <= range.e.c; col += 1) {
-    const cell = ws[encodeCell({ r: range.s.r, c: col })];
+    const cell = worksheetCell(ws, range.s.r, col);
     const label = String(cell?.v ?? '').trim() || `Column${col - range.s.c + 1}`;
     headers.push(`${label}`);
   }
@@ -626,7 +632,7 @@ function buildTableInfo(ws, table, sheetIndex, sheetName, tableNumber) {
 }
 
 function buildTableInfos(ws, sheetIndex, sheetName) {
-  if (Array.isArray(ws) || !Array.isArray(ws?.['!tables'])) return [];
+  if (!Array.isArray(ws?.['!tables'])) return [];
   return ws['!tables'].map((table, index) => buildTableInfo(ws, table, sheetIndex, sheetName, index + 1)).filter(Boolean);
 }
 
@@ -763,7 +769,7 @@ function quoteChartSheet(name) {
 
 function chartForWorksheet(ws, sheetName, chartIndex) {
   const chartOrdinal = arguments.length > 3 ? arguments[3] : 0;
-  const source = !Array.isArray(ws) && Array.isArray(ws?.['!charts']) ? ws['!charts'][chartOrdinal] : undefined;
+  const source = Array.isArray(ws?.['!charts']) ? ws['!charts'][chartOrdinal] : undefined;
   if (!source || typeof source !== 'object' || typeof source.ref !== 'string') return null;
   let range;
   try { range = safeDecodeRange(source.ref); checkRangeSize(range); } catch { return null; }
@@ -772,14 +778,14 @@ function chartForWorksheet(ws, sheetName, chartIndex) {
   for (let col = range.s.c + 1; col <= Math.min(range.e.c, range.s.c + 65); col += 1) {
     const categories = []; const values = [];
     for (let row = range.s.r + 1; row <= range.e.r; row += 1) {
-      const number = Number(ws[encodeCell({ r: row, c: col })]?.v);
+      const number = Number(worksheetCell(ws, row, col)?.v);
       if (!Number.isFinite(number)) continue;
-      categories.push(String(ws[encodeCell({ r: row, c: range.s.c })]?.v ?? '')); values.push(number);
+      categories.push(String(worksheetCell(ws, row, range.s.c)?.v ?? '')); values.push(number);
     }
     if (!values.length) continue;
     const valueCol = encodeCell({ r: range.s.r, c: col }).replace(/\d+$/, '');
     series.push({
-      name: String(ws[encodeCell({ r: range.s.r, c: col })]?.v ?? `Series ${series.length + 1}`),
+      name: String(worksheetCell(ws, range.s.r, col)?.v ?? `Series ${series.length + 1}`),
       nameRef: `${quoteChartSheet(sheetName)}!$${valueCol}$${range.s.r + 1}`,
       valueRef: `${quoteChartSheet(sheetName)}!$${valueCol}$${range.s.r + 2}:$${valueCol}$${range.e.r + 1}`,
       color: chartSeriesColor(source.colors?.[series.length], series.length),
@@ -795,7 +801,7 @@ function chartForWorksheet(ws, sheetName, chartIndex) {
 }
 
 function chartsForWorksheet(ws, sheetName, sheetIndex) {
-  const count = !Array.isArray(ws) && Array.isArray(ws?.['!charts']) ? ws['!charts'].length : 0;
+  const count = Array.isArray(ws?.['!charts']) ? ws['!charts'].length : 0;
   return Array.from({ length: count }, (_, ordinal) => chartForWorksheet(ws, sheetName, sheetIndex, ordinal)).filter(Boolean);
 }
 
@@ -874,7 +880,7 @@ function buildSheetDataXml(ws, cells, styleTable) {
     maxC = Math.max(maxC, entry.c);
   }
 
-  const wsRowsMeta = Array.isArray(ws) ? undefined : ws['!rows'];
+  const wsRowsMeta = ws?.['!rows'];
   const hiddenRows = hiddenRowSet(wsRowsMeta);
   for (const row of hiddenRows) {
     if (!rows.has(row)) rows.set(row, []);
@@ -926,13 +932,13 @@ function buildSheetXml(ws, styleTable, sheetIndex, sheetName) {
   // (internal/range-guard.cjs), rather than a second bespoke limit — see
   // compat/differential/classify.mjs's SAFETY_DIVERGENCE_REGISTRY, keyed by that exact code.
   let declaredRef = null;
-  if (ws && !Array.isArray(ws) && typeof ws['!ref'] === 'string') {
+  if (ws && typeof ws['!ref'] === 'string') {
     checkRangeSize(safeDecodeRange(ws['!ref']));
     declaredRef = ws['!ref'];
   }
 
-  const wsRowsMeta = Array.isArray(ws) ? undefined : ws['!rows'];
-  const wsColsMeta = Array.isArray(ws) ? undefined : ws['!cols'];
+  const wsRowsMeta = ws?.['!rows'];
+  const wsColsMeta = ws?.['!cols'];
   const sheetData = buildSheetDataXml(ws, cells, styleTable);
   const dimensionRef = declaredRef || sheetData.dimensionRef;
 
@@ -947,9 +953,9 @@ function buildSheetXml(ws, styleTable, sheetIndex, sheetName) {
     buildSheetViewsXml(ws) +
     buildColsXml(wsColsMeta) +
     `<sheetData>${sheetData.xml}</sheetData>` +
-    buildMergesXml(Array.isArray(ws) ? undefined : ws['!merges']) +
-    buildDataValidationsXml(Array.isArray(ws) ? undefined : ws['!dataValidations']) +
-    buildConditionalFormattingXml(Array.isArray(ws) ? undefined : ws['!conditionalFormats'], styleTable) +
+    buildMergesXml(ws?.['!merges']) +
+    buildDataValidationsXml(ws?.['!dataValidations']) +
+    buildConditionalFormattingXml(ws?.['!conditionalFormats'], styleTable) +
     hyperlinkXml +
     (hasCharts ? `<drawing r:id="rId${hyperlinkInfo.relationships.length + 1}"/>` : '') +
     (commentsInfo

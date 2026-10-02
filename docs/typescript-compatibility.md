@@ -1,7 +1,8 @@
 # TypeScript surface compatibility
 
-Reference target: `xlsx@0.18.5`. This is a declaration-level comparison, not
-proof of runtime equivalence or npm publication.
+Reference target: SheetJS `xlsx@0.20.3`. This is a declaration-level comparison, not
+proof of runtime equivalence. npm publication is gated separately by the packed
+consumer, browser, license, and package-content checks.
 The private package's [README](../packages/xlsx/README.md) defines runtime scope;
 [src/index.d.ts](../packages/xlsx/src/index.d.ts) is the current declaration source.
 
@@ -24,8 +25,7 @@ Earlier utils comparisons do not establish exactness for all top-level read/writ
 | encode/decode col, row, cell, range | EXACT | Address helpers |
 | split_cell | SAFE_EXTENSION | Runtime export absent from reference declarations |
 | book_new / book_append_sheet / book_set_sheet_visibility | EXACT | Workbook utilities |
-| aoa_to_sheet / sheet_add_aoa / json_to_sheet / sheet_add_json | EXACT, except dense below | Reference option shapes |
-| AOA2SheetOpts.dense | SAFE_EXTENSION | Supported runtime option missing from reference types |
+| sheet_new / aoa_to_sheet / sheet_add_aoa / json_to_sheet / sheet_add_json | EXACT | Includes the 0.20 `!data` dense representation |
 | format_cell / cell_set_number_format | EXACT | Formatting |
 | sheet_to_formulae / sheet_to_csv / sheet_to_txt | EXACT | Export options |
 | cell_set_hyperlink / cell_set_internal_link / cell_add_comment / sheet_set_array_formula | EXACT | Cell utilities |
@@ -37,7 +37,7 @@ Earlier utils comparisons do not establish exactness for all top-level read/writ
 | sheet_add_dom / table_to_sheet / table_to_book | EXACT | data: any, not a narrower HTMLTableElement |
 
 The reference declares `sheet_to_dif`, `sheet_to_slk`, and `sheet_to_eth` but
-does not expose them in its 33 runtime utils keys. They are **MISSING declarations**,
+does not expose them in its 34 runtime utils keys. They are **MISSING declarations**,
 not three missing members of that runtime set; they remain outside the target.
 
 Top-level read/readFile/write/writeFile and synchronous aliases have declarations.

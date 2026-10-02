@@ -4,6 +4,29 @@
 
 ## [Unreleased]
 
+- Prepared the independently versioned `@elixcee/xlsx` 0.1.0 browser/Node
+  package for its first public npm release, including public package metadata,
+  packed-consumer checks, browser exports, license notices, and WASM runtime.
+- Added `StreamReader.termination_reason`, `limit_reached`, and `rows_read`.
+  A `max_rows` boundary now looks one row ahead so exact EOF remains distinct
+  from confirmed truncation. Streaming also accepts `ReadCancellation` and
+  records cancellation, timeout, read, and internal failures before raising.
+- Reject scalar value and formula writes outside Excel's 1-based worksheet
+  grid. Formula writes now also honor worksheet protection, matching value
+  writes and VBA mutation semantics.
+- Updated deterministic CLI black-box fixtures for the additive
+  `termination_class` field and restored the strict Clippy gate.
+- Replaced the vulnerable npm-registry `xlsx@0.18.5` compatibility oracle with
+  the official SheetJS 0.20.3 CDN tarball and refreshed the development
+  lockfile to remove known npm audit findings. This remains a private test-only
+  dependency and is not shipped by `@elixcee/xlsx`.
+- Aligned the JavaScript compatibility layer with SheetJS 0.20.3 for dense
+  `!data` worksheets, `sheet_new`, date and CSV conversion, workbook sheet-name
+  validation, array-formula ranges, and dense XLSX writing. The refreshed
+  differential corpus now covers the expanded public API and writer paths.
+- Regenerated the fuzz lockfile against elixcee 1.0.13 and the current parser
+  dependency graph so nightly fuzz builds no longer use stale release metadata.
+
 ## [1.0.13] - 2026-09-29
 
 - Fixed a UTF-8 boundary panic when an XML entity was followed by multibyte text

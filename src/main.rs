@@ -182,9 +182,7 @@ fn load_one_module(path: &str) -> Result<LoadedModule, LoadModuleError> {
         // `VERSION ... CLASS` header will later be identified by its `.cls`
         // extension. Reclassify declarations collected provisionally as
         // standard-module variables so class instances receive their fields.
-        program
-            .class_fields
-            .extend(program.module_variables.drain(..));
+        program.class_fields.append(&mut program.module_variables);
     }
     let name = program
         .module_name
@@ -940,7 +938,7 @@ fn source_bundle_hash(modules: &[LoadedModule]) -> String {
         for byte in module
             .name
             .bytes()
-            .chain([0u8].into_iter())
+            .chain([0u8])
             .chain(module.source.bytes())
         {
             hash ^= u64::from(byte);

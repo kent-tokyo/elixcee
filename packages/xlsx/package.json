@@ -1,9 +1,21 @@
 {
   "name": "@elixcee/xlsx",
-  "version": "0.0.0-development",
-  "private": true,
+  "version": "0.1.0",
+  "private": false,
   "description": "Drop-in-compatible reimplementation of xlsx (SheetJS) with bounded XLSX/XLSM read-write, formula calculation, and opaque VBA-project preservation. See README.md for exact scope.",
   "license": "MIT",
+  "homepage": "https://github.com/kent-tokyo/elixcee/tree/main/packages/xlsx",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/kent-tokyo/elixcee.git",
+    "directory": "packages/xlsx"
+  },
+  "bugs": {
+    "url": "https://github.com/kent-tokyo/elixcee/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
   "type": "commonjs",
   "main": "./src/index.cjs",
   "module": "./src/index.mjs",

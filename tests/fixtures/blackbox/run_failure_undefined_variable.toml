@@ -8,5 +8,5 @@ End Sub
 args = ["Main"]
 expect_exit_code = 1
 expect_json = """
-{"schema_version":1,"ok":false,"error":{"code":"E1001","kind":"undefined_variable","message":"Undefined variable: 'totla'","location":{"file":"<FILE>","line":2,"column":5}},"error_evidence":{"number":1004,"description":"Undefined variable: 'totla'","source":"","help_file":"","help_context":0},"messages":[]}
+{"schema_version":1,"ok":false,"termination_class":"runtime_error","error":{"code":"E1001","kind":"undefined_variable","message":"Undefined variable: 'totla'","location":{"file":"<FILE>","line":2,"column":5}},"error_evidence":{"number":1004,"description":"Undefined variable: 'totla'","source":"","help_file":"","help_context":0},"messages":[]}
 """

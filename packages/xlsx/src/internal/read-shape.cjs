@@ -67,11 +67,8 @@ function expandHiddenIntervals(intervals) {
 // 3. `t:'d'` requires opts.cellDates === true AND the resolved format is date-like
 //    (isDate) AND the cell is numeric — confirmed live: XLSX.read() never returns a
 //    date-typed cell without cellDates, even for an obviously date-formatted numeric
-//    cell (numFmtId 14 / "m/d/yy"). The Date object itself is built via numdate(), which
-//    (confirmed live against a real date1904 workbook) deliberately does NOT account for
-//    date1904 — matching a genuine inconsistency in the real oracle itself, where `.w`
-//    DOES shift for a date1904 file but the cellDates `.v` Date object does not. See
-//    datenum.cjs's numdate doc comment for the full writeup.
+//    cell (numFmtId 14 / "m/d/yy"). For a date1904 workbook the stored serial is shifted
+//    by 1462 before numdate(), matching SheetJS 0.20.x's parser.
 //
 // String cells: `.w` is always the literal `.v` (no SSF text-section formatting applied).
 // Boolean cells: `.w` is always "TRUE"/"FALSE". Both are deliberate, disclosed scope
@@ -116,8 +113,8 @@ function shapeCell(cell, opts, numFmts, date1904) {
   }
 
   if (opts && opts.cellDates && cell.t === 'n' && isDate(resolved)) {
-    cell.t = 'd';
-    cell.v = numdate(cell.v);
+    cell.v = numdate(cell.v + (date1904 ? 1462 : 0));
+    cell.t = typeof cell.v === 'number' ? 'n' : 'd';
   }
 }
 

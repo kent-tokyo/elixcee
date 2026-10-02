@@ -8,5 +8,5 @@ End Sub
 args = ["DoesNotExist"]
 expect_exit_code = 1
 expect_json = """
-{"schema_version":1,"ok":false,"error":{"code":"E1002","kind":"undefined_sub_or_function","message":"Sub 'DoesNotExist' not found","location":null},"messages":[]}
+{"schema_version":1,"ok":false,"termination_class":"runtime_error","error":{"code":"E1002","kind":"undefined_sub_or_function","message":"Sub 'DoesNotExist' not found","location":null},"messages":[]}
 """

@@ -1,6 +1,6 @@
 # Compatibility-known defects
 
-A record of compatibility decisions against the pinned `xlsx@0.18.5` oracle,
+A record of compatibility decisions against the pinned SheetJS `xlsx@0.20.3` oracle,
 not necessarily the latest upstream release. Harmless quirks may be reproduced;
 security-related differences are explicitly classified and must not be silently changed.
 
@@ -8,76 +8,6 @@ Contrast with [`docs/xlsx-security-model.md`](xlsx-security-model.md)'s intentio
 *divergences* — cases where elixcee deliberately does NOT match the oracle.
 Most entries below preserve harmless quirks; the final raw-HTML entry instead
 documents a safe default with an explicit trusted-markup opt-in.
-
----
-
-```yaml
-compatibility-known-defect:
-  api: book_append_sheet
-  case: colon in sheet name
-  oracle_behavior: accepted
-  excel_validity: invalid or application-dependent
-  elixcee_behavior: reproduced for compatibility
-```
-
-`check_ws_name`'s thrown error message reads `"Sheet name cannot contain : \ / ? * [ ]"`,
-listing `:` among the forbidden characters — but the actual character check
-(`badchars = "][*?/\\".split("")`, `xlsx.js`) never includes `:`. A sheet named
-`"Sheet:1"` is accepted without error. This is a genuine mismatch between the oracle's
-error message and its real behavior, not a documentation choice. `packages/xlsx`
-reproduces both: the same accept-with-colon behavior AND the same (technically
-inaccurate) error message text, since real-world code may already depend on either. See
-`compat/differential/xlsx-utils.test.mjs`'s `book_append_sheet` scenarios for the
-differential coverage (`"Sheet:1"` is one of the tested special-character names).
-
-This utility compatibility decision does not establish that Excel accepts the resulting
-file. The JS writer now exists; its behavior must be tested separately from both this
-utility and the Rust reader's stricter worksheet-name validation.
-
----
-
-```yaml
-compatibility-known-defect:
-  api: json_to_sheet / sheet_add_json
-  case: "opts.dense with no existing _ws"
-  oracle_behavior: silently ignored
-  elixcee_behavior: reproduced for compatibility
-```
-
-`sheet_add_json`'s source (unlike `sheet_add_aoa`'s) never reads `opts.dense` at all — it
-always creates `ws = _ws || ({})`, a plain object, regardless of the option. Confirmed
-live: `XLSX.utils.json_to_sheet(data, {dense:true})` returns an ordinary sparse
-(cell-ref-keyed) worksheet, not a dense array. `packages/xlsx` reproduces this exactly
-(no `dense`-option handling in `sheetAddJson`/`jsonToSheet`) rather than "fixing" it to
-honor the option the way `aoa_to_sheet` does. See
-`compat/differential/xlsx-utils.test.mjs`'s `"opts.dense has no effect when _ws is null"`
-fixture.
-
----
-
-```yaml
-compatibility-known-defect:
-  api: sheet_add_json
-  case: "_ws is an existing dense (array) worksheet"
-  oracle_behavior: header row and object-typed values leak as stray string-keyed
-    properties on the array instead of landing in the nested rows
-  elixcee_behavior: reproduced for compatibility
-```
-
-When `sheet_add_json` IS given an existing dense array as `_ws`, only plain scalar
-values (numbers/strings/booleans/Dates) are written correctly into the nested
-`ws[row][col]` cells (via the internal `ws_get_cell_stub`, ported as `wsGetCellStub`).
-The header row is written via a direct `ws[colLetter + rowNumber] = {...}` string-keyed
-assignment — confirmed live: `sheet_add_json([], [{a:1,b:'x'}])` leaves `ws[0]` as
-`null` while the header text is only reachable via the stray properties `ws.A1`/`ws.B1`.
-Object-typed JSON values (e.g. a caller-supplied full cell object) hit the same
-string-keyed-assignment path (`ws[ref] = v`) regardless of dense/sparse mode, so they
-never actually reach the dense array's nested cell either — the stub created for that
-slot stays `{t:'z'}`. `packages/xlsx` reproduces this exactly, including which specific
-cases are affected (scalars work, headers and object values don't), rather than
-"fixing" `sheet_add_json` to be dense-mode-consistent throughout. See
-`compat/differential/xlsx-utils.test.mjs`'s `"dense target: scalar values land in the
-nested array; header/object values leak as stray string-keyed props"` fixture.
 
 ---
 

@@ -7,7 +7,8 @@
 use std::fs::File;
 use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::sync::{
-    Mutex,
+    Arc, Mutex,
+    atomic::{AtomicBool, Ordering},
     mpsc::{self, Receiver, RecvTimeoutError},
 };
 use std::time::Duration;
@@ -164,6 +165,7 @@ fn stream_rows(
     sheet: Option<String>,
     max_row_bytes: usize,
     max_columns: usize,
+    cancellation: Option<Arc<AtomicBool>>,
 ) -> Result<Receiver<StreamMsg>, String> {
     let (zip_path, _) = sheet_target(&path, sheet.as_deref())?;
     let (tx, rx) = mpsc::sync_channel(2);
@@ -172,6 +174,12 @@ fn stream_rows(
         let result =
             std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| -> Result<bool, String> {
                 let tx = worker_tx;
+                if cancellation
+                    .as_ref()
+                    .is_some_and(|flag| flag.load(Ordering::Relaxed))
+                {
+                    return Err("READER_CANCELED: workbook stream was canceled".to_string());
+                }
                 let file = File::open(&path).map_err(|e| e.to_string())?;
                 let mut archive = zip::ZipArchive::new(file).map_err(|e| e.to_string())?;
                 reader::validate_zip_archive_for_stream(&mut archive)?;
@@ -191,6 +199,12 @@ fn stream_rows(
                 let mut token = Vec::with_capacity(1024);
                 let mut in_row = false;
                 loop {
+                    if cancellation
+                        .as_ref()
+                        .is_some_and(|flag| flag.load(Ordering::Relaxed))
+                    {
+                        return Err("READER_CANCELED: workbook stream was canceled".to_string());
+                    }
                     token.clear();
                     if input
                         .read_until(b'>', &mut token)
@@ -309,10 +323,13 @@ pub struct PyStreamReader {
     max_rows: Option<usize>,
     timeout_ms: Option<u64>,
     rows_read: usize,
+    termination_reason: Option<String>,
+    cancellation: Option<Arc<AtomicBool>>,
 }
 
 type RowReceiver = Mutex<Receiver<StreamMsg>>;
 
+#[allow(clippy::too_many_arguments)] // Mirrors the backward-compatible Python API options.
 pub(crate) fn stream_reader_from_path(
     path: &str,
     sheet: Option<&str>,
@@ -321,6 +338,7 @@ pub(crate) fn stream_reader_from_path(
     max_row_bytes: Option<usize>,
     max_columns: Option<usize>,
     timeout_ms: Option<u64>,
+    cancellation: Option<Arc<AtomicBool>>,
 ) -> PyResult<PyStreamReader> {
     validate_max_rows(max_rows).map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)?;
     validate_max_row_bytes(max_row_bytes)
@@ -332,6 +350,7 @@ pub(crate) fn stream_reader_from_path(
         sheet.map(str::to_string),
         max_row_bytes.unwrap_or(MAX_STREAM_ROW_BYTES),
         max_columns.unwrap_or(16_384),
+        cancellation.clone(),
     )
     .map_err(PyErr::new::<pyo3::exceptions::PyIOError, _>)?;
     Ok(PyStreamReader {
@@ -340,13 +359,50 @@ pub(crate) fn stream_reader_from_path(
         max_rows,
         timeout_ms,
         rows_read: 0,
+        termination_reason: None,
+        cancellation,
     })
+}
+
+impl PyStreamReader {
+    fn receive_next(&self) -> Result<StreamMsg, RecvTimeoutError> {
+        let Some(receiver) = &self.receiver else {
+            return Err(RecvTimeoutError::Disconnected);
+        };
+        let receiver = receiver.lock().expect("stream reader mutex poisoned");
+        match self.timeout_ms {
+            Some(timeout_ms) => receiver.recv_timeout(Duration::from_millis(timeout_ms)),
+            None => receiver.recv().map_err(|_| RecvTimeoutError::Disconnected),
+        }
+    }
+
+    fn terminate(&mut self, reason: &str) {
+        self.receiver = None;
+        self.termination_reason = Some(reason.to_string());
+    }
+
+    fn error_reason(error: &str) -> &'static str {
+        if error.starts_with("READER_CANCELED:") {
+            "canceled"
+        } else if error.starts_with("TIMEOUT:") {
+            "timeout"
+        } else {
+            "read_error"
+        }
+    }
+
+    fn canceled(&self) -> bool {
+        self.cancellation
+            .as_ref()
+            .is_some_and(|flag| flag.load(Ordering::Relaxed))
+    }
 }
 
 #[pymethods]
 impl PyStreamReader {
     #[new]
-    #[pyo3(signature = (path, sheet = None, include_row_numbers = false, max_rows = None, max_row_bytes = None, max_columns = None, timeout_ms = None))]
+    #[pyo3(signature = (path, sheet = None, include_row_numbers = false, max_rows = None, max_row_bytes = None, max_columns = None, timeout_ms = None, cancellation = None))]
+    #[allow(clippy::too_many_arguments)] // PyO3 constructor keeps existing positional options.
     fn new(
         path: &str,
         sheet: Option<&str>,
@@ -355,6 +411,7 @@ impl PyStreamReader {
         max_row_bytes: Option<usize>,
         max_columns: Option<usize>,
         timeout_ms: Option<u64>,
+        cancellation: Option<PyRef<'_, crate::PyReadCancellation>>,
     ) -> PyResult<Self> {
         stream_reader_from_path(
             path,
@@ -364,6 +421,7 @@ impl PyStreamReader {
             max_row_bytes,
             max_columns,
             timeout_ms,
+            cancellation.map(|value| Arc::clone(&value.flag)),
         )
     }
     fn __enter__(slf: PyRef<'_, Self>) -> PyRef<'_, Self> {
@@ -380,39 +438,57 @@ impl PyStreamReader {
     }
     /// Stop reading and release the worker receiver.
     fn close(&mut self) {
-        self.receiver = None;
+        if self.receiver.is_some() {
+            self.terminate("closed");
+        }
     }
     /// Whether this reader has been explicitly closed or exhausted.
     #[getter]
     fn closed(&self) -> bool {
         self.receiver.is_none()
     }
+    /// Terminal state after exhaustion, a limit, cancellation, timeout, error, or close.
+    #[getter]
+    fn termination_reason(&self) -> Option<String> {
+        self.termination_reason.clone()
+    }
+    /// Whether iteration stopped because more rows existed beyond max_rows.
+    #[getter]
+    fn limit_reached(&self) -> bool {
+        self.termination_reason.as_deref() == Some("max_rows")
+    }
+    /// Number of rows returned to the caller.
+    #[getter]
+    fn rows_read(&self) -> usize {
+        self.rows_read
+    }
     fn __iter__(slf: PyRef<'_, Self>) -> PyRef<'_, Self> {
         slf
     }
     fn __next__(&mut self, py: Python<'_>) -> PyResult<Option<Py<PyAny>>> {
-        let Some(receiver) = &self.receiver else {
+        if self.receiver.is_none() {
             return Ok(None);
-        };
-        let next = {
-            let receiver = receiver.lock().expect("stream reader mutex poisoned");
-            match self.timeout_ms {
-                Some(timeout_ms) => receiver.recv_timeout(Duration::from_millis(timeout_ms)),
-                None => receiver.recv().map_err(|_| RecvTimeoutError::Disconnected),
-            }
-        };
+        }
+        if self.canceled() {
+            self.terminate("canceled");
+            return Err(PyErr::new::<pyo3::exceptions::PyInterruptedError, _>(
+                "workbook stream was canceled",
+            ));
+        }
+        let checking_limit = self
+            .max_rows
+            .is_some_and(|max_rows| self.rows_read >= max_rows);
+        let next = self.receive_next();
         match next {
+            Ok(StreamMsg::Row(_, _)) if checking_limit => {
+                self.terminate("max_rows");
+                Ok(None)
+            }
             Ok(StreamMsg::Row(row_number, row)) => {
                 let values = PyList::new(py, row.iter().map(|v| variant_to_py(py, v)))?
                     .into_any()
                     .unbind();
                 self.rows_read += 1;
-                if self
-                    .max_rows
-                    .is_some_and(|max_rows| self.rows_read >= max_rows)
-                {
-                    self.receiver = None;
-                }
                 if self.include_row_numbers {
                     Ok(Some(
                         (row_number, values).into_pyobject(py)?.into_any().unbind(),
@@ -422,25 +498,31 @@ impl PyStreamReader {
                 }
             }
             Ok(StreamMsg::Error(err)) => {
-                self.receiver = None;
-                Err(PyErr::new::<pyo3::exceptions::PyIOError, _>(err))
+                let reason = Self::error_reason(&err);
+                self.terminate(reason);
+                if reason == "canceled" {
+                    Err(PyErr::new::<pyo3::exceptions::PyInterruptedError, _>(err))
+                } else {
+                    Err(PyErr::new::<pyo3::exceptions::PyIOError, _>(err))
+                }
             }
             Ok(StreamMsg::Internal(err)) => {
-                self.receiver = None;
+                self.terminate("internal_error");
                 Err(crate::InternalError::new_err(err))
             }
             Ok(StreamMsg::Done) => {
-                self.receiver = None;
+                self.terminate("eof");
                 Ok(None)
             }
             Err(RecvTimeoutError::Timeout) => {
+                self.terminate("timeout");
                 Err(PyErr::new::<pyo3::exceptions::PyTimeoutError, _>(format!(
                     "stream reader timed out after {} ms",
                     self.timeout_ms.expect("timeout error requires a timeout")
                 )))
             }
             Err(RecvTimeoutError::Disconnected) => {
-                self.receiver = None;
+                self.terminate("internal_error");
                 Err(crate::InternalError::new_err(
                     "elixcee internal error: stream worker stopped before the end of the worksheet; rows may be missing",
                 ))
@@ -964,6 +1046,22 @@ mod tests {
     fn streaming_reader_rejects_a_zero_timeout_before_opening_the_file() {
         let err = validate_timeout_ms(Some(0)).expect_err("zero timeout must be rejected");
         assert_eq!(err, "timeout_ms must be greater than zero");
+    }
+
+    #[test]
+    fn streaming_reader_classifies_terminal_worker_errors() {
+        assert_eq!(
+            super::PyStreamReader::error_reason("READER_CANCELED: host request"),
+            "canceled"
+        );
+        assert_eq!(
+            super::PyStreamReader::error_reason("TIMEOUT: deadline"),
+            "timeout"
+        );
+        assert_eq!(
+            super::PyStreamReader::error_reason("malformed worksheet XML"),
+            "read_error"
+        );
     }
 
     #[test]

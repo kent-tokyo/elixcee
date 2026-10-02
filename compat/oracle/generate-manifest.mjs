@@ -1,10 +1,10 @@
 // Generates compat/oracle/api-manifest.json: a machine-derived record of what the real
-// `xlsx@0.18.5` package (the oracle) actually exposes at runtime, for both its CJS and
+// `xlsx@0.20.3` package (the oracle) actually exposes at runtime, for both its CJS and
 // ESM entrypoints. Never hand-edit api-manifest.json — regenerate it with this script.
 //
 // Bump GENERATOR_SCRIPT_VERSION whenever this script's introspection logic changes, so a
 // stale manifest can be told apart from a freshly-regenerated one at a glance.
-const GENERATOR_SCRIPT_VERSION = '0.2.0';
+const GENERATOR_SCRIPT_VERSION = '0.3.0';
 
 import { createRequire } from 'node:module';
 import { readFileSync, writeFileSync, existsSync } from 'node:fs';
@@ -25,9 +25,9 @@ try {
   process.exit(1);
 }
 
-if (pkgJson.version !== '0.18.5') {
-  console.error(`Expected xlsx@0.18.5 exactly, but node_modules/xlsx is version ${pkgJson.version}.`);
-  console.error('compat/package.json must pin an exact version (no ^ or ~) — check it has not drifted.');
+if (pkgJson.version !== '0.20.3') {
+  console.error(`Expected xlsx@0.20.3 exactly, but node_modules/xlsx is version ${pkgJson.version}.`);
+  console.error('compat/package.json must pin the official 0.20.3 tarball — check it has not drifted.');
   process.exit(1);
 }
 
@@ -127,7 +127,7 @@ const manifest = {
   generatorNpmVersion: detectNpmVersion(),
   generatorScriptVersion: GENERATOR_SCRIPT_VERSION,
   package: {
-    requestedVersion: '0.18.5', // exact-pinned in compat/package.json — never ^ or ~
+    requestedVersion: '0.20.3',
     installedVersion: pkgJson.version,
     main: pkgJson.main ?? null,
     module: pkgJson.module ?? null,

@@ -3,9 +3,10 @@
 ## Purpose
 
 This document defines how compatibility is measured for the experimental
-`@elixcee/xlsx` package against [`xlsx@0.18.5`](https://www.npmjs.com/package/xlsx)
-(SheetJS). npm-alias replacement is a future distribution goal, not an installation
-instruction: the package is currently private at `0.0.0-development`, not published.
+`@elixcee/xlsx` package against the official SheetJS `xlsx@0.20.3` tarball
+(SheetJS). The independently versioned package is published as
+`@elixcee/xlsx`; this compatibility target does not imply complete drop-in
+equivalence for undocumented or unsupported APIs.
 See the [package README](../packages/xlsx/README.md) for the implemented subset.
 
 ## Definition of compatibility
@@ -13,13 +14,13 @@ See the [package README](../packages/xlsx/README.md) for the implemented subset.
 Compatibility has two parts, and they are evaluated separately:
 
 1. **Normal, well-formed input** → `@elixcee/xlsx` must produce output that is logically
-   equivalent to `xlsx@0.18.5`'s output for the same input and options: same public API
+   equivalent to `xlsx@0.20.3`'s output for the same input and options: same public API
    surface, same object shapes and key enumerability, same array/sheet ordering, same
    error types and messages where SheetJS itself errors on valid-but-unusual input, same
    cell/date/formula/error-value semantics.
 2. **Malicious input, or input that exceeds a documented resource limit** →
    `@elixcee/xlsx` must return a safe, deterministic error. It must never replicate a
-   vulnerability just because the oracle (`xlsx@0.18.5`) exhibits one. See
+   vulnerability just because the oracle (`xlsx@0.20.3`) exhibits one. See
    [`docs/xlsx-security-model.md`](xlsx-security-model.md) for the specific limits and
    the policy this implies.
 
@@ -31,7 +32,7 @@ explicitly classified — see [`compat/differential/classify.mjs`](../compat/dif
 
 - **VBA-execution compatibility** is a separate, already-existing, unaffected track.
   Nothing in this initiative changes how elixcee emulates VBA macros.
-- **Performance parity** with `xlsx@0.18.5` is not a compatibility requirement.
+- **Performance parity** with `xlsx@0.20.3` is not a compatibility requirement.
   Compatibility comes first; if `@elixcee/xlsx` is slower, that gets recorded, not traded
   away for speed.
 - **Full browser-bundle parity** (matching `dist/xlsx.full.min.js` exactly) remains
@@ -40,7 +41,7 @@ explicitly classified — see [`compat/differential/classify.mjs`](../compat/dif
 ## How compatibility is measured
 
 - [`compat/oracle/`](../compat/oracle/) holds the machine-generated record of what
-  `xlsx@0.18.5` actually exposes at runtime (not hand-transcribed from documentation).
+  `xlsx@0.20.3` actually exposes at runtime (not hand-transcribed from documentation).
 - [`compat/differential/`](../compat/differential/) holds the harness that runs the same
   input through both the oracle and `@elixcee/xlsx`, normalizes the results, and
   classifies any divergence.

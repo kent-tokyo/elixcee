@@ -12,22 +12,16 @@ The fixed `hyperformula@3.4.0` package is a development-only oracle. The probe
 uses its `gpl-v3` license-key mode and does not bundle, import, or expose it from
 elixcee's runtime. Do not copy HyperFormula code into the MIT-licensed product.
 
-`xlsx@0.18.5` (SheetJS) and every one of its 7 runtime dependencies are **Apache-2.0**,
-confirmed via `npm view <pkg> license` against the live public registry:
+The private compatibility harness installs the official SheetJS 0.20.3 tarball
+from `cdn.sheetjs.com`. The resolved package is **Apache-2.0** and declares no
+runtime dependencies:
 
 | Package | Version resolved | License |
 |---|---|---|
-| `xlsx` | 0.18.5 | Apache-2.0 |
-| `adler-32` | 1.3.1 | Apache-2.0 |
-| `cfb` | 1.2.2 | Apache-2.0 |
-| `codepage` | 1.15.0 | Apache-2.0 |
-| `crc-32` | 1.2.2 | Apache-2.0 |
-| `ssf` | 0.11.2 | Apache-2.0 |
-| `wmf` | 1.0.2 | Apache-2.0 |
-| `word` | 0.4.0 | Apache-2.0 |
+| `xlsx` | 0.20.3 | Apache-2.0 |
 
-This is the historical dependency-planning inventory, not a fresh registry or legal
-audit. Recheck resolved package contents and notices before distribution.
+This is a development-only dependency record, not legal advice. Recheck the
+resolved package contents and notices before distribution.
 
 ## Obligation if code or text is ever ported
 
@@ -42,9 +36,9 @@ attribution — it cannot simply become MIT by virtue of living in this reposito
 ## Current status
 
 **No SheetJS code has been vendored or ported into `@elixcee/xlsx`'s own source.**
-[`compat/oracle`](../compat/oracle) installs and runs the real `xlsx` package as an
-ordinary `devDependency` for introspection and differential testing — that remains pure
-consumption, no NOTICE obligation by itself.
+[`compat/oracle`](../compat/oracle) installs and runs the real `xlsx` package from
+SheetJS's official CDN as a `devDependency` for introspection and differential
+testing. It is not included in elixcee runtime packages.
 
 **As of Phase 1B-2B, `packages/xlsx` takes its first real *runtime* dependency**:
 `ssf@0.11.2` (Apache-2.0, transitively pulling in `frac@1.1.2`, also Apache-2.0), used to

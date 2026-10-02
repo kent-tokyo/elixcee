@@ -76,15 +76,13 @@ export function normalize(v, seen = new WeakSet(), depth = 0) {
 if (import.meta.url === `file://${process.argv[1]}`) {
   const assert = await import('node:assert/strict');
 
-  // The exact regression case that motivated this file: a dense worksheet is an Array
-  // with a non-index "!ref" string property.
+  // Dense worksheets use the 0.20 `!data` representation and may contain sparse rows
+  // alongside metadata such as the non-index `!ref` property.
   {
-    const sheet = [];
-    sheet[0] = [{ t: 's', v: 'A' }];
-    sheet['!ref'] = 'A1:A1';
+    const sheet = { '!data': [[{ t: 's', v: 'A' }]], '!ref': 'A1:A1' };
     const normalized = normalize(sheet);
     assert.equal(normalized['!ref'], 'A1:A1');
-    assert.deepEqual(Object.keys(normalized), ['0', '!ref']);
+    assert.deepEqual(Object.keys(normalized), ['!data', '!ref']);
   }
 
   // undefined

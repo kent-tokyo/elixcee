@@ -51,7 +51,7 @@ function toBytes(data, opts) {
   }
   const err = new Error(
     "read(): unsupported input — pass a Buffer/Uint8Array, or a base64 string with opts.type " +
-      "=== 'base64'. Other xlsx@0.18.5 `type` values (binary/array/string/file) are not " +
+      "=== 'base64'. Other xlsx@0.20.3 `type` values (binary/array/string/file) are not " +
       'implemented yet.'
   );
   err.code = ELIXCEE_UNSUPPORTED_READ_TYPE;
@@ -163,7 +163,7 @@ export function write(wb, opts) {
       const err = new Error(
         "write(): unsupported opts.type " +
           JSON.stringify(o.type) +
-          " — pass 'buffer', 'array', or 'base64'. Other xlsx@0.18.5 `type` values " +
+          " — pass 'buffer', 'array', or 'base64'. Other xlsx@0.20.3 `type` values " +
           "('binary'/'string'/'file') are not implemented yet."
       );
       err.code = ELIXCEE_UNSUPPORTED_WRITE_TYPE;
@@ -183,6 +183,7 @@ export {
   decode_cell,
   decode_range,
   format_cell,
+  sheet_new,
   sheet_add_aoa,
   sheet_add_json,
   sheet_add_dom,

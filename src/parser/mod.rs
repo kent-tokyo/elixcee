@@ -41,6 +41,7 @@ enum Tok {
 }
 
 type TokenizeOutput = (Vec<Tok>, Vec<(u32, u32)>);
+type ParsedParams = (Vec<String>, Vec<Option<String>>, Vec<ParamMode>);
 
 fn tokenize(input: &str) -> Result<TokenizeOutput, String> {
     let chars: Vec<char> = input.chars().collect();
@@ -860,9 +861,7 @@ impl Parser {
         })
     }
 
-    fn parse_params(
-        &mut self,
-    ) -> Result<(Vec<String>, Vec<Option<String>>, Vec<ParamMode>), String> {
+    fn parse_params(&mut self) -> Result<ParsedParams, String> {
         let mut params = vec![];
         let mut param_types = vec![];
         let mut param_modes = vec![];

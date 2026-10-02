@@ -215,7 +215,7 @@ export function diagnoseWorkbook(bytes) {
 }
 
 /**
- * Read an in-memory XLSX/XLSM buffer, returning a JSON string shaped like xlsx@0.18.5's
+ * Read an in-memory XLSX/XLSM buffer, returning a JSON string shaped like xlsx@0.20.3's
  * `WorkBook` (`{SheetNames, Sheets}`; each `WorkSheet` a sparse `{"A1": {t,v,f,fmtId}, ...,
  * "!ref": "A1:C3", "!merges": [...], "!hiddenRows": [...], "!hiddenCols": [...] }` object,
  * plus workbook-level `"!numFmts"`/`"!date1904"` and, when present, `Workbook.Names` — see

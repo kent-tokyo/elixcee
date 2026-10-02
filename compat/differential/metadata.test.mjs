@@ -1,6 +1,6 @@
 // Standing regression guard for function-identity metadata: every @elixcee/xlsx export's
 // `.name`, `.length`, and its own property descriptor on the exports object must match
-// the real oracle's (xlsx@0.18.5) `utils.*` — not just its runtime behavior. This exists
+// the real oracle's (xlsx@0.20.3) `utils.*` — not just its runtime behavior. This exists
 // because the divergence it guards against survived Phase 1A and Phase 1B-1 undetected:
 // a plain `{ encode_col: encodeCol }` object-literal assignment does NOT rename an
 // already-named function's `.name`, so every export's `.name` stayed the internal

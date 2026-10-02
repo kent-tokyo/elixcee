@@ -1,4 +1,4 @@
-// The single source of truth for how a divergence between the oracle (xlsx@0.18.5) and
+// The single source of truth for how a divergence between the oracle (SheetJS 0.20.3) and
 // @elixcee/xlsx is classified. Cross-referenced from docs/xlsx-security-model.md rather
 // than redefined there. "Roughly the same" is never an acceptable verdict — every
 // comparison must resolve to exactly one of these eight values.
@@ -162,15 +162,12 @@ export const SECURITY_DIVERGENCE_REGISTRY = new Map([
   ],
   [
     'sheet_to_html:unescaped_attribute',
-    'The real oracle builds data-t/data-v/data-z/id (both the per-cell id and opts.id, ' +
-      'table-level and per-cell) via raw string concatenation with NO escaping ' +
-      '(confirmed live: a cell value or opts.id containing `"` breaks out of the ' +
-      'attribute and injects an arbitrary onXXX handler that fires when the output is ' +
-      'inserted into a live DOM). Applies to any cell value/number-format/id containing ' +
-      "one of `&<>'\"` or a \\u0000-\\u001f control character — ordinary spreadsheet " +
-      'content, not just a crafted probe. Elixcee escapes every attribute value it ' +
-      'builds (escapeHtmlAttr). See packages/xlsx/src/index.cjs\'s sheetToHtml doc ' +
-      'comment (finding 1) and docs/xlsx-security-model.md.',
+    'SheetJS 0.20.3 escapes ordinary cell values but still inserts opts.id through raw ' +
+      'string concatenation, and converts embedded newlines in data-v to HTML rather ' +
+      'than an attribute-safe control escape. A crafted opts.id can therefore inject ' +
+      'an onXXX handler. Elixcee escapes every attribute value it builds ' +
+      '(escapeHtmlAttr). See packages/xlsx/src/index.cjs\'s sheetToHtml doc comment ' +
+      '(finding 1) and docs/xlsx-security-model.md.',
   ],
   [
     'sheet_to_html:unsafe_href_scheme',

@@ -8,5 +8,5 @@ End Sub
 args = ["Main"]
 expect_exit_code = 1
 expect_json = """
-{"schema_version":1,"ok":false,"error":{"code":"E2001","kind":"parse_error","message":"unexpected token in expression: Newline","location":{"file":"<FILE>","line":2,"column":8}},"messages":[]}
+{"schema_version":1,"ok":false,"termination_class":"parse_error","error":{"code":"E2001","kind":"parse_error","message":"unexpected token in expression: Newline","location":{"file":"<FILE>","line":2,"column":8}},"messages":[]}
 """

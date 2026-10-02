@@ -12,5 +12,5 @@ End Sub
 args = ["Main"]
 expect_exit_code = 1
 expect_json = """
-{"schema_version":1,"ok":false,"error":{"code":"E1099","kind":"runtime_error","message":"duplicate Sub 'main' across modules 'mod1', 'mod2' — cross-module name collisions aren't supported yet; own-module-first/Private scoping isn't modeled — rename one of them","location":null},"messages":[]}
+{"schema_version":1,"ok":false,"termination_class":"runtime_error","error":{"code":"E1099","kind":"runtime_error","message":"duplicate Sub 'main' across modules 'mod1', 'mod2' — cross-module name collisions aren't supported yet; own-module-first/Private scoping isn't modeled — rename one of them","location":null},"messages":[]}
 """

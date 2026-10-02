@@ -35,6 +35,8 @@ CLI二进制文件可从[GitHub Releases](https://github.com/kent-tokyo/elixcee/
 `elixcee-wasm`（浏览器/Node.js runtime bridge）。playground是独立的静态
 Web应用：它把 WASM runtime、JavaScript XLSX writer 和 Excel风格界面组合在一起。
 [elixcee-wasm API文档](https://docs.rs/elixcee-wasm)可单独查看。
+浏览器／Node.js 的 JavaScript 包使用独立版本号，可通过
+`npm install @elixcee/xlsx` 安装。
 详见[crate/API边界](docs/crate-api-boundary.md)。
 
 ## Python

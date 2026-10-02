@@ -37,6 +37,8 @@ CLIバイナリは[GitHub Releases](https://github.com/kent-tokyo/elixcee/releas
 ブラウザー／Node.js runtime bridgeの`elixcee-wasm`です。playgroundは独立した
 静的Webアプリで、WASM runtime・JavaScript XLSX writer・Excel風UIを組み合わせています。
 [elixcee-wasmのAPI docs](https://docs.rs/elixcee-wasm)も公開しています。
+ブラウザー／Node.js向けJavaScriptパッケージは独立した版番号で管理し、
+`npm install @elixcee/xlsx`で導入できます。
 crateとUIの責務は[crate/API境界](docs/crate-api-boundary.md)に記載しています。
 
 ## Python

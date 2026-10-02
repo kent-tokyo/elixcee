@@ -7652,7 +7652,7 @@ mod merge_tests {
         let xml = r#"<styleSheet><dxfs count="1"><dxf><font><b/><color rgb="FF9C0006"/></font><fill><patternFill patternType="solid"><fgColor rgb="FFFFF2CC"/></patternFill></fill></dxf></dxfs><cellXfs/></styleSheet>"#;
         let styles = xlsx_styles(xml);
         assert_eq!(styles.dxf_styles.len(), 1);
-        assert_eq!(styles.dxf_styles[0].bold, true);
+        assert!(styles.dxf_styles[0].bold);
         assert_eq!(styles.dxf_styles[0].font_color.as_deref(), Some("FF9C0006"));
         assert_eq!(styles.dxf_styles[0].fill_color.as_deref(), Some("FFFFF2CC"));
     }

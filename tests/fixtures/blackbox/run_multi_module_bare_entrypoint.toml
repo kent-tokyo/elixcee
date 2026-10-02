@@ -14,5 +14,5 @@ End Sub
 args = ["Main"]
 expect_exit_code = 0
 expect_json = """
-{"schema_version":1,"ok":true,"entrypoint":"Main","cells":[{"sheet":"sheet1","address":"A1","value":"hi"}],"messages":[]}
+{"schema_version":1,"ok":true,"termination_class":"success","entrypoint":"Main","cells":[{"sheet":"sheet1","address":"A1","value":"hi"}],"messages":[]}
 """

@@ -32,6 +32,17 @@ const MAX_AUTOMATIC_WORKSHEET_CHANGES: usize = 64;
 const MAX_DEBUG_OUTPUT_RECORDS: usize = 4_096;
 const MAX_DEBUG_OUTPUT_BYTES: usize = 1 << 20;
 const DEFAULT_MAX_TRACE_EVENTS: usize = 4_096;
+const MAX_WORKSHEET_ROW: u32 = 1_048_576;
+const MAX_WORKSHEET_COLUMN: u32 = 16_384;
+
+fn validate_cell_coordinates(row: u32, col: u32) -> Result<(), String> {
+    if !(1..=MAX_WORKSHEET_ROW).contains(&row) || !(1..=MAX_WORKSHEET_COLUMN).contains(&col) {
+        return Err(format!(
+            "cell coordinates must be within row 1..={MAX_WORKSHEET_ROW} and column 1..={MAX_WORKSHEET_COLUMN}; got row {row}, column {col}"
+        ));
+    }
+    Ok(())
+}
 
 fn is_blocked_external_effect(reason: &str) -> bool {
     let lower = reason.to_ascii_lowercase();
@@ -13224,10 +13235,8 @@ impl Vm {
                     ))
                     .then_some((scope, key))
                 });
-                if !is_record_array {
-                    if module_owner.is_none() {
-                        return Err(format!("'{name}' is not a record array"));
-                    }
+                if !is_record_array && module_owner.is_none() {
+                    return Err(format!("'{name}' is not a record array"));
                 }
                 let indices = self.eval_array_indices(indices)?;
                 let owner = if is_record_array {
@@ -13254,14 +13263,13 @@ impl Vm {
         let (owner, path) = payload.split_once('|')?;
         let mut value = if let Some(name) = owner.strip_prefix("l:") {
             self.variables.get(name)?
-        } else if let Some(owner) = owner.strip_prefix("m:") {
+        } else {
+            let owner = owner.strip_prefix("m:")?;
             let (scope, name) = owner.split_once(':')?;
             self.module_variables.get(&(
                 Some(scope.to_string()).filter(|s| !s.is_empty()),
                 name.to_string(),
             ))?
-        } else {
-            return None;
         };
         for field in path.split('.') {
             value = match value {
@@ -13278,11 +13286,10 @@ impl Vm {
         let (owner, indices) = owner_and_indices.split_once('|')?;
         let (is_local, scope, name) = if let Some(name) = owner.strip_prefix("l:") {
             (true, None, name)
-        } else if let Some(owner) = owner.strip_prefix("m:") {
+        } else {
+            let owner = owner.strip_prefix("m:")?;
             let (scope, name) = owner.split_once(':')?;
             (false, Some(scope), name)
-        } else {
-            return None;
         };
         let indices = indices
             .split(',')
@@ -13318,11 +13325,10 @@ impl Vm {
             .ok()?;
         let owner = if let Some(name) = owner.strip_prefix("l:") {
             ByRefArrayOwner::Local(name)
-        } else if let Some(module) = owner.strip_prefix("m:") {
+        } else {
+            let module = owner.strip_prefix("m:")?;
             let (scope, name) = module.split_once(':')?;
             ByRefArrayOwner::Module((!scope.is_empty()).then_some(scope), name)
-        } else {
-            return None;
         };
         Some((owner, indices))
     }
@@ -18145,9 +18151,7 @@ impl Vm {
         col: u32,
         value: Variant,
     ) -> Result<(), String> {
-        if row == 0 || col == 0 {
-            return Err("cell coordinates are 1-based and must be positive".to_string());
-        }
+        validate_cell_coordinates(row, col)?;
         self.check_sheet_not_protected(sheet, sheet)?;
         self.check_variant_budget(&value)?;
         self.record_edit_history();
@@ -18357,6 +18361,9 @@ impl Vm {
     }
 
     pub fn set_cell_formula(&mut self, row: u32, col: u32, formula: &str) -> Result<(), String> {
+        validate_cell_coordinates(row, col)?;
+        let active = self.active_sheet.clone();
+        self.check_sheet_not_protected(&active, &active)?;
         let expr = formula::parse(formula)?;
         let value = if formula::references_another_sheet(&expr) {
             // Workbook-wide evaluation runs on the next explicit recalculate;
@@ -18374,7 +18381,6 @@ impl Vm {
         };
         self.check_variant_budget(&value)?;
         self.record_edit_history();
-        let active = self.active_sheet.clone();
         let mut spill_changed = Vec::new();
         self.clear_spill_for_anchor(&active, (row, col), &mut spill_changed);
         self.formula_plan.remove(&active);
@@ -21578,6 +21584,39 @@ mod tests {
         let mut vm = Vm::new();
         assert!(vm.set_cell_value(0, 1, Variant::Integer(1)).is_err());
         assert!(vm.set_cell_value(1, 0, Variant::Integer(1)).is_err());
+        assert!(
+            vm.set_cell_value(MAX_WORKSHEET_ROW + 1, 1, Variant::Integer(1))
+                .is_err()
+        );
+        assert!(
+            vm.set_cell_value(1, MAX_WORKSHEET_COLUMN + 1, Variant::Integer(1))
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn set_cell_formula_rejects_coordinates_outside_the_excel_grid() {
+        let mut vm = Vm::new();
+        for (row, col) in [
+            (0, 1),
+            (1, 0),
+            (MAX_WORKSHEET_ROW + 1, 1),
+            (1, MAX_WORKSHEET_COLUMN + 1),
+        ] {
+            assert!(vm.set_cell_formula(row, col, "=1").is_err());
+            assert!(!vm.cells().contains_key(&(row, col)));
+        }
+    }
+
+    #[test]
+    fn set_cell_formula_rejects_a_protected_sheet() {
+        let mut vm = Vm::new();
+        vm.protected_sheets.insert("sheet1".to_string());
+
+        let err = vm.set_cell_formula(1, 1, "=1").unwrap_err();
+
+        assert!(err.contains("protected"));
+        assert_eq!(vm.get_cell(1, 1), Variant::Empty);
     }
 
     #[test]

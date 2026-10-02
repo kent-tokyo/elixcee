@@ -2,7 +2,8 @@
 
 Documentation version: **1.0.13**. API/coverage pages describe this version;
 dated benchmark records retain their original baseline and source hashes.
-The JavaScript package remains private at 0.0.0-development.
+The JavaScript browser/Node package is versioned independently and published as
+`@elixcee/xlsx`.
 The current branch may contain unreleased changes; the published 1.0.13
 contract ends at the `[1.0.13]` section of the changelog.
 The current Unreleased section records maintenance and validation changes that

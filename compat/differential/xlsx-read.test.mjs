@@ -1,5 +1,5 @@
 // Differential test suite for `read()` (Phase 2B): builds real .xlsx byte buffers with
-// the real oracle (xlsx@0.18.5), then reads those exact bytes through BOTH the oracle's
+// the real oracle (xlsx@0.20.3), then reads those exact bytes through BOTH the oracle's
 // own `XLSX.read()` and @elixcee/xlsx's new `read()` (backed by crates/elixcee-wasm, a
 // WASM bridge over elixcee's own hand-rolled reader — src/reader.rs's
 // read_workbook_from_bytes). This is a real file-format round-trip, not a synthetic
@@ -39,6 +39,7 @@
 // shape.
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
+import fs from 'node:fs';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
@@ -50,6 +51,7 @@ import { normalize } from './normalize.mjs';
 const here = dirname(fileURLToPath(import.meta.url));
 
 const U = XLSX.utils;
+XLSX.set_fs(fs);
 const results = []; // { api, label, verdict }
 
 function record(api, label, verdict) {

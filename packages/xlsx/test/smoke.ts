@@ -25,6 +25,8 @@ const wbFromBase64: WorkBook = XLSX.read('AAAA', { type: 'base64' });
 const wbWithOpts: WorkBook = XLSX.read(new Uint8Array([1, 2, 3]), { cellStyles: true, cellNF: true, cellDates: true });
 
 const wb: WorkBook = XLSX.book_new();
+const emptyDense: WorkSheet = XLSX.sheet_new({ dense: true });
+const denseRows: XLSX.CellObject[][] | undefined = emptyDense['!data'];
 const ws: WorkSheet = XLSX.aoa_to_sheet([[1, 2], [3, 4]]);
 const sheetName: string = XLSX.book_append_sheet(wb, ws, 'Sheet1');
 XLSX.book_set_sheet_visibility(wb, 0, 1);

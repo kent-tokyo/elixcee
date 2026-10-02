@@ -37,6 +37,8 @@ The reusable Rust crates are `elixcee` (native/Python runtime) and
 `elixcee-wasm` (browser/Node bridge). They provide headless reading, supported
 formula calculation, diagnostics, and bounded workbook editing. The
 [elixcee-wasm API docs](https://docs.rs/elixcee-wasm) are available separately.
+Browser and Node.js applications can install the independently versioned
+JavaScript package with `npm install @elixcee/xlsx`.
 [Playground](https://kent-tokyo.github.io/elixcee/playground/) is a separate
 static web app: it combines the WASM runtime with the package's JavaScript
 XLSX writer and Excel-like UI. See the [crate/API boundary](docs/crate-api-boundary.md)
