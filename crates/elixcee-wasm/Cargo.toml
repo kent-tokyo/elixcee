@@ -15,6 +15,12 @@ readme = "README.md"
 [package.metadata.docs.rs]
 targets = ["wasm32-unknown-unknown"]
 
+# wasm-pack downloads and invokes a compatible wasm-opt binary itself. Configure the
+# release optimization here so local and CI builds do not depend on a separate global
+# Binaryen installation.
+[package.metadata.wasm-pack.profile.release]
+wasm-opt = ["-Oz"]
+
 [lib]
 crate-type = ["cdylib", "rlib"]
 

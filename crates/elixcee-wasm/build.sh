@@ -16,13 +16,9 @@ cd "$(dirname "$0")"
 wasm-pack build --target nodejs --out-dir pkg-node --out-name elixcee_wasm
 wasm-pack build --target web --out-dir pkg-web --out-name elixcee_wasm
 
-# wasm-pack's default wasm-opt profile favors execution speed. The package embeds
-# the same module twice (Node and browser glue), so keep the payload compact while
-# retaining the checked 10% growth gate in packages/xlsx/scripts/wasm-smoke.mjs.
-for wasm in pkg-node/elixcee_wasm_bg.wasm pkg-web/elixcee_wasm_bg.wasm; do
-  wasm-opt -Oz "$wasm" -o "$wasm.optimized"
-  mv "$wasm.optimized" "$wasm"
-done
+# The release profile in Cargo.toml tells wasm-pack's bundled wasm-opt to use -Oz.
+# Keeping the setting there avoids requiring a second, globally installed Binaryen
+# executable and guarantees that both generated targets use the same profile.
 
 node build-browser-inline.mjs
 node build-node-inline.mjs
