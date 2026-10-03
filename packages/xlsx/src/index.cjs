@@ -17,7 +17,7 @@
 const { safeDecodeRange } = require('./internal/safe-decode-range.cjs');
 const { checkRangeSize } = require('./internal/range-guard.cjs');
 const { datenum } = require('./internal/datenum.cjs');
-const { format: ssfFormat } = require('./internal/ssf-adapter.cjs');
+const { format: ssfFormat, SSF } = require('./internal/ssf-adapter.cjs');
 const { formatCell, cellSetNumberFormat } = require('./internal/number-format.cjs');
 // The WASM bridge (crates/elixcee-wasm, backed by elixcee's own hand-rolled reader —
 // src/reader.rs's read_workbook_from_bytes) is vendored, prebuilt, under ./internal/wasm —
@@ -1555,6 +1555,46 @@ function nameAs(fn, publicName) {
 // call time; see docs/typescript-compatibility.md for the types-side discrepancy.
 const consts = { SHEET_VISIBLE: 0, SHEET_HIDDEN: 1, SHEET_VERY_HIDDEN: 2 };
 
+// SheetJS consumers conventionally access worksheet helpers through XLSX.utils. Keep
+// the historical named exports below as additive conveniences, but also expose the
+// compatibility namespace documented by this package.
+const utils = {
+  encode_col: encodeCol,
+  encode_row: encodeRow,
+  encode_cell: encodeCell,
+  encode_range: encodeRange,
+  decode_col: decodeCol,
+  decode_row: decodeRow,
+  split_cell: splitCell,
+  decode_cell: decodeCell,
+  decode_range: decodeRange,
+  format_cell: formatCell,
+  sheet_new: sheetNew,
+  sheet_add_aoa: sheetAddAoa,
+  sheet_add_json: sheetAddJson,
+  sheet_add_dom: sheetAddDom,
+  aoa_to_sheet: aoaToSheet,
+  json_to_sheet: jsonToSheet,
+  table_to_sheet: parseDomTable,
+  table_to_book: tableToBook,
+  sheet_to_csv: sheetToCsv,
+  sheet_to_txt: sheetToTxt,
+  sheet_to_json: sheetToJson,
+  sheet_to_html: sheetToHtml,
+  sheet_to_formulae: sheetToFormulae,
+  sheet_to_row_object_array: sheetToJson,
+  sheet_get_cell: sheetGetCell,
+  book_new: bookNew,
+  book_append_sheet: bookAppendSheet,
+  book_set_sheet_visibility: bookSetSheetVisibility,
+  cell_set_number_format: cellSetNumberFormat,
+  cell_set_hyperlink: cellSetHyperlink,
+  cell_set_internal_link: cellSetInternalLink,
+  cell_add_comment: cellAddComment,
+  sheet_set_array_formula: sheetSetArrayFormula,
+  consts,
+};
+
 // The object literal below (not an intermediate variable reassigned to
 // `module.exports`) is required as-is: Node's ESM loader synthesizes named imports from
 // a CJS module via cjs-module-lexer, a static syntax scan that only recognizes this
@@ -1583,6 +1623,8 @@ module.exports = {
   write,
   writeFile: writeFileSyncImpl,
   writeFileSync: writeFileSyncImpl,
+  utils,
+  SSF,
   encode_col: encodeCol,
   encode_row: encodeRow,
   encode_cell: encodeCell,

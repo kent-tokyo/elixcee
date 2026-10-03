@@ -1,6 +1,6 @@
 {
   "name": "@elixcee/xlsx",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": false,
   "description": "Drop-in-compatible reimplementation of xlsx (SheetJS) with bounded XLSX/XLSM read-write, formula calculation, and opaque VBA-project preservation. See README.md for exact scope.",
   "license": "MIT",

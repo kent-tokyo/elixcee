@@ -163,6 +163,8 @@ console.log('__RESULT__ ' + JSON.stringify({
   firstRows: rows.slice(0, 3),
   writeRoundTripSheetNames: readBack.SheetNames,
   writeRoundTripBytes: written.length,
+  utilsAlias: XLSX.utils.book_new === XLSX.book_new,
+  ssfFormatted: XLSX.SSF.format('0.00', 1.25),
 }));
 `;
 
@@ -188,6 +190,8 @@ console.log('__RESULT__ ' + JSON.stringify({
   firstRows: XLSX.sheet_to_json(ws, { header: 1 }).slice(0, 3),
   writeRoundTripSheetNames: readBack.SheetNames,
   writeRoundTripBytes: written.length,
+  utilsAlias: XLSX.utils.book_new === XLSX.book_new,
+  ssfFormatted: XLSX.SSF.format('0.00', 1.25),
 }));
 `;
 
@@ -198,6 +202,8 @@ function assertWriteRoundTrip(r) {
   if (!(r.writeRoundTripBytes > 0)) {
     throw new Error(`write() produced no bytes: ${r.writeRoundTripBytes}`);
   }
+  if (!r.utilsAlias) throw new Error('XLSX.utils.book_new is not the named book_new export');
+  if (r.ssfFormatted !== '1.25') throw new Error(`XLSX.SSF.format returned ${JSON.stringify(r.ssfFormatted)}`);
   console.log(`  write()->read() round trip: ${JSON.stringify(r.writeRoundTripSheetNames)}, ${r.writeRoundTripBytes} bytes`);
 }
 
@@ -306,12 +312,14 @@ step('8. a TypeScript consumer snippet compiles against the installed types', ()
       `const addr: XLSX.CellAddress = XLSX.decode_cell('B2');`,
       `const ref: string = XLSX.encode_cell(addr);`,
       `const fresh: XLSX.WorkBook = XLSX.book_new();`,
+      `const compatibleFresh: XLSX.WorkBook = XLSX.utils.book_new();`,
       `XLSX.book_append_sheet(fresh, XLSX.aoa_to_sheet([[1, 'two', true]]), 'S1');`,
       `const hidden: 2 = XLSX.consts.SHEET_VERY_HIDDEN;`,
+      `const formatted: string = XLSX.SSF.format('0.00', 1.25);`,
       `const written: Uint8Array | ArrayBuffer | string = XLSX.write(fresh, { type: 'buffer' });`,
       `XLSX.writeFile(fresh, 'out.xlsx');`,
       `XLSX.writeFileSync(fresh, 'out.xlsx', { bookType: 'xlsx' });`,
-      `export { wb, rows, csv, ref, fresh, hidden, written };`,
+      `export { wb, rows, csv, ref, fresh, compatibleFresh, hidden, formatted, written };`,
     ].join('\n')
   );
   fs.writeFileSync(

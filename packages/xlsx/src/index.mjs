@@ -9,6 +9,8 @@ export {
   write,
   writeFile,
   writeFileSync,
+  utils,
+  SSF,
   encode_col,
   encode_row,
   encode_cell,

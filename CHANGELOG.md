@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+- Published `@elixcee/xlsx` and added the documented SheetJS-compatible
+  `XLSX.utils` and `XLSX.SSF` namespaces while retaining named utility exports.
 - Prepared the independently versioned `@elixcee/xlsx` 0.1.0 browser/Node
   package for its first public npm release, including public package metadata,
   packed-consumer checks, browser exports, license notices, and WASM runtime.

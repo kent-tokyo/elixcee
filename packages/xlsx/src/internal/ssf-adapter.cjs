@@ -100,4 +100,8 @@ function resolveFormatString(fmt, opts) {
 // sibling exports here) rather than requiring 'ssf' a second time elsewhere.
 const isDate = ssf.is_date;
 
-module.exports = { format, resolveFormatString, isDate };
+// Public SheetJS-compatible namespace. Keep the upstream helper surface while routing
+// format() through the corrected numFmtId implementation above.
+const SSF = Object.assign({}, ssf, { format });
+
+module.exports = { format, resolveFormatString, isDate, SSF };

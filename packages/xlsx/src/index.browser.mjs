@@ -173,6 +173,8 @@ export function write(wb, opts) {
 }
 
 export {
+  utils,
+  SSF,
   encode_col,
   encode_row,
   encode_cell,

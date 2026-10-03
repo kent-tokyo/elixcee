@@ -36,9 +36,10 @@ let failures = 0;
 // and excluded from the utils-key-order check further down for the same reason. Their
 // relative order against each OTHER is checked separately, below.
 const TOP_LEVEL_KEYS = ['read', 'readFile', 'readFileSync', 'write', 'writeFile', 'writeFileSync'];
+const NAMESPACE_KEYS = ['utils', 'SSF'];
 
 for (const key of Object.keys(elixceeCjs)) {
-  if (TOP_LEVEL_KEYS.includes(key)) continue;
+  if (TOP_LEVEL_KEYS.includes(key) || NAMESPACE_KEYS.includes(key)) continue;
   const oracleVal = U[key];
   const elixceeVal = elixceeCjs[key];
   if (typeof oracleVal !== typeof elixceeVal) {
@@ -164,7 +165,23 @@ for (const key of TOP_LEVEL_KEYS) {
   }
 }
 
-console.log(`\n${Object.keys(elixceeCjs).length - failures}/${Object.keys(elixceeCjs).length} exports match name/length/descriptor/CJS-ESM-identity against the oracle`);
+// Namespace exports are checked by shape and identity rather than as individual utils.
+for (const key of Object.keys(elixceeCjs.utils)) {
+  if (elixceeCjs.utils[key] !== elixceeCjs[key]) {
+    console.error(`FAIL  utils.${key}: namespace value is not the named export`);
+    failures += 1;
+  }
+}
+if (elixceeCjs.SSF.format('0.00', 1.25) !== XLSX.SSF.format('0.00', 1.25)) {
+  console.error('FAIL  SSF.format: namespace does not match the oracle for a basic format');
+  failures += 1;
+}
+if (elixceeEsm.utils !== elixceeCjs.utils || elixceeEsm.SSF !== elixceeCjs.SSF) {
+  console.error('FAIL  namespace CJS/ESM identity');
+  failures += 1;
+}
+
+console.log(`\n${Object.keys(elixceeCjs).length - failures}/${Object.keys(elixceeCjs).length} exports pass metadata or namespace checks`);
 
 // Key ORDER, not just per-key content — Phase 1C discovered this had never been checked
 // (every key matched individually, but elixcee's module.exports literal had been ordered
@@ -178,7 +195,9 @@ console.log(`\n${Object.keys(elixceeCjs).length - failures}/${Object.keys(elixce
   // read/readFile/readFileSync excluded — they aren't utils.* members (see TOP_LEVEL_KEYS'
   // comment above), so they have no position in Object.keys(XLSX.utils) to compare against.
   // Their own relative order is checked in its own block above instead.
-  const elixceeOrder = Object.keys(elixceeCjs).filter((k) => !TOP_LEVEL_KEYS.includes(k));
+  const elixceeOrder = Object.keys(elixceeCjs).filter(
+    (k) => !TOP_LEVEL_KEYS.includes(k) && !NAMESPACE_KEYS.includes(k)
+  );
   const oracleFiltered = oracleOrder.filter((k) => elixceeOrder.includes(k));
   if (JSON.stringify(elixceeOrder) !== JSON.stringify(oracleFiltered)) {
     console.error('FAIL  key order: elixcee\'s Object.keys() does not match the oracle\'s own relative order');

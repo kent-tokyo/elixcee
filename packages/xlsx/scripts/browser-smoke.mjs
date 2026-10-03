@@ -166,6 +166,8 @@ step('2. bundle the browser entry with esbuild');
       `  a1: ws.A1 && ws.A1.v,`,
       `  b2: ws.B2 && ws.B2.v,`,
       `  csvHead: XLSX.sheet_to_csv(ws).split('\\n')[0],`,
+      `  utilsAlias: XLSX.utils.book_new === XLSX.book_new,`,
+      `  ssfFormatted: XLSX.SSF.format('0.00', 1.25),`,
       `  exportCount: Object.keys(XLSX).filter(k => k !== 'default').length,`,
       `  writeRoundTripSheetNames: readBack.SheetNames,`,
       `  writeRoundTripBytes: written.length,`,
@@ -318,6 +320,8 @@ const nodeExportCount = Object.keys(createRequire(import.meta.url)(path.join(PKG
 if (result.exportCount !== nodeExportCount) {
   problems.push(`browser entry exported ${result.exportCount} names, Node entry exports ${nodeExportCount}`);
 }
+if (!result.utilsAlias) problems.push('browser XLSX.utils namespace does not alias named utility exports');
+if (result.ssfFormatted !== '1.25') problems.push(`browser XLSX.SSF.format returned ${JSON.stringify(result.ssfFormatted)}`);
 if (result.errors.length !== 0) problems.push(`page-observable errors: ${JSON.stringify(result.errors)}`);
 
 console.log(`  requests served: ${JSON.stringify(served)}`);

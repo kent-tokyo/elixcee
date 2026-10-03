@@ -349,7 +349,7 @@ jobs:
         working-directory: compat
         run: npm run differential:read
 
-      - name: compat — export metadata differential (40/40 expected)
+      - name: compat — export metadata differential (42/42 expected)
         working-directory: compat
         run: npm run differential:metadata
 
