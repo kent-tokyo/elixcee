@@ -4,10 +4,14 @@
 
 ## [Unreleased]
 
-- Published `@elixcee/xlsx` and added the documented SheetJS-compatible
+## [1.0.14] - 2026-10-03
+
+- Disabled Rust debuginfo stripping for macOS Python wheels so extension modules
+  remain loadable on macOS 27 as well as earlier supported macOS releases.
+- Published `@elixcee/xlsx` 0.1.1 and added the documented SheetJS-compatible
   `XLSX.utils` and `XLSX.SSF` namespaces while retaining named utility exports.
-- Prepared the independently versioned `@elixcee/xlsx` 0.1.0 browser/Node
-  package for its first public npm release, including public package metadata,
+- Published the independently versioned `@elixcee/xlsx` 0.1.0 browser/Node
+  package as its first public npm release, including public package metadata,
   packed-consumer checks, browser exports, license notices, and WASM runtime.
 - Added `StreamReader.termination_reason`, `limit_reached`, and `rows_read`.
   A `max_rows` boundary now looks one row ahead so exact EOF remains distinct
@@ -26,7 +30,7 @@
   `!data` worksheets, `sheet_new`, date and CSV conversion, workbook sheet-name
   validation, array-formula ranges, and dense XLSX writing. The refreshed
   differential corpus now covers the expanded public API and writer paths.
-- Regenerated the fuzz lockfile against elixcee 1.0.13 and the current parser
+- Regenerated the fuzz lockfile against elixcee 1.0.14 and the current parser
   dependency graph so nightly fuzz builds no longer use stale release metadata.
 
 ## [1.0.13] - 2026-09-29

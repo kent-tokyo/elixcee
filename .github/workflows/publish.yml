@@ -43,6 +43,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: PyO3/maturin-action@v1
+        env:
+          # Rust 1.97 debuginfo stripping can emit a misaligned Mach-O string
+          # table that macOS 27 rejects when importing the extension module.
+          CARGO_PROFILE_RELEASE_STRIP: none
         with:
           args: --release --out dist --target universal2-apple-darwin --find-interpreter
       - uses: actions/upload-artifact@v4

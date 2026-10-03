@@ -7,9 +7,9 @@ on:
   workflow_dispatch:
     inputs:
       ref:
-        description: "Tag or ref to publish from (e.g. v1.0.13)"
+        description: "Tag or ref to publish from (e.g. v1.0.14)"
         required: true
-        default: "v1.0.13"
+        default: "v1.0.14"
 
 permissions:
   contents: read

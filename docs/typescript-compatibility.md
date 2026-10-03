@@ -3,7 +3,7 @@
 Reference target: SheetJS `xlsx@0.20.3`. This is a declaration-level comparison, not
 proof of runtime equivalence. npm publication is gated separately by the packed
 consumer, browser, license, and package-content checks.
-The private package's [README](../packages/xlsx/README.md) defines runtime scope;
+The published package's [README](../packages/xlsx/README.md) defines runtime scope;
 [src/index.d.ts](../packages/xlsx/src/index.d.ts) is the current declaration source.
 
 ## Classification

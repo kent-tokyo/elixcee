@@ -1,11 +1,11 @@
 # Documentation map
 
-Documentation version: **1.0.13**. API/coverage pages describe this version;
+Documentation version: **1.0.14**. API/coverage pages describe this version;
 dated benchmark records retain their original baseline and source hashes.
 The JavaScript browser/Node package is versioned independently and published as
 `@elixcee/xlsx`.
-The current branch may contain unreleased changes; the published 1.0.13
-contract ends at the `[1.0.13]` section of the changelog.
+The current branch may contain unreleased changes; the published 1.0.14
+contract ends at the `[1.0.14]` section of the changelog.
 The current Unreleased section records maintenance and validation changes that
 have not been included in a numbered release.
 Recent maintenance also keeps the Playground rendering and keyboard-binding

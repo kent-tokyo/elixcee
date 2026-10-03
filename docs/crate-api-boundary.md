@@ -48,7 +48,7 @@ the current browser package performs it in JavaScript after validating output.
 
 The crate release unit for the browser runtime is `elixcee-wasm`. It is
 versioned and published independently from the static Playground and from the
-private `@elixcee/xlsx` package. A release must therefore describe three
+independently versioned `@elixcee/xlsx` package. A release must therefore describe three
 separate artifacts:
 
 1. `elixcee-wasm`: reusable Rust/WASM read, calculation, diagnostics, and

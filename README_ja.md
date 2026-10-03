@@ -1,14 +1,14 @@
 # elixcee
 
 [![CI](https://github.com/kent-tokyo/elixcee/actions/workflows/ci.yml/badge.svg)](https://github.com/kent-tokyo/elixcee/actions/workflows/ci.yml)
-[![Docs](https://docs.rs/elixcee/badge.svg)](https://docs.rs/elixcee/1.0.13/elixcee/)
-[![Version](https://img.shields.io/badge/version-1.0.13-blue.svg)](https://github.com/kent-tokyo/elixcee/releases/tag/v1.0.13)
+[![Docs](https://docs.rs/elixcee/badge.svg)](https://docs.rs/elixcee/1.0.14/elixcee/)
+[![Version](https://img.shields.io/badge/version-1.0.14-blue.svg)](https://github.com/kent-tokyo/elixcee/releases/tag/v1.0.14)
 
 Microsoft Excelなしで、`.xlsx`／`.xlsm`を編集し、対応する数式を再計算し、
 データ処理向けVBAを実行・診断できるRust/Python製のヘッドレスExcelランタイムです。
 CLIと実験的なJavaScript/WASMパッケージも提供します。
 
-現行リリースは`1.0.13`です。ブラウザーplaygroundでは、範囲選択、セル編集、
+現行リリースは`1.0.14`です。ブラウザーplaygroundでは、範囲選択、セル編集、
 書式、フィルター、テーブル、Chartプレビュー、Pivot集計、シート操作、数式再計算を
 試せます。限定されたVBAの実行と診断も確認できます。ブラウザー版のVBAは限定された
 データ処理サブセットであり、任意のVBAや

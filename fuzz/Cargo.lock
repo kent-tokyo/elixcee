@@ -64,7 +64,7 @@ dependencies = [
 
 [[package]]
 name = "elixcee"
-version = "1.0.13"
+version = "1.0.14"
 dependencies = [
  "elixcee-types",
  "libc",

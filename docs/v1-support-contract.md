@@ -4,13 +4,13 @@ This document defines the v1 support policy for a headless Excel workbook
 automation runtime, not a promise to emulate the Excel desktop application.
 The runtime has three related surfaces on its workbook model: direct workbook
 editing, supported formula recalculation, and execution/diagnosis of the
-documented data-processing VBA subset. Current coverage is documented for **1.0.13**.
+documented data-processing VBA subset. Current coverage is documented for **1.0.14**.
 Use [CHANGELOG](../CHANGELOG.md) to identify changes by version.
 
 ## Supported contract
 
-- Rust, Python, and CLI share the native workbook/diagnostic core. The private,
-  unpublished JavaScript package uses the WASM reader but has its own workbook
+- Rust, Python, and CLI share the native workbook/diagnostic core. The independently
+  versioned public `@elixcee/xlsx` package uses the WASM reader but has its own workbook
   facade and writer; native preservation and VBA APIs do not automatically apply.
 - Workbook coordinates are 1-based in the VBA and Python-facing APIs.
 - The supported input formats are `.xlsx`, `.xlsm`, and `.ods`, subject to the
@@ -83,7 +83,7 @@ injection, path traversal, or resource-exhaustion risk.
 
 Each release records implementation tests and static checks separately from
 measurements requiring Microsoft Excel, large fixtures, or another independent
-oracle. For v1.0.13, the local gate covers the Rust workspace/all-target tests,
+oracle. For v1.0.14, the local gate covers the Rust workspace/all-target tests,
 strict clippy/Rustdoc, fresh dependency audit, feature compilation, packaged
 crate/wheel/sdist, JavaScript differential/type checks, and the checked-in
 reader-measurement contract. Dated macOS reader measurements are

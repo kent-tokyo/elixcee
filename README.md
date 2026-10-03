@@ -1,15 +1,15 @@
 # elixcee
 
 [![CI](https://github.com/kent-tokyo/elixcee/actions/workflows/ci.yml/badge.svg)](https://github.com/kent-tokyo/elixcee/actions/workflows/ci.yml)
-[![Docs](https://docs.rs/elixcee/badge.svg)](https://docs.rs/elixcee/1.0.13/elixcee/)
-[![Version](https://img.shields.io/badge/version-1.0.13-blue.svg)](https://github.com/kent-tokyo/elixcee/releases/tag/v1.0.13)
+[![Docs](https://docs.rs/elixcee/badge.svg)](https://docs.rs/elixcee/1.0.14/elixcee/)
+[![Version](https://img.shields.io/badge/version-1.0.14-blue.svg)](https://github.com/kent-tokyo/elixcee/releases/tag/v1.0.14)
 
 Headless Excel workbook automation in Rust and Python. Edit `.xlsx`/`.xlsm`
 files, recalculate supported formulas, and run or diagnose data-processing VBA
 without Microsoft Excel. A CLI, reusable Rust/WASM runtime crates, and an
 experimental JavaScript/WASM package are also included.
 
-The current release is `1.0.13`. The browser playground demonstrates range
+The current release is `1.0.14`. The browser playground demonstrates range
 selection, cell editing, formatting, filters, tables, chart previews,
 worksheet-backed Pivot summaries, sheet operations, formula recalculation, and
 bounded VBA execution.

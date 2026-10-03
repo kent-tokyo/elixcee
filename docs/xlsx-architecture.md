@@ -110,9 +110,9 @@ budget separation, failure cleanup, and independently measured memory scaling.
 
 `packages/xlsx` provides synchronous `read`/`readFile`/`readFileSync` and
 `write`/`writeFile`/`writeFileSync` APIs for XLSX. The browser entry point uses
-embedded WASM and is intended for bundled applications. The package remains
-private and is not published yet. The reusable Rust runtime is distributed
-separately through `elixcee`, while the WASM bridge is being prepared as
+embedded WASM and is intended for bundled applications. It is published as the
+independently versioned `@elixcee/xlsx` package. The reusable Rust runtime is
+distributed separately through `elixcee`, while the WASM bridge is published as
 `elixcee-wasm`; neither crate is itself a browser UI or a complete XLSX writer.
 
 The native Rust and Python readers expose the same cooperative read controls:

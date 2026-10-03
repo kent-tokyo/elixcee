@@ -1,6 +1,6 @@
 # elixcee Roadmap
 
-更新日: 2026-09-29。対象versionは **1.0.13** です。
+更新日: 2026-10-03。対象versionは **1.0.14** です。
 完了項目は記載した実装・測定の範囲に限ります。公開先の状態はリリースごとに別途確認します。
 版ごとの変更は [CHANGELOG](CHANGELOG.md)、実装範囲は
 [FUNCTIONS](FUNCTIONS.md)、保証範囲は [v1契約](docs/v1-support-contract.md) を参照してください。
@@ -27,7 +27,7 @@ read→edit→calculate→VBA→saveを遅らせない範囲で進めます。
 
 Excel不要の、Rust/Pythonによる安全なワークブック編集・数式計算・VBAデータ処理を一体化した自動化ランタイムを中心に開発します。
 GUI、任意のCOM、完全なExcel/VBA互換、無条件のlossless保存は保証しません。
-JavaScript互換APIは別トラックで、`packages/xlsx` はprivate・未公開です。
+JavaScript互換APIは別トラックで、`packages/xlsx` は独立versionの公開packageです。
 
 - `BUILD`: 実装と回帰テスト。`MEASURE`: 固定条件による測定。`GATE`: 配布・互換性・安全性の判定。
 - `[x]` は記載した範囲の実装／ローカル検証が完了した意味です。公開・3 OS検証・Excel完全一致を含意しません。
@@ -46,7 +46,7 @@ xlflowのExcel／VBE操作機能を再現する方向には広げません。
 2. **既存マクロの引数意味論（V0–V1）**: 比較条件を固定し、現在区別されないByRef／ByVal、Optional／ParamArrayを段階修正する。実装したように見えて異なる結果を出す経路を優先する。
 3. **ファイル処理の実用範囲（V2–V4・G3–G4）**: 型・scope、診断、範囲一括転記を整え、編集後の再計算と接続する。関数の数だけでなく、実務fixtureの完遂率を判定する。
 4. **安全なバッチ処理（V5–V6・L7–L10）**: イベント、失敗時の出力非公開、再現可能な診断・テストを既存のsnapshot／CI契約へ統合する。
-5. **性能と配布ゲート（V8・G5–G6・C0–C5）**: 正しさを固定後、ファイル全体の処理時間・ピークメモリ・3 OSを検証する。Rust／Python、公開crate、private JS packageの配布境界は維持する。
+5. **性能と配布ゲート（V8・G5–G6・C0–C5）**: 正しさを固定後、ファイル全体の処理時間・ピークメモリ・3 OSを検証する。Rust／Python、公開crate、独立versionのJS packageの配布境界は維持する。
 6. **条件付き拡張（V7・V9）**: 埋め込みVBAの読み込み・複数ブック・ブラウザー共通サブセットは、対象ファイル処理への寄与と資源予算を確認して個別に着手する。次候補の必須条件にはしない。
 7. **継続トラック（L0–L6・B0–B12）**: 共有runtimeと操作履歴、playgroundの編集・計算・exportを継続する。VBA強化のために新しいGUI／共同編集／Microsoft 365サービスを必須化しない。
 
@@ -91,7 +91,7 @@ Excel風UI／XLSX入出力は競合が存在する一方、主要なブラウザ
 ブラウザー内で実行しない。したがって、まず編集体験とファイル往復を成立させ、その後に
 外部効果を遮断したVBAサブセット実行を追加する。これはExcel完全互換や任意VBA実行を保証する計画ではない。
 
-- [ ] **B0 現状契約・脅威モデル**: playgroundのSpreadsheet／Excel downloadタブ、private WASM runtime、現行の対応数式、未対応OOXMLを棚卸しする。アップロードサイズ、展開後サイズ、シート数、セル数、式長、実行時間の上限と、XLSM／VBA／外部リンクの扱いを文書化する。
+- [ ] **B0 現状契約・脅威モデル**: playgroundのSpreadsheet／Excel downloadタブ、公開WASM runtime、現行の対応数式、未対応OOXMLを棚卸しする。アップロードサイズ、展開後サイズ、シート数、セル数、式長、実行時間の上限と、XLSM／VBA／外部リンクの扱いを文書化する。
 - [ ] **B1 XLSX upload/read**: ブラウザーで任意の`.xlsx`を選択し、WASMの既存read経路で複数シート、値、数式、基本書式を表示する。読み込み失敗時は元ファイルを保持し、巨大・不正・未対応partを明示する。まず`.xlsm`はVBAを実行せず、保持可否を明示する。
 - [ ] **B2 Spreadsheet editing UX**: シートタブ、1-basedセル選択、範囲選択、セル編集、数式バー、Enter／Escape、基本Undo／Redoを追加する。選択状態と数式表示をDOMテストで固定し、UI表示用状態とRust workbook stateを分離する。
 - [ ] **B3 Clipboard and structure**: 同一アプリ内のコピー／カット／ペースト、Paste Specialの最小範囲、行／列の追加・削除・幅変更、シート追加／名前変更を実装する。Chart／Pivot／Drawing／External Linksを含む構造編集は、参照更新経路がない限り拒否する。
@@ -114,15 +114,13 @@ Excel風UI／XLSX入出力は競合が存在する一方、主要なブラウザ
 ## Crate／WASM配布トラック（C0–C5）
 
 - [ ] **C0 API boundary**: Rust本体、共有型、WASM bridge、JS Writer、Playground UIの責務とsemver契約を固定する。crateから利用できるread／formula／diagnostics／editor APIと、利用できないUI／任意VBA／完全lossless保存を機械可読matrixに記録する。Playgroundの再利用可能なread／計算／診断／bounded typed-edit部分を`elixcee-wasm` crateとして配布し、grid／SVG ribbon／JavaScript Writerは別artifactとする境界をREADMEと最小JS例へ反映した。
-- [ ] **C1 public Rust crate**: `elixcee`の純Rust APIをPython bindingから分離して文書化し、feature flags、MSRV、wasm32／native、XLSX／XLSM境界、安全上限を公開する。`cargo package --list`、`cargo publish --dry-run`、docs.rs相当のdoc buildをリリースゲートにする。現行公開版1.0.11との差分を含む次版の公開が未完。
-- [ ] **C2 public WASM crate（publish-ready partial）**: `elixcee-wasm`へ公開metadata、README、license、repository、docs.rs targetを追加し、`cargo package`、実コンパイルを含む`cargo publish --dry-run`、wasm32 compileを確認した。現時点のdry-runは、ローカルの新APIを参照するため、公開済み`elixcee` 1.0.11では解決できず失敗する。先に対応する`elixcee`次版を公開し、そのindex反映後に`elixcee-wasm`を公開する順序をworkflowへ固定した。read、formula calculation、diagnostics、bounded `WorkbookEditor`のJS API安定化、サイズ・security gate、実公開は未完。WASM crate単体でXLSX Writerを提供しない境界はREADMEへ明記した。
-- [x] **C3 browser package integration**: 公開crateから生成したwasm-bindgen artifactをnpm／CDN向けブラウザーpackageへ再現可能に接続し、Node／browser、ESM／CJS、CSP、WASMサイズ、source map、license noticeを検証する。Playgroundはその実例として別配布する。`@elixcee/xlsx` 0.1.0を独立version系列の初回公開候補とし、packed consumer／実Chrome／WASM／license／package内容gateを通して公開する。
+- [ ] **C1 public Rust crate（公開済み・契約整備継続）**: `elixcee`の純Rust APIをPython bindingから分離して文書化し、feature flags、MSRV、wasm32／native、XLSX／XLSM境界、安全上限を公開する。`cargo package --list`、`cargo publish --dry-run`、docs.rs相当のdoc buildをリリースゲートにする。crate公開は完了しており、API境界とMSRVの継続監査を残す。
+- [ ] **C2 public WASM crate（公開済み・安定化継続）**: `elixcee-wasm`へ公開metadata、README、license、repository、docs.rs targetを追加し、native `elixcee`のindex反映後に公開する順序をworkflowへ固定した。crate公開は完了している。read、formula calculation、diagnostics、bounded `WorkbookEditor`のJS API安定化とサイズ・security gateを継続する。WASM crate単体でXLSX Writerを提供しない境界はREADMEへ明記した。
+- [x] **C3 browser package integration**: 公開crateから生成したwasm-bindgen artifactをnpm／CDN向けブラウザーpackageへ再現可能に接続し、Node／browser、ESM／CJS、CSP、WASMサイズ、source map、license noticeを検証する。Playgroundはその実例として別配布する。`@elixcee/xlsx`を独立version系列で公開し、packed consumer／実Chrome／WASM／license／package内容gateを通した。
 - [ ] **C4 release gate**: native／wasm32／Node／browserの値・数式・エラー・undo／redo parity、XLSX fixture往復、cargo audit／deny、公開metadata、再現可能buildを確認する。crate公開、npm公開、GitHub Pages公開を同一リリースとみなさず、成果物ごとにversionと対応範囲を示す。
-- [ ] **C5 Playground integration contract**: Playgroundを`elixcee-wasm`とJavaScript writerの統合例として分離し、crate API／UI／writerの責務を機械可読matrixと最小コード例で公開する。crate利用者がExcel風UIまで依存せず導入でき、UI利用者がcrate単体の機能を過大評価しない状態をrelease gateにする。crate README／境界文書／最小JS例でこの分離を明示したが、version整合、clean publish、完全parity、実公開は未完。
+- [ ] **C5 Playground integration contract**: Playgroundを`elixcee-wasm`とJavaScript writerの統合例として分離し、crate API／UI／writerの責務を機械可読matrixと最小コード例で公開する。crate利用者がExcel風UIまで依存せず導入でき、UI利用者がcrate単体の機能を過大評価しない状態をrelease gateにする。crate README／境界文書／最小JS例と実公開は完了した。残るversion間parityとclean consumer検証を継続する。
 
-進捗: C5 distribution-shape BUILDとして、Playgroundの再利用対象を`elixcee-wasm` crate（reader／計算／診断／bounded editor）に限定し、Excel風UIは静的Webアプリ、XLSX出力はJavaScript writerとして別配布する境界をREADME／crate API文書へ明記した。crate公開は対応するnative crateのindex反映後に行い、Playgroundは統合例として後段にデプロイする。`cargo package --list`は11ファイルで通過したが、2026-09-12の`cargo publish --dry-run -p elixcee-wasm`は公開済み`elixcee` 1.0.11に新しいformula context／style／chart／comment／conditional projection APIがないため検証コンパイルで失敗した。crate publish、npm publish、GitHub Pages deployの実行と最終parity gateは未完。
-進捗: C2 metadata BUILDとして、`elixcee-wasm`へMSRV 1.85とdocs.rs URLを追加し、offlineの`wasm32-unknown-unknown` compileと`cargo package --list`（LICENSE／README／build scriptsを含む）を再確認した。公開済みnative crateとのAPI差分が残るため、実publish／dry-run成功とは扱わない。
-進捗: C2/C5 crate documentation BUILDとして、crate READMEをcrates.io/docs.rsから解決できる絶対リンクとRust/WASM導入例へ整理し、`cargo test -p elixcee-wasm --lib --offline`（27件）を通過した。`cargo publish --dry-run`は2026-09-12現在、実行環境のcrates.io DNS解決失敗で未完了。WASM vendored artifactの再生成とnative crateのversion整合が完了するまで公開済みとは扱わない。
+進捗（2026-10-03）: native crate、WASM crate、`@elixcee/xlsx`、Playgroundを別artifactとして公開し、native→WASMの公開順をidempotent workflowへ固定した。1.0.14候補ではpacked consumer、Node／browser、実Chrome、WASMサイズ、license、package内容を再検証済み。各artifactのversionは独立しており、同一versionや完全parityは保証しない。
 進捗: B9/G2d Chart round-trip BUILDとして、drawing XMLの`graphicFrame`閉じタグ欠落とA1系Chart sourceの1-based範囲処理を修正し、drawing anchorをExcel/openpyxlに近い`oneCellAnchor + ext`へ整理した。`chart:smoke`、style smoke、WASM全smoke（Node/browser、CJS/ESM、サイズgateを含む）、formula spill smokeが成功した。LibreOffice正規化後のファイルはMicrosoft Excelで警告なく開ける一方、elixcee生成直後のファイルでは修復警告が残るため、Excel完全互換とは扱わない。
 進捗: B9のdrawing namespace BUILDとして、writerの`graphic`要素をDrawingMLの`a:graphic`へ修正し、生成Chartの内部round-tripを維持した。修正後の新規XLSXでもMicrosoft Excel for Macの修復警告が再現したため、Chart XMLの別schema差分を引き続き切り分ける。
 進捗: B10/B9のstyle metadata BUILDとして、writerの`styles.xml`へExcel標準の`Normal` cellStyleとtable／pivot style既定値を追加した。openpyxlのdefault-style警告は解消し、Chart／style smokeは成功したが、Microsoft ExcelのChart修復警告は継続しており、完全Excel再open成功とは扱わない。
@@ -254,7 +252,7 @@ B0–B5の基盤の上に、Web版Excelで頻繁に使われる機能を優先�
 
 進捗: C2 packaging BUILDとして、WASM bridgeの変更後にNode／browser vendored artifactを再生成し、`wasm32-unknown-unknown` compileと`cargo package`を再確認した。rootと`elixcee-wasm` crate自身へMIT LICENSEを同梱した。XLSM opaque VBA保持はJS package側に実装し、WASM crateの任意VBA実行境界は変更していない。native crateとの公開バージョン整合、`cargo publish`実行、サイズ／security gateは未完。
 
-進捗: C5 contract BUILDとして、native crate、WASM crate、JavaScript package、Playgroundの提供範囲と非提供範囲を`docs/crate-api-matrix.json`へ固定し、利用者向け境界文書と最小WASM editor例を追加した。これは公開準備の文書／契約スライスであり、crateのversion整合、clean package、docs.rs、wasm32／Node／browser parity、実公開は未完。
+進捗: C5 contract BUILDとして、native crate、WASM crate、JavaScript package、Playgroundの提供範囲と非提供範囲を`docs/crate-api-matrix.json`へ固定し、利用者向け境界文書と最小WASM editor例を追加した。各artifactは公開済みで、version整合、clean package、docs.rs、wasm32／Node／browser parityを継続gateとして扱う。
 
 進捗: B12 WASMサイズ測定BUILDとして、B6–B12の数式・table・stateful editor・Chart read bridgeを反映した再生成payload 2,524,108 bytesを新baselineへ記録した。これは意図的な機能拡張の測定基準であり、サイズ改善の完了を意味しない。C4で機能別分割または不要コード削減を測定する。
 
@@ -358,7 +356,7 @@ Excel oracleを確認したうえで、合成または再配布可能な小規�
 
 ## 互換性・数式・省メモリ強化（G0–G6）
 
-1.0.12公開後の開発計画です。次の変更はUnreleasedに記録します。
+1.0.12以降の開発計画です。版ごとの実装結果はCHANGELOGに記録します。
 各PhaseはBUILDを小さく実装し、MEASUREが未完なら未検証として残します。
 EPPlus／Aspose.Cellsとの一般的な同等性や、関数名の個数だけでの優劣は達成条件にしません。
 

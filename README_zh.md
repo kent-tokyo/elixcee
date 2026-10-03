@@ -1,14 +1,14 @@
 # elixcee
 
 [![CI](https://github.com/kent-tokyo/elixcee/actions/workflows/ci.yml/badge.svg)](https://github.com/kent-tokyo/elixcee/actions/workflows/ci.yml)
-[![Docs](https://docs.rs/elixcee/badge.svg)](https://docs.rs/elixcee/1.0.13/elixcee/)
-[![Version](https://img.shields.io/badge/version-1.0.13-blue.svg)](https://github.com/kent-tokyo/elixcee/releases/tag/v1.0.13)
+[![Docs](https://docs.rs/elixcee/badge.svg)](https://docs.rs/elixcee/1.0.14/elixcee/)
+[![Version](https://img.shields.io/badge/version-1.0.14-blue.svg)](https://github.com/kent-tokyo/elixcee/releases/tag/v1.0.14)
 
 elixcee 是使用 Rust/Python 编写的无头 Excel 运行时。无需安装 Microsoft Excel，
 即可编辑 `.xlsx`／`.xlsm`、重新计算受支持的公式，并运行或诊断数据处理 VBA。
 项目也提供 CLI 和实验性的 JavaScript/WASM 包。
 
-当前版本为 `1.0.13`。浏览器 playground 可体验区域选择、单元格编辑、格式、筛选、
+当前版本为 `1.0.14`。浏览器 playground 可体验区域选择、单元格编辑、格式、筛选、
 表格、Chart 预览、透视汇总、工作表操作、公式重算以及受限的 VBA 执行与诊断。浏览器中的 VBA 仅支持受限的
 数据处理子集，不保证任意 VBA 或原生 PivotTable 的编辑。
 
